@@ -84,11 +84,26 @@ export class DatabaseStorage implements IStorage {
   }
 
   async listEquipment(search?: string, status?: string): Promise<Equipment[]> {
-    let conditions: SQL[] = [];
-    if (status) conditions.push(eq(equipment.status, status as any));
-    if (search) conditions.push(or(ilike(equipment.name, `%${search}%`), ilike(equipment.equipmentId, `%${search}%`))!);
+    let q = db.select().from(equipment);
     
-    return await db.select().from(equipment).where(and(...conditions));
+    let conditions: SQL[] = [];
+    if (status) {
+      conditions.push(eq(equipment.status, status as any));
+    }
+    
+    if (search) {
+      // Use equipmentId or name for search
+      conditions.push(or(
+        ilike(equipment.name, `%${search}%`),
+        ilike(equipment.equipmentId, `%${search}%`)
+      )!);
+    }
+    
+    if (conditions.length > 0) {
+      q = q.where(and(...conditions)) as any;
+    }
+    
+    return await q;
   }
 
   async createEquipment(equip: InsertEquipment): Promise<Equipment> {
