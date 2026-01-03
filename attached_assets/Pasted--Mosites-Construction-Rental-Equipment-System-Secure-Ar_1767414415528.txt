@@ -1,0 +1,910 @@
+# Mosites Construction Rental Equipment System - Secure Architecture Outline
+
+## Technology Stack
+
+### Frontend
+- **React 18** with TypeScript
+- **Tailwind CSS** for styling
+- **React Router v6** for navigation
+- **React Query** (TanStack Query) for server state
+- **Zustand** for client state (auth, UI state)
+- **React Hook Form** + Zod for form validation
+- **Axios** for API calls
+
+### Backend
+- **Node.js** with **Express.js**
+- **TypeScript**
+- **Prisma ORM** (excellent SQL Server support + prevents SQL injection)
+- **SQL Server Express** (existing infrastructure)
+- **JWT** for authentication
+- **bcrypt** for password hashing (cost factor: 12)
+- **helmet** for security headers
+- **express-rate-limit** for DoS protection
+- **express-validator** for input sanitization
+
+### Architecture Pattern
+- **RESTful API**
+- **Layered Architecture**: Controller → Service → Repository
+- **Role-Based Access Control** (RBAC)
+- **Defense in Depth** security model
+
+---
+
+## Security Architecture Overview
+
+### Security Layers
+1. **Network Layer**: HTTPS only, CORS restrictions
+2. **Application Layer**: Rate limiting, security headers
+3. **Authentication Layer**: JWT with refresh tokens, password policies
+4. **Authorization Layer**: Role-based + resource-level permissions
+5. **Data Layer**: Parameterized queries (Prisma), encryption at rest
+6. **Audit Layer**: Comprehensive logging of security events
+
+### Security Principles Applied
+- **Principle of Least Privilege**: Users get minimum necessary permissions
+- **Defense in Depth**: Multiple security layers
+- **Fail Securely**: Errors don't expose sensitive information
+- **Secure by Default**: All endpoints require authentication unless explicitly public
+- **Input Validation**: Client-side AND server-side validation
+- **Output Encoding**: Prevent XSS attacks
+- **Audit Logging**: Track all sensitive operations
+
+---
+
+## Backend Structure (Security-Enhanced)
+
+```
+backend/
+├── src/
+│   ├── config/
+│   │   ├── database.ts          # Prisma client with connection pooling
+│   │   ├── env.ts                # Environment validation (zod schema)
+│   │   ├── security.ts           # Security configuration constants
+│   │   └── cors.ts               # CORS whitelist configuration
+│   │
+│   ├── middleware/
+│   │   ├── auth.ts               # JWT verification + token refresh
+│   │   ├── roleCheck.ts          # RBAC middleware
+│   │   ├── resourceAuth.ts       # Resource-level authorization
+│   │   ├── errorHandler.ts       # Secure error handling (no stack traces)
+│   │   ├── validator.ts          # Input validation + sanitization
+│   │   ├── rateLimiter.ts        # Rate limiting per endpoint/user
+│   │   ├── securityHeaders.ts    # Helmet configuration
+│   │   ├── requestLogger.ts      # Security audit logging
+│   │   ├── csrfProtection.ts     # CSRF token validation
+│   │   └── sanitizer.ts          # Input sanitization middleware
+│   │
+│   ├── controllers/
+│   │   ├── authController.ts     # Login, logout, refresh, password reset
+│   │   ├── equipmentController.ts # CRUD for equipment
+│   │   ├── rentalController.ts   # Rental operations
+│   │   ├── swapController.ts     # Equipment swap operations
+│   │   ├── reportController.ts   # Report generation
+│   │   ├── vendorController.ts   # Vendor management
+│   │   ├── jobSiteController.ts  # Job site management
+│   │   └── auditController.ts    # Audit log viewing (admin only)
+│   │
+│   ├── services/
+│   │   ├── authService.ts        # Password hashing, token generation
+│   │   ├── equipmentService.ts
+│   │   ├── rentalService.ts
+│   │   ├── swapService.ts
+│   │   ├── reportService.ts
+│   │   ├── vendorService.ts
+│   │   ├── jobSiteService.ts
+│   │   ├── auditService.ts       # Audit logging service
+│   │   └── encryptionService.ts  # Sensitive data encryption (if needed)
+│   │
+│   ├── repositories/
+│   │   ├── equipmentRepository.ts
+│   │   ├── rentalRepository.ts
+│   │   ├── swapRepository.ts
+│   │   ├── vendorRepository.ts
+│   │   ├── jobSiteRepository.ts
+│   │   └── auditRepository.ts
+│   │
+│   ├── routes/
+│   │   ├── authRoutes.ts         # Public + authenticated routes
+│   │   ├── equipmentRoutes.ts    # Protected routes
+│   │   ├── rentalRoutes.ts
+│   │   ├── swapRoutes.ts
+│   │   ├── reportRoutes.ts
+│   │   ├── vendorRoutes.ts
+│   │   ├── jobSiteRoutes.ts
+│   │   └── auditRoutes.ts        # Admin-only audit logs
+│   │
+│   ├── types/
+│   │   ├── express.d.ts          # Extend Express types
+│   │   ├── jwt.ts                # JWT payload types
+│   │   └── index.ts              # Common types/interfaces
+│   │
+│   ├── utils/
+│   │   ├── jwt.ts                # JWT helpers (sign, verify, refresh)
+│   │   ├── logger.ts             # Security-aware logging (Winston)
+│   │   ├── validators.ts         # Custom validators
+│   │   ├── sanitizers.ts         # Input sanitization helpers
+│   │   ├── crypto.ts             # Encryption/hashing utilities
+│   │   └── errorMessages.ts      # Safe error messages (no sensitive data)
+│   │
+│   ├── constants/
+│   │   ├── permissions.ts        # Permission definitions
+│   │   ├── roles.ts              # Role definitions
+│   │   └── auditEvents.ts        # Audit event types
+│   │
+│   ├── app.ts                    # Express app setup with security middleware
+│   └── server.ts                 # Server entry point
+│
+├── prisma/
+│   ├── schema.prisma             # Database schema
+│   └── migrations/               # Database migrations
+│
+├── tests/                        # Security testing
+│   ├── unit/
+│   ├── integration/
+│   └── security/                 # OWASP testing
+│
+├── .env.example                  # Never commit actual .env
+├── .gitignore                    # Includes .env, secrets/
+├── package.json
+└── tsconfig.json
+```
+
+---
+
+## Frontend Structure (Security-Enhanced)
+
+```
+frontend/
+├── public/
+│   └── index.html                # CSP meta tags
+│
+├── src/
+│   ├── api/
+│   │   ├── client.ts             # Axios with interceptors, CSRF tokens
+│   │   ├── auth.ts               # Auth API calls
+│   │   ├── equipment.ts
+│   │   ├── rentals.ts
+│   │   ├── swaps.ts
+│   │   ├── reports.ts
+│   │   ├── vendors.ts
+│   │   └── jobSites.ts
+│   │
+│   ├── components/
+│   │   ├── common/
+│   │   │   ├── Button.tsx
+│   │   │   ├── Input.tsx         # Input sanitization built-in
+│   │   │   ├── Select.tsx
+│   │   │   ├── Modal.tsx
+│   │   │   ├── Table.tsx
+│   │   │   ├── Checkbox.tsx
+│   │   │   └── Loading.tsx
+│   │   │
+│   │   ├── layout/
+│   │   │   ├── Header.tsx
+│   │   │   ├── Sidebar.tsx
+│   │   │   ├── Layout.tsx
+│   │   │   └── ProtectedRoute.tsx # Route guard component
+│   │   │
+│   │   ├── auth/
+│   │   │   ├── LoginForm.tsx
+│   │   │   ├── PasswordResetForm.tsx
+│   │   │   └── SessionTimeout.tsx # Auto-logout component
+│   │   │
+│   │   ├── equipment/
+│   │   │   ├── EquipmentList.tsx
+│   │   │   ├── EquipmentForm.tsx
+│   │   │   └── EquipmentSearch.tsx
+│   │   │
+│   │   ├── rentals/
+│   │   │   ├── RentalEntryForm.tsx
+│   │   │   ├── RentalList.tsx
+│   │   │   └── SwapForm.tsx
+│   │   │
+│   │   └── reports/
+│   │       ├── WeeklyOutstandingReport.tsx
+│   │       ├── BuyOutCandidatesReport.tsx
+│   │       ├── AnnualRentalReport.tsx
+│   │       └── BuyOutForm.tsx
+│   │
+│   ├── pages/
+│   │   ├── LoginPage.tsx
+│   │   ├── DashboardPage.tsx
+│   │   ├── EquipmentPage.tsx
+│   │   ├── RentalEntryPage.tsx
+│   │   ├── SwapPage.tsx
+│   │   ├── ReportsPage.tsx
+│   │   ├── UnauthorizedPage.tsx  # 403 page
+│   │   └── NotFoundPage.tsx
+│   │
+│   ├── hooks/
+│   │   ├── useAuth.ts            # Auth hook with auto-refresh
+│   │   ├── usePermissions.ts     # Permission checking hook
+│   │   ├── useEquipment.ts
+│   │   ├── useRentals.ts
+│   │   ├── useReports.ts
+│   │   └── useSessionTimeout.ts  # Session management
+│   │
+│   ├── store/
+│   │   ├── authStore.ts          # Zustand auth store (no sensitive data)
+│   │   └── uiStore.ts
+│   │
+│   ├── types/
+│   │   ├── auth.ts
+│   │   ├── equipment.ts
+│   │   ├── rental.ts
+│   │   ├── report.ts
+│   │   ├── permissions.ts
+│   │   └── index.ts
+│   │
+│   ├── utils/
+│   │   ├── formatters.ts
+│   │   ├── validators.ts         # Client-side validation (Zod)
+│   │   ├── sanitizers.ts         # XSS prevention
+│   │   ├── constants.ts
+│   │   ├── permissions.ts        # Permission helper functions
+│   │   └── errorHandler.ts       # User-friendly error display
+│   │
+│   ├── App.tsx
+│   ├── index.tsx
+│   └── routes.tsx                # Protected route configuration
+│
+├── .env.example
+├── package.json
+├── tailwind.config.js
+└── tsconfig.json
+```
+
+---
+
+## Comprehensive Security Implementation
+
+### 1. Authentication Security
+
+#### Password Security
+```
+- Minimum 12 characters (configurable)
+- Require: uppercase, lowercase, number, special character
+- bcrypt with cost factor 12 (or argon2 for enhanced security)
+- Password history: prevent reuse of last 5 passwords
+- Account lockout: 5 failed attempts → 15 min lockout
+- Password reset tokens: expire in 1 hour, single-use
+```
+
+#### JWT Token Strategy
+```
+Access Token:
+- Short-lived (15 minutes)
+- Stored in memory only (React state)
+- Contains: userId, role, permissions
+- Signed with HS256 (or RS256 for enhanced security)
+
+Refresh Token:
+- Long-lived (7 days)
+- Stored in httpOnly, secure, sameSite cookie
+- Rotation on each use (prevents token replay)
+- Stored in database with user association
+- Can be revoked by admin
+
+Implementation:
+- Access token in Authorization header
+- Automatic refresh before expiration
+- Silent refresh mechanism
+- Token revocation list for logged-out tokens
+```
+
+#### Session Management
+```
+- Session timeout: 30 minutes of inactivity
+- Warning at 25 minutes
+- Forced logout on timeout
+- Single session per user (optional, configurable)
+- Session tracking in database
+```
+
+### 2. Authorization Security
+
+#### Role-Based Access Control (RBAC)
+```typescript
+// Roles
+enum Role {
+  ADMINISTRATOR = 'ADMINISTRATOR',
+  VIEWER = 'VIEWER'
+}
+
+// Permissions (granular)
+enum Permission {
+  // Equipment
+  EQUIPMENT_READ = 'equipment:read',
+  EQUIPMENT_CREATE = 'equipment:create',
+  EQUIPMENT_UPDATE = 'equipment:update',
+  EQUIPMENT_DELETE = 'equipment:delete',
+  
+  // Rentals
+  RENTAL_READ = 'rental:read',
+  RENTAL_CREATE = 'rental:create',
+  RENTAL_UPDATE = 'rental:update',
+  RENTAL_DELETE = 'rental:delete',
+  
+  // Swaps
+  SWAP_CREATE = 'swap:create',
+  SWAP_READ = 'swap:read',
+  
+  // Reports
+  REPORT_VIEW = 'report:view',
+  REPORT_EXPORT = 'report:export',
+  
+  // Admin
+  USER_MANAGE = 'user:manage',
+  AUDIT_VIEW = 'audit:view'
+}
+
+// Role to Permission mapping
+const RolePermissions = {
+  ADMINISTRATOR: [/* all permissions */],
+  VIEWER: [
+    Permission.EQUIPMENT_READ,
+    Permission.RENTAL_READ,
+    Permission.SWAP_READ,
+    Permission.REPORT_VIEW
+  ]
+}
+```
+
+#### Resource-Level Authorization
+```
+- Users can only access resources they own or are assigned to
+- Middleware checks: userOwnsResource() or hasPermission()
+- Example: Viewer can't edit ANY rental, even if they can see it
+```
+
+### 3. Input Validation & Sanitization
+
+#### Server-Side (Critical - Never Trust Client)
+```
+Every endpoint validates:
+1. Data type validation (express-validator)
+2. Format validation (regex for emails, phone, etc.)
+3. Range validation (dates, numbers)
+4. Length validation (prevent buffer overflow)
+5. Whitelist validation (enum values)
+6. SQL injection prevention (Prisma handles this)
+7. XSS prevention (sanitize HTML)
+8. Path traversal prevention
+9. Command injection prevention
+
+Example validations:
+- Asset ID: alphanumeric, max 50 chars
+- Dates: valid ISO format, logical range
+- Amounts: positive numbers, max 10 digits
+- Text fields: max length, no script tags
+```
+
+#### Client-Side (User Experience)
+```
+- Zod schemas for forms
+- Real-time validation feedback
+- Sanitize display of user-generated content
+- Use DOMPurify for any HTML rendering
+```
+
+### 4. API Security
+
+#### Rate Limiting
+```
+Global:
+- 100 requests per 15 minutes per IP
+
+Endpoint-specific:
+- Login: 5 attempts per 15 minutes per IP
+- Password reset: 3 requests per hour per email
+- Report generation: 20 per hour per user
+- File uploads: 10 per hour per user
+
+Implementation:
+- express-rate-limit with Redis store
+- Different limits for authenticated users
+- Bypass for internal services
+```
+
+#### CORS Configuration
+```javascript
+const corsOptions = {
+  origin: process.env.ALLOWED_ORIGINS.split(','), // Whitelist only
+  credentials: true, // Allow cookies
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token'],
+  maxAge: 86400 // 24 hours
+}
+```
+
+#### Security Headers (Helmet.js)
+```javascript
+helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"], // Minimize unsafe-inline
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "https:"],
+      connectSrc: ["'self'", process.env.API_URL],
+      fontSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      mediaSrc: ["'self'"],
+      frameSrc: ["'none'"],
+    },
+  },
+  hsts: {
+    maxAge: 31536000, // 1 year
+    includeSubDomains: true,
+    preload: true
+  },
+  noSniff: true, // X-Content-Type-Options
+  xssFilter: true, // X-XSS-Protection
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' }
+})
+```
+
+#### CSRF Protection
+```
+- CSRF tokens for all state-changing operations
+- Double-submit cookie pattern
+- Validate token on POST/PUT/DELETE/PATCH
+- Token rotation per session
+```
+
+### 5. Data Security
+
+#### Encryption
+```
+At Rest:
+- SQL Server Transparent Data Encryption (TDE)
+- Encrypt sensitive fields: SSN, payment info (if any)
+- Use AES-256-GCM
+
+In Transit:
+- HTTPS/TLS 1.3 only
+- Strong cipher suites only
+- HSTS enabled
+
+In Memory:
+- Clear sensitive data after use
+- No logging of passwords/tokens
+```
+
+#### Database Security
+```
+- Principle of least privilege for DB user
+- Separate users for read vs write operations
+- Connection pooling with limits
+- Prepared statements only (Prisma handles this)
+- No dynamic query building with user input
+- Regular backups with encryption
+- Backup access controls
+```
+
+### 6. Logging & Monitoring
+
+#### Security Audit Logging
+```typescript
+interface AuditLog {
+  id: string;
+  timestamp: DateTime;
+  userId: string;
+  action: AuditAction;
+  resource: string;
+  resourceId: string;
+  ipAddress: string;
+  userAgent: string;
+  success: boolean;
+  errorMessage?: string;
+  additionalData?: JSON;
+}
+
+// Log these events:
+- All authentication attempts (success/fail)
+- Authorization failures
+- Password changes
+- Data modifications (create, update, delete)
+- Permission changes
+- Sensitive data access (reports)
+- Configuration changes
+- Failed validation attempts (potential attacks)
+- Rate limit violations
+```
+
+#### Application Logging
+```
+Winston logger with levels:
+- error: System errors, security events
+- warn: Deprecations, potential issues
+- info: General information
+- debug: Development only
+
+Do NOT log:
+- Passwords (plain or hashed)
+- Tokens
+- Session IDs
+- Credit card numbers
+- PII beyond what's necessary
+- Full stack traces in production
+```
+
+#### Monitoring & Alerts
+```
+Monitor for:
+- Repeated failed login attempts
+- Unusual access patterns
+- Rate limit violations
+- Database errors
+- High error rates
+- Slow queries
+- Disk space
+- Memory usage
+
+Alert on:
+- Security events (failed auth, authorization)
+- System errors
+- Performance degradation
+```
+
+### 7. Error Handling
+
+#### Secure Error Responses
+```
+Production errors return:
+- Generic message: "An error occurred"
+- Error code: "ERR_500_INTERNAL"
+- Request ID for support
+
+Do NOT expose:
+- Stack traces
+- Database errors
+- File paths
+- Configuration details
+- Library versions
+- Internal structure
+
+Development errors can be verbose
+```
+
+### 8. Dependency Security
+
+#### Package Management
+```
+- Regular updates (weekly security patch check)
+- npm audit or yarn audit in CI/CD
+- Use exact versions (no ^ or ~)
+- Review dependencies before adding
+- Use Snyk or Dependabot for alerts
+- Lock files committed to repo
+```
+
+### 9. Deployment Security
+
+#### Environment Configuration
+```
+- Never commit .env files
+- Use environment-specific configs
+- Secrets management (AWS Secrets Manager, Azure Key Vault)
+- Separate dev/staging/prod environments
+- Different credentials per environment
+- Rotate secrets regularly (quarterly)
+```
+
+#### Production Checklist
+```
+✓ HTTPS enforced
+✓ Security headers configured
+✓ Debug mode disabled
+✓ Error stack traces disabled
+✓ Verbose logging disabled
+✓ Default credentials changed
+✓ Unnecessary services disabled
+✓ Firewall rules configured
+✓ Database backups automated
+✓ Monitoring alerts configured
+✓ Rate limiting enabled
+✓ CORS properly configured
+✓ CSP headers set
+✓ File upload limits set
+```
+
+---
+
+## Database Schema (Security-Enhanced)
+
+```prisma
+model User {
+  id                Int       @id @default(autoincrement())
+  username          String    @unique
+  email             String    @unique
+  password          String    // bcrypt hashed
+  role              UserRole
+  isActive          Boolean   @default(true)
+  passwordChangedAt DateTime  @default(now())
+  failedLoginCount  Int       @default(0)
+  lockedUntil       DateTime?
+  lastLoginAt       DateTime?
+  lastLoginIp       String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  
+  refreshTokens     RefreshToken[]
+  auditLogs         AuditLog[]
+  passwordHistory   PasswordHistory[]
+  
+  @@map("Users")
+}
+
+model RefreshToken {
+  id        Int      @id @default(autoincrement())
+  token     String   @unique
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id])
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  revokedAt DateTime?
+  replacedBy String?  // For token rotation
+  
+  @@index([userId])
+  @@map("RefreshTokens")
+}
+
+model PasswordHistory {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id])
+  password  String   // bcrypt hashed
+  createdAt DateTime @default(now())
+  
+  @@index([userId])
+  @@map("PasswordHistory")
+}
+
+model AuditLog {
+  id             Int      @id @default(autoincrement())
+  userId         Int?
+  user           User?    @relation(fields: [userId], references: [id])
+  action         String   // LOGIN, CREATE_RENTAL, UPDATE_EQUIPMENT, etc.
+  resource       String   // 'equipment', 'rental', 'user', etc.
+  resourceId     String?
+  ipAddress      String
+  userAgent      String
+  success        Boolean
+  errorMessage   String?
+  additionalData Json?    // Store relevant details
+  createdAt      DateTime @default(now())
+  
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("AuditLogs")
+}
+
+model Equipment {
+  id            Int              @id @default(autoincrement())
+  assetId       String           @unique
+  category      String
+  make          String
+  model         String
+  serialNumber  String?
+  vendorId      Int
+  vendor        Vendor           @relation(fields: [vendorId], references: [id])
+  purchasePrice Decimal?
+  isActive      Boolean          @default(true)
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  createdBy     Int              // Track who created
+  updatedBy     Int?             // Track who last updated
+  
+  rentals       Rental[]
+  swapHistory   SwapHistory[]
+  
+  @@index([vendorId])
+  @@index([category])
+  @@map("Equipment")
+}
+
+model Rental {
+  id               Int            @id @default(autoincrement())
+  equipmentId      Int
+  equipment        Equipment      @relation(fields: [equipmentId], references: [id])
+  jobSiteId        Int
+  jobSite          JobSite        @relation(fields: [jobSiteId], references: [id])
+  vendorId         Int
+  vendor           Vendor         @relation(fields: [vendorId], references: [id])
+  poNumber         String?
+  dateEntered      DateTime
+  dateNeeded       DateTime
+  expectedDuration Int?           // days
+  enteredVia       EntryMethod    // ORDER, INVOICE, IR_SLIP
+  phase            String?
+  isBuyRent        Boolean        @default(false)
+  isJobInactive    Boolean        @default(false)
+  isReturned       Boolean        @default(false)
+  returnedDate     DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  createdBy        Int
+  updatedBy        Int?
+  
+  swapHistory      SwapHistory[]
+  
+  @@index([equipmentId])
+  @@index([jobSiteId])
+  @@index([vendorId])
+  @@index([isReturned])
+  @@map("Rentals")
+}
+
+// ... other models with similar audit fields (createdBy, updatedBy, createdAt, updatedAt)
+```
+
+---
+
+## API Security Examples
+
+### Protected Route Pattern
+```typescript
+// All modification routes follow this pattern:
+router.post('/equipment',
+  authenticate,                    // JWT validation
+  requireRole(Role.ADMINISTRATOR), // Role check
+  rateLimit({ max: 50 }),         // Rate limiting
+  validateRequest([               // Input validation
+    body('assetId').isAlphanumeric().isLength({ max: 50 }),
+    body('category').isString().trim().escape(),
+    // ... more validations
+  ]),
+  sanitizeInputs,                 // XSS prevention
+  auditLog('CREATE_EQUIPMENT'),   // Audit logging
+  equipmentController.create
+);
+```
+
+### Input Validation Example
+```typescript
+// Equipment creation validation
+const equipmentValidation = [
+  body('assetId')
+    .trim()
+    .isLength({ min: 1, max: 50 })
+    .matches(/^[A-Z0-9-]+$/)
+    .withMessage('Asset ID must be alphanumeric with hyphens'),
+  
+  body('category')
+    .trim()
+    .isIn(['Heavy Equipment', 'Tools', 'Vehicles', 'Other'])
+    .withMessage('Invalid category'),
+  
+  body('serialNumber')
+    .optional()
+    .trim()
+    .isLength({ max: 100 })
+    .matches(/^[A-Z0-9-]+$/),
+  
+  body('purchasePrice')
+    .optional()
+    .isFloat({ min: 0, max: 10000000 })
+    .withMessage('Invalid purchase price'),
+];
+```
+
+---
+
+## Security Testing Plan
+
+### Automated Security Tests
+1. **OWASP Top 10 Testing**
+   - SQL Injection attempts
+   - XSS attempts
+   - CSRF testing
+   - Authentication bypass attempts
+   - Authorization bypass attempts
+
+2. **Dependency Scanning**
+   - npm audit in CI/CD
+   - Snyk integration
+   - Dependabot alerts
+
+3. **Static Analysis**
+   - ESLint security rules
+   - TypeScript strict mode
+   - SonarQube analysis
+
+### Manual Security Review
+1. Code review checklist for all PRs
+2. Quarterly security audit
+3. Penetration testing before major releases
+
+---
+
+## Compliance & Best Practices
+
+### OWASP Top 10 2021 Mitigation
+
+1. **A01 Broken Access Control** ✓
+   - RBAC implementation
+   - Resource-level authorization
+   - Audit logging
+
+2. **A02 Cryptographic Failures** ✓
+   - TLS 1.3
+   - bcrypt for passwords
+   - Encrypted data at rest
+
+3. **A03 Injection** ✓
+   - Prisma ORM (parameterized queries)
+   - Input validation
+   - Output encoding
+
+4. **A04 Insecure Design** ✓
+   - Security requirements in design phase
+   - Threat modeling
+   - Defense in depth
+
+5. **A05 Security Misconfiguration** ✓
+   - Security headers
+   - Disabled debug mode
+   - Minimal permissions
+
+6. **A06 Vulnerable Components** ✓
+   - Regular updates
+   - Dependency scanning
+   - Version pinning
+
+7. **A07 Identification and Authentication Failures** ✓
+   - Strong password policy
+   - MFA ready (can be added)
+   - Session management
+   - Account lockout
+
+8. **A08 Software and Data Integrity Failures** ✓
+   - Code signing
+   - Integrity checks
+   - Audit logging
+
+9. **A09 Security Logging and Monitoring Failures** ✓
+   - Comprehensive audit logs
+   - Security event monitoring
+   - Alert system
+
+10. **A10 Server-Side Request Forgery** ✓
+    - No user-controlled URLs
+    - Whitelist validation
+    - Network segmentation
+
+---
+
+## Security Maintenance
+
+### Regular Tasks
+- **Daily**: Monitor security alerts and logs
+- **Weekly**: Review failed authentication attempts
+- **Monthly**: Security dependency updates
+- **Quarterly**: Security audit, password policy review
+- **Annually**: Penetration testing, disaster recovery drill
+
+### Incident Response Plan
+1. **Detect**: Monitoring alerts
+2. **Contain**: Disable affected accounts/features
+3. **Investigate**: Review audit logs
+4. **Remediate**: Patch vulnerability
+5. **Document**: Incident report
+6. **Learn**: Update security measures
+
+---
+
+## Next Steps
+
+With this security-enhanced architecture, I can now generate:
+1. Complete secure Prisma schema
+2. Authentication middleware with JWT refresh
+3. Authorization middleware with RBAC
+4. Input validation schemas
+5. Secure API endpoints
+6. Protected React components
+7. Security testing suite
+8. Deployment security checklist
+
+Ready to proceed with implementation?
