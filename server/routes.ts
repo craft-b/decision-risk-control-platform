@@ -64,6 +64,7 @@ export async function registerRoutes(
       req.session.role = user.role;
       res.json(user);
     } catch (error) {
+       console.error("Login error:", error);
        res.status(400).json({ message: "Invalid request" });
     }
   });
@@ -210,43 +211,51 @@ export async function registerRoutes(
     }
   });
 
-  // Seed Data
-  if (process.env.NODE_ENV !== "production") {
-    const existingUsers = await storage.getUserByUsername("admin");
-    if (!existingUsers) {
-      console.log("Seeding database...");
+  // Helper for seeding demo users
+  async function seedUsers() {
+    const existingAdmin = await storage.getUserByUsername("admin");
+    if (!existingAdmin) {
+      console.log("Seeding demo users...");
       const hashedPassword = bcrypt.hashSync("admin123", 10);
       await storage.createUser({
         username: "admin",
         password: hashedPassword,
         role: "ADMINISTRATOR"
       });
-      
+
       const viewerPass = bcrypt.hashSync("viewer123", 10);
       await storage.createUser({
         username: "viewer",
         password: viewerPass,
         role: "VIEWER"
       });
-
-      await storage.createEquipment({
-        name: "Caterpillar 320 Excavator",
-        category: "Excavator",
-        status: "AVAILABLE",
-        dailyRate: "500.00",
-        serialNumber: "CAT-320-001",
-        location: "Yard A"
-      });
-      
-      await storage.createEquipment({
-        name: "JLG 450AJ Boom Lift",
-        category: "Lift",
-        status: "RENTED",
-        dailyRate: "250.00",
-        serialNumber: "JLG-450-002",
-        location: "Job Site B"
-      });
     }
+  }
+
+  // Seed Data
+  if (process.env.NODE_ENV !== "production") {
+    seedUsers().then(async () => {
+      const existingEquip = await storage.listEquipment();
+      if (existingEquip.length === 0) {
+        await storage.createEquipment({
+          name: "Caterpillar 320 Excavator",
+          category: "Excavator",
+          status: "AVAILABLE",
+          dailyRate: "500.00",
+          serialNumber: "CAT-320-001",
+          location: "Yard A"
+        });
+        
+        await storage.createEquipment({
+          name: "JLG 450AJ Boom Lift",
+          category: "Lift",
+          status: "RENTED",
+          dailyRate: "250.00",
+          serialNumber: "JLG-450-002",
+          location: "Job Site B"
+        });
+      }
+    });
   }
 
   return httpServer;
