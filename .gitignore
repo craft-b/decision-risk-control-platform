@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 __pycache__/
 .env
 .venv/
@@ -5,3 +6,11 @@ __pycache__/
 *.pyc
 *.log
 .DS_Store
+=======
+node_modules
+dist
+.DS_Store
+server/public
+vite.config.ts.*
+*.tar.gz
+>>>>>>> 411127f (Extracted stack files)
