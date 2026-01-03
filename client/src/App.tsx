@@ -1,16 +1,56 @@
-import { Switch, Route } from "wouter";
+import { Switch, Route, Redirect } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { AuthProvider, useAuth } from "@/hooks/use-auth";
+import { LayoutShell } from "@/components/layout-shell";
+import { Loader2 } from "lucide-react";
+
+import Login from "@/pages/login";
+import Dashboard from "@/pages/dashboard";
+import EquipmentList from "@/pages/equipment-list";
+import RentalsList from "@/pages/rentals-list";
 import NotFound from "@/pages/not-found";
+
+// Protected Route Wrapper
+function ProtectedRoute({ component: Component }: { component: React.ComponentType }) {
+  const { user, isLoading } = useAuth();
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <Redirect to="/login" />;
+  }
+
+  return (
+    <LayoutShell>
+      <Component />
+    </LayoutShell>
+  );
+}
 
 function Router() {
   return (
     <Switch>
-      {/* Add pages below */}
-      {/* <Route path="/" component={Home}/> */}
-      {/* Fallback to 404 */}
+      <Route path="/login" component={Login} />
+      
+      {/* Protected Routes */}
+      <Route path="/">
+        <ProtectedRoute component={Dashboard} />
+      </Route>
+      <Route path="/equipment">
+        <ProtectedRoute component={EquipmentList} />
+      </Route>
+      <Route path="/rentals">
+        <ProtectedRoute component={RentalsList} />
+      </Route>
+      
       <Route component={NotFound} />
     </Switch>
   );
@@ -19,10 +59,10 @@ function Router() {
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <Toaster />
+      <AuthProvider>
         <Router />
-      </TooltipProvider>
+        <Toaster />
+      </AuthProvider>
     </QueryClientProvider>
   );
 }
