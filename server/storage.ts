@@ -1,6 +1,6 @@
 import { users, equipment, rentals, jobSites, vendors, invoices, type User, type InsertUser, type Equipment, type InsertEquipment, type Rental, type InsertRental, type JobSite, type InsertJobSite, type Vendor, type InsertVendor, type Invoice, type InsertInvoice } from "@shared/schema";
 import { db } from "./db";
-import { eq, ilike, and, or } from "drizzle-orm";
+import { eq, ilike, and, or, SQL, sql } from "drizzle-orm";
 
 export interface IStorage {
   // Auth
@@ -84,10 +84,11 @@ export class DatabaseStorage implements IStorage {
   }
 
   async listEquipment(search?: string, status?: string): Promise<Equipment[]> {
-    let q = db.select().from(equipment);
-    if (status) q = q.where(eq(equipment.status, status)) as any;
-    if (search) q = q.where(or(ilike(equipment.name, `%${search}%`), ilike(equipment.equipmentId, `%${search}%`))) as any;
-    return await q;
+    let conditions: SQL[] = [];
+    if (status) conditions.push(eq(equipment.status, status as any));
+    if (search) conditions.push(or(ilike(equipment.name, `%${search}%`), ilike(equipment.equipmentId, `%${search}%`))!);
+    
+    return await db.select().from(equipment).where(and(...conditions));
   }
 
   async createEquipment(equip: InsertEquipment): Promise<Equipment> {
