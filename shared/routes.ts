@@ -1,5 +1,9 @@
 import { z } from 'zod';
-import { insertEquipmentSchema, insertRentalSchema, insertUserSchema, equipment, rentals, users } from './schema';
+import { 
+  insertEquipmentSchema, insertRentalSchema, insertUserSchema, 
+  insertJobSiteSchema, insertVendorSchema, insertInvoiceSchema,
+  equipment, rentals, users, jobSites, vendors, invoices 
+} from './schema';
 
 // ============================================
 // SHARED ERROR SCHEMAS
@@ -33,7 +37,7 @@ export const api = {
         password: z.string(),
       }),
       responses: {
-        200: z.custom<typeof users.$inferSelect>(),
+        200: z.custom<User>(),
         401: errorSchemas.unauthorized,
       },
     },
@@ -48,7 +52,7 @@ export const api = {
       method: 'GET' as const,
       path: '/api/auth/me',
       responses: {
-        200: z.custom<typeof users.$inferSelect>(),
+        200: z.custom<User>(),
         401: errorSchemas.unauthorized,
       },
     },
@@ -57,7 +61,7 @@ export const api = {
       path: '/api/auth/register',
       input: insertUserSchema,
       responses: {
-        201: z.custom<typeof users.$inferSelect>(),
+        201: z.custom<User>(),
         400: errorSchemas.validation,
       },
     }
@@ -68,17 +72,18 @@ export const api = {
       path: '/api/equipment',
       input: z.object({
         search: z.string().optional(),
-        status: z.enum(["AVAILABLE", "RENTED", "MAINTENANCE"]).optional(),
+        status: z.string().optional(),
+        category: z.string().optional(),
       }).optional(),
       responses: {
-        200: z.array(z.custom<typeof equipment.$inferSelect>()),
+        200: z.array(z.custom<Equipment>()),
       },
     },
     get: {
       method: 'GET' as const,
       path: '/api/equipment/:id',
       responses: {
-        200: z.custom<typeof equipment.$inferSelect>(),
+        200: z.custom<Equipment>(),
         404: errorSchemas.notFound,
       },
     },
@@ -87,9 +92,8 @@ export const api = {
       path: '/api/equipment',
       input: insertEquipmentSchema,
       responses: {
-        201: z.custom<typeof equipment.$inferSelect>(),
+        201: z.custom<Equipment>(),
         400: errorSchemas.validation,
-        403: errorSchemas.unauthorized,
       },
     },
     update: {
@@ -97,19 +101,58 @@ export const api = {
       path: '/api/equipment/:id',
       input: insertEquipmentSchema.partial(),
       responses: {
-        200: z.custom<typeof equipment.$inferSelect>(),
-        400: errorSchemas.validation,
+        200: z.custom<Equipment>(),
         404: errorSchemas.notFound,
-        403: errorSchemas.unauthorized,
       },
+    },
+    delete: {
+      method: 'DELETE' as const,
+      path: '/api/equipment/:id',
+      responses: {
+        204: z.void(),
+        404: errorSchemas.notFound,
+      },
+    }
+  },
+  jobSites: {
+    list: {
+      method: 'GET' as const,
+      path: '/api/job-sites',
+      responses: { 200: z.array(z.custom<JobSite>()) },
+    },
+    create: {
+      method: 'POST' as const,
+      path: '/api/job-sites',
+      input: insertJobSiteSchema,
+      responses: { 201: z.custom<JobSite>() },
+    },
+  },
+  vendors: {
+    list: {
+      method: 'GET' as const,
+      path: '/api/vendors',
+      responses: { 200: z.array(z.custom<Vendor>()) },
+    },
+    create: {
+      method: 'POST' as const,
+      path: '/api/vendors',
+      input: insertVendorSchema,
+      responses: { 201: z.custom<Vendor>() },
     },
   },
   rentals: {
     list: {
       method: 'GET' as const,
       path: '/api/rentals',
+      input: z.object({
+        search: z.string().optional(),
+        jobSiteId: z.string().optional(),
+        vendorId: z.string().optional(),
+        startDate: z.string().optional(),
+        endDate: z.string().optional(),
+      }).optional(),
       responses: {
-        200: z.array(z.custom<typeof rentals.$inferSelect & { equipment: typeof equipment.$inferSelect }>()),
+        200: z.array(z.custom<Rental & { equipment: Equipment, jobSite: JobSite, vendor: Vendor | null }>()),
       },
     },
     create: {
@@ -117,23 +160,53 @@ export const api = {
       path: '/api/rentals',
       input: insertRentalSchema,
       responses: {
-        201: z.custom<typeof rentals.$inferSelect>(),
+        201: z.custom<Rental>(),
         400: errorSchemas.validation,
       },
     },
-    complete: {
-      method: 'POST' as const,
-      path: '/api/rentals/:id/complete',
-      input: z.object({
-        endDate: z.string(),
-        notes: z.string().optional(),
-      }),
+    get: {
+      method: 'GET' as const,
+      path: '/api/rentals/:id',
       responses: {
-        200: z.custom<typeof rentals.$inferSelect>(),
+        200: z.custom<Rental & { equipment: Equipment, jobSite: JobSite, vendor: Vendor | null, invoices: Invoice[] }>(),
+        404: errorSchemas.notFound,
+      },
+    },
+    update: {
+      method: 'PUT' as const,
+      path: '/api/rentals/:id',
+      input: insertRentalSchema.partial(),
+      responses: {
+        200: z.custom<Rental>(),
         404: errorSchemas.notFound,
       },
     },
   },
+  invoices: {
+    create: {
+      method: 'POST' as const,
+      path: '/api/invoices',
+      input: insertInvoiceSchema,
+      responses: { 201: z.custom<Invoice>() },
+    },
+  },
+  reports: {
+    weeklyOutstanding: {
+      method: 'GET' as const,
+      path: '/api/reports/weekly-outstanding',
+      responses: { 200: z.array(z.any()) },
+    },
+    buyoutCandidates: {
+      method: 'GET' as const,
+      path: '/api/reports/buyout-candidates',
+      responses: { 200: z.array(z.any()) },
+    },
+    annualRental: {
+      method: 'GET' as const,
+      path: '/api/reports/annual-rental',
+      responses: { 200: z.array(z.any()) },
+    },
+  }
 };
 
 export function buildUrl(path: string, params?: Record<string, string | number>): string {
@@ -147,3 +220,6 @@ export function buildUrl(path: string, params?: Record<string, string | number>)
   }
   return url;
 }
+
+// Re-export types from schema
+import { User, Equipment, Rental, JobSite, Vendor, Invoice } from './schema';
