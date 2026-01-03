@@ -92,10 +92,11 @@ export class DatabaseStorage implements IStorage {
     }
     
     if (search) {
-      // Use equipmentId or name for search
+      // Use equipmentId, name or serialNumber for search
       conditions.push(or(
         ilike(equipment.name, `%${search}%`),
-        ilike(equipment.equipmentId, `%${search}%`)
+        ilike(equipment.equipmentId, `%${search}%`),
+        ilike(equipment.serialNumber, `%${search}%`)
       )!);
     }
     
