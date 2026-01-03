@@ -8,9 +8,10 @@ import { Label } from "@/components/ui/label";
 import { Truck, Loader2 } from "lucide-react";
 
 export default function Login() {
+  const [isRegister, setIsRegister] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const { loginMutation, user } = useAuth();
+  const { loginMutation, registerMutation, user } = useAuth();
   const [, setLocation] = useLocation();
 
   if (user) {
@@ -18,10 +19,16 @@ export default function Login() {
     return null;
   }
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    loginMutation.mutate({ username, password });
+    if (isRegister) {
+      registerMutation.mutate({ username, password } as any);
+    } else {
+      loginMutation.mutate({ username, password });
+    }
   };
+
+  const isPending = loginMutation.isPending || registerMutation.isPending;
 
   return (
     <div className="min-h-screen grid lg:grid-cols-2">
@@ -61,16 +68,20 @@ export default function Login() {
         </div>
       </div>
 
-      {/* Right: Login Form */}
+      {/* Right: Auth Form */}
       <div className="flex items-center justify-center p-8 bg-slate-50">
         <Card className="w-full max-w-md shadow-xl border-slate-200">
           <CardHeader className="space-y-1">
-            <CardTitle className="text-2xl font-bold text-center">Sign in</CardTitle>
+            <CardTitle className="text-2xl font-bold text-center">
+              {isRegister ? "Create an account" : "Sign in"}
+            </CardTitle>
             <CardDescription className="text-center">
-              Enter your credentials to access the dashboard
+              {isRegister 
+                ? "Enter your details to register" 
+                : "Enter your credentials to access the dashboard"}
             </CardDescription>
           </CardHeader>
-          <form onSubmit={handleLogin}>
+          <form onSubmit={handleSubmit}>
             <CardContent className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="username">Username</Label>
@@ -79,7 +90,7 @@ export default function Login() {
                   placeholder="admin" 
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  disabled={loginMutation.isPending}
+                  disabled={isPending}
                 />
               </div>
               <div className="space-y-2">
@@ -90,32 +101,45 @@ export default function Login() {
                   placeholder="••••••••" 
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  disabled={loginMutation.isPending}
+                  disabled={isPending}
                 />
               </div>
             </CardContent>
-            <CardFooter>
+            <CardFooter className="flex flex-col space-y-4">
               <Button 
                 type="submit" 
                 className="w-full bg-primary hover:bg-primary/90 text-primary-foreground font-semibold"
-                disabled={loginMutation.isPending}
+                disabled={isPending}
               >
-                {loginMutation.isPending ? (
+                {isPending ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Authenticating...
+                    {isRegister ? "Registering..." : "Authenticating..."}
                   </>
                 ) : (
-                  "Sign In"
+                  isRegister ? "Register" : "Sign In"
                 )}
+              </Button>
+              <Button
+                type="button"
+                variant="link"
+                className="text-primary text-xs"
+                onClick={() => setIsRegister(!isRegister)}
+                disabled={isPending}
+              >
+                {isRegister 
+                  ? "Already have an account? Sign in" 
+                  : "Don't have an account? Register now"}
               </Button>
             </CardFooter>
           </form>
-          <div className="px-8 pb-8 text-center text-xs text-muted-foreground">
-             <p>Demo Credentials:</p>
-             <p>Admin: <span className="font-mono">admin / admin</span></p>
-             <p>Viewer: <span className="font-mono">viewer / viewer</span></p>
-          </div>
+          {!isRegister && (
+            <div className="px-8 pb-8 text-center text-xs text-muted-foreground">
+               <p>Demo Credentials:</p>
+               <p>Admin: <span className="font-mono">admin / admin123</span></p>
+               <p>Viewer: <span className="font-mono">viewer / viewer123</span></p>
+            </div>
+          )}
         </Card>
       </div>
     </div>

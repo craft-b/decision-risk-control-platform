@@ -9,10 +9,48 @@ type AuthContextType = {
   isLoading: boolean;
   error: Error | null;
   loginMutation: ReturnType<typeof useLogin>;
+  registerMutation: ReturnType<typeof useRegister>;
   logoutMutation: ReturnType<typeof useLogout>;
 };
 
 const AuthContext = createContext<AuthContextType | null>(null);
+
+function useRegister() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: async (credentials: User) => {
+      const res = await fetch(api.auth.register.path, {
+        method: api.auth.register.method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(credentials),
+        credentials: "include",
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.message || "Registration failed");
+      }
+
+      return api.auth.register.responses[201].parse(await res.json());
+    },
+    onSuccess: (user) => {
+      queryClient.setQueryData([api.auth.me.path], user);
+      toast({
+        title: "Registration successful",
+        description: `Welcome, ${user.username}!`,
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "Registration failed",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+}
 
 function useLogin() {
   const queryClient = useQueryClient();
@@ -86,6 +124,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   });
 
   const loginMutation = useLogin();
+  const registerMutation = useRegister();
   const logoutMutation = useLogout();
 
   return (
@@ -95,6 +134,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isLoading,
         error: error as Error | null,
         loginMutation,
+        registerMutation,
         logoutMutation,
       }}
     >
