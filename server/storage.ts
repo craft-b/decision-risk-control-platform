@@ -1,12 +1,22 @@
-import { users, equipment, rentals, type User, type InsertUser, type Equipment, type InsertEquipment, type Rental, type InsertRental } from "@shared/schema";
+import { users, equipment, rentals, jobSites, vendors, invoices, type User, type InsertUser, type Equipment, type InsertEquipment, type Rental, type InsertRental, type JobSite, type InsertJobSite, type Vendor, type InsertVendor, type Invoice, type InsertInvoice } from "@shared/schema";
 import { db } from "./db";
-import { eq, ilike } from "drizzle-orm";
+import { eq, ilike, and, or } from "drizzle-orm";
 
 export interface IStorage {
   // Auth
   getUser(id: number): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
+
+  // Job Sites
+  getJobSite(id: number): Promise<JobSite | undefined>;
+  listJobSites(): Promise<JobSite[]>;
+  createJobSite(site: InsertJobSite): Promise<JobSite>;
+
+  // Vendors
+  getVendor(id: number): Promise<Vendor | undefined>;
+  listVendors(): Promise<Vendor[]>;
+  createVendor(vendor: InsertVendor): Promise<Vendor>;
 
   // Equipment
   getEquipment(id: number): Promise<Equipment | undefined>;
@@ -15,9 +25,13 @@ export interface IStorage {
   updateEquipment(id: number, equip: Partial<InsertEquipment>): Promise<Equipment>;
 
   // Rentals
-  listRentals(): Promise<(Rental & { equipment: Equipment | null })[]>;
+  getRental(id: number): Promise<(Rental & { equipment: Equipment, jobSite: JobSite, vendor: Vendor | null, invoices: Invoice[] }) | undefined>;
+  listRentals(): Promise<(Rental & { equipment: Equipment, jobSite: JobSite, vendor: Vendor | null })[]>;
   createRental(rental: InsertRental): Promise<Rental>;
   updateRental(id: number, rental: Partial<InsertRental>): Promise<Rental>;
+
+  // Invoices
+  createInvoice(invoice: InsertInvoice): Promise<Invoice>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -36,26 +50,44 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
 
+  async getJobSite(id: number): Promise<JobSite | undefined> {
+    const [site] = await db.select().from(jobSites).where(eq(jobSites.id, id));
+    return site;
+  }
+
+  async listJobSites(): Promise<JobSite[]> {
+    return await db.select().from(jobSites);
+  }
+
+  async createJobSite(site: InsertJobSite): Promise<JobSite> {
+    const [newSite] = await db.insert(jobSites).values(site).returning();
+    return newSite;
+  }
+
+  async getVendor(id: number): Promise<Vendor | undefined> {
+    const [v] = await db.select().from(vendors).where(eq(vendors.id, id));
+    return v;
+  }
+
+  async listVendors(): Promise<Vendor[]> {
+    return await db.select().from(vendors);
+  }
+
+  async createVendor(vendor: InsertVendor): Promise<Vendor> {
+    const [newVendor] = await db.insert(vendors).values(vendor).returning();
+    return newVendor;
+  }
+
   async getEquipment(id: number): Promise<Equipment | undefined> {
     const [equip] = await db.select().from(equipment).where(eq(equipment.id, id));
     return equip;
   }
 
   async listEquipment(search?: string, status?: string): Promise<Equipment[]> {
-    let query = db.select().from(equipment);
-    
-    // Simple dynamic filtering
-    if (status) {
-      // @ts-ignore
-      query = query.where(eq(equipment.status, status));
-    }
-    
-    if (search) {
-       // @ts-ignore
-       query = query.where(ilike(equipment.name, `%${search}%`));
-    }
-    
-    return await query;
+    let q = db.select().from(equipment);
+    if (status) q = q.where(eq(equipment.status, status)) as any;
+    if (search) q = q.where(or(ilike(equipment.name, `%${search}%`), ilike(equipment.equipmentId, `%${search}%`))) as any;
+    return await q;
   }
 
   async createEquipment(equip: InsertEquipment): Promise<Equipment> {
@@ -68,23 +100,28 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
-  async listRentals(): Promise<(Rental & { equipment: Equipment | null })[]> {
-    // Join not directly supported in this simple select pattern for basic storage, 
-    // but Drizzle query builder supports it. Let's use db.query if schema relations were set up, 
-    // or just manual join.
-    // For simplicity in this 'Lite' mode, I'll fetch and map or use a join query.
-    
-    const rows = await db.select({
-      rental: rentals,
-      equipment: equipment
-    })
-    .from(rentals)
-    .leftJoin(equipment, eq(rentals.equipmentId, equipment.id));
+  async getRental(id: number): Promise<(Rental & { equipment: Equipment, jobSite: JobSite, vendor: Vendor | null, invoices: Invoice[] }) | undefined> {
+    const rental = await db.query.rentals.findFirst({
+      where: eq(rentals.id, id),
+      with: {
+        equipment: true,
+        jobSite: true,
+        vendor: true,
+        invoices: true,
+      }
+    });
+    return rental as any;
+  }
 
-    return rows.map(row => ({
-      ...row.rental,
-      equipment: row.equipment
-    }));
+  async listRentals(): Promise<(Rental & { equipment: Equipment, jobSite: JobSite, vendor: Vendor | null })[]> {
+    const results = await db.query.rentals.findMany({
+      with: {
+        equipment: true,
+        jobSite: true,
+        vendor: true,
+      }
+    });
+    return results as any;
   }
 
   async createRental(rental: InsertRental): Promise<Rental> {
@@ -95,6 +132,11 @@ export class DatabaseStorage implements IStorage {
   async updateRental(id: number, rental: Partial<InsertRental>): Promise<Rental> {
     const [updated] = await db.update(rentals).set(rental).where(eq(rentals.id, id)).returning();
     return updated;
+  }
+
+  async createInvoice(invoice: InsertInvoice): Promise<Invoice> {
+    const [newInvoice] = await db.insert(invoices).values(invoice).returning();
+    return newInvoice;
   }
 }
 

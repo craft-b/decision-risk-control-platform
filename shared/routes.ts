@@ -2,8 +2,11 @@ import { z } from 'zod';
 import { 
   insertEquipmentSchema, insertRentalSchema, insertUserSchema, 
   insertJobSiteSchema, insertVendorSchema, insertInvoiceSchema,
-  equipment, rentals, users, jobSites, vendors, invoices 
+  users, jobSites, vendors, equipment, rentals, invoices 
 } from './schema';
+
+// Types for build-time safety
+import type { User, Equipment, Rental, JobSite, Vendor, Invoice } from './schema';
 
 // ============================================
 // SHARED ERROR SCHEMAS
@@ -181,6 +184,14 @@ export const api = {
         404: errorSchemas.notFound,
       },
     },
+    complete: {
+      method: 'POST' as const,
+      path: '/api/rentals/:id/complete',
+      responses: {
+        200: z.custom<Rental>(),
+        404: errorSchemas.notFound,
+      }
+    }
   },
   invoices: {
     create: {
@@ -220,6 +231,3 @@ export function buildUrl(path: string, params?: Record<string, string | number>)
   }
   return url;
 }
-
-// Re-export types from schema
-import { User, Equipment, Rental, JobSite, Vendor, Invoice } from './schema';

@@ -7,6 +7,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter }
 import { Label } from "@/components/ui/label";
 import { Truck, Loader2 } from "lucide-react";
 
+import landingImg from "@assets/pexels-apasaric-1238864_1767415604985.jpg";
+
 export default function Login() {
   const [isRegister, setIsRegister] = useState(false);
   const [username, setUsername] = useState("");
@@ -34,6 +36,9 @@ export default function Login() {
     <div className="min-h-screen grid lg:grid-cols-2">
       {/* Left: Branding */}
       <div className="hidden lg:flex flex-col bg-slate-900 text-white p-12 justify-between relative overflow-hidden">
+        {/* Dark Wash Overlay */}
+        <div className="absolute inset-0 bg-black/40 z-[1]" />
+        
         <div className="z-10">
           <div className="flex items-center gap-2 mb-8">
             <Truck className="h-10 w-10 text-primary" />
@@ -43,27 +48,26 @@ export default function Login() {
             Building the Future <br/>
             <span className="text-primary">One Rental at a Time.</span>
           </h1>
-          <p className="text-slate-400 text-lg max-w-md">
+          <p className="text-slate-100 text-lg max-w-md">
             Professional equipment management system for the modern construction industry. Track assets, manage rentals, and optimize utilization.
           </p>
         </div>
 
         {/* Decorative background circle */}
-        <div className="absolute -bottom-48 -right-48 w-96 h-96 bg-primary/20 rounded-full blur-3xl" />
-        <div className="absolute top-24 right-24 w-64 h-64 bg-blue-500/10 rounded-full blur-3xl" />
+        <div className="absolute -bottom-48 -right-48 w-96 h-96 bg-primary/20 rounded-full blur-3xl z-[1]" />
+        <div className="absolute top-24 right-24 w-64 h-64 bg-blue-500/10 rounded-full blur-3xl z-[1]" />
         
-        {/* Unsplash Image as subtle background */}
-        {/* Construction crane silhouette sunset */}
+        {/* Background Image */}
         <div 
-          className="absolute inset-0 opacity-10 mix-blend-overlay z-0"
+          className="absolute inset-0 z-0"
           style={{
-            backgroundImage: `url('https://images.unsplash.com/photo-1541888946425-d81bb19240f5?q=80&w=2070&auto=format&fit=crop')`,
+            backgroundImage: `url(${landingImg})`,
             backgroundSize: 'cover',
             backgroundPosition: 'center'
           }}
         />
 
-        <div className="z-10 text-sm text-slate-500">
+        <div className="z-10 text-sm text-slate-300">
           © 2024 Mosites Construction Co. All rights reserved.
         </div>
       </div>
@@ -122,8 +126,8 @@ export default function Login() {
               </Button>
               <Button
                 type="button"
-                variant="link"
-                className="text-primary text-xs"
+                variant="ghost"
+                className="text-primary text-xs hover:bg-transparent"
                 onClick={() => setIsRegister(!isRegister)}
                 disabled={isPending}
               >
