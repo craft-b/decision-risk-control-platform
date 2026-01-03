@@ -127,7 +127,7 @@ export default function Login() {
               <Button
                 type="button"
                 variant="ghost"
-                className="text-primary text-xs hover:bg-transparent"
+                className="text-primary text-xs hover:bg-transparent no-default-hover-elevate"
                 onClick={() => setIsRegister(!isRegister)}
                 disabled={isPending}
               >
