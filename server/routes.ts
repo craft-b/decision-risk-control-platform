@@ -82,6 +82,33 @@ export async function registerRoutes(
     res.json(user);
   });
 
+  app.post(api.auth.register.path, async (req, res) => {
+    try {
+      const input = api.auth.register.input.parse(req.body);
+      const existing = await storage.getUserByUsername(input.username);
+      if (existing) {
+        return res.status(400).json({ message: "Username already exists" });
+      }
+
+      const hashedPassword = bcrypt.hashSync(input.password, 10);
+      const user = await storage.createUser({
+        ...input,
+        password: hashedPassword,
+        role: input.role || "VIEWER"
+      });
+
+      req.session.userId = user.id;
+      req.session.role = user.role;
+      res.status(201).json(user);
+    } catch (e) {
+      if (e instanceof z.ZodError) {
+        res.status(400).json({ message: e.errors[0].message });
+      } else {
+        res.status(500).json({ message: "Internal server error" });
+      }
+    }
+  });
+
 
   // === EQUIPMENT ROUTES ===
 

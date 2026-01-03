@@ -40,7 +40,9 @@ export const rentals = pgTable("rentals", {
 
 // === SCHEMAS ===
 
-export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true });
+export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true }).extend({
+  password: z.string().min(6, "Password must be at least 6 characters"),
+});
 export const insertEquipmentSchema = createInsertSchema(equipment).omit({ id: true, createdAt: true });
 export const insertRentalSchema = createInsertSchema(rentals).omit({ id: true, createdAt: true, totalCost: true });
 
