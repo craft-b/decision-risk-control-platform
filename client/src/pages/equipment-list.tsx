@@ -1,17 +1,12 @@
+// client/src/pages/EquipmentList.tsx - Complete with Detail View
+
 import { useState } from "react";
-import { useEquipment } from "@/hooks/use-equipment";
+import { useEquipment, useCreateEquipment, useUpdateEquipment } from "@/hooks/use-equipment";
+import { useEquipmentRisk } from "@/hooks/use-predictive-maintenance";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -20,96 +15,122 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Plus, Search, Filter, Hammer, Truck } from "lucide-react";
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Plus, Search, AlertTriangle } from "lucide-react";
 import { EquipmentForm } from "@/components/equipment-form";
-import { InsertEquipment } from "@shared/schema";
+import { EquipmentDetailView } from "@/components/equipment-detail-view";
 import { cn } from "@/lib/utils";
+
+// Risk Badge Component
+function RiskBadge({ equipmentId }: { equipmentId: number }) {
+  const { data: risk, isLoading } = useEquipmentRisk(equipmentId);
+
+  if (isLoading) {
+    return <Badge variant="outline" className="bg-slate-100">...</Badge>;
+  }
+
+  if (!risk) {
+    return <Badge variant="outline" className="bg-slate-100">No Data</Badge>;
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <Badge
+        variant="outline"
+        className={cn(
+          "font-medium",
+          risk.riskBand === 'HIGH' && "bg-red-100 text-red-800 border-red-300",
+          risk.riskBand === 'MEDIUM' && "bg-orange-100 text-orange-800 border-orange-300",
+          risk.riskBand === 'LOW' && "bg-green-100 text-green-800 border-green-300"
+        )}
+      >
+        {risk.riskBand === 'HIGH' && <AlertTriangle className="h-3 w-3 mr-1" />}
+        {risk.riskBand}
+      </Badge>
+      <span className="text-xs text-muted-foreground">
+        {(risk.failureProbability * 100).toFixed(0)}%
+      </span>
+    </div>
+  );
+}
 
 export default function EquipmentList() {
   const { user } = useAuth();
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"AVAILABLE" | "RENTED" | "MAINTENANCE" | undefined>(undefined);
-  const [isDialogOpen, setIsDialogOpen] = useState(false);
-  const [editingItem, setEditingItem] = useState<(InsertEquipment & { id: number }) | undefined>(undefined);
+  const [statusFilter, setStatusFilter] = useState<"AVAILABLE" | "RENTED" | "MAINTENANCE" | "">("");
+  const [isNewEquipmentOpen, setIsNewEquipmentOpen] = useState(false);
+  const [editingEquipment, setEditingEquipment] = useState<any>(null);
+  const [viewingEquipment, setViewingEquipment] = useState<any>(null);
 
   const { data: equipment, isLoading } = useEquipment({ 
-    search: search || undefined, 
-    status: statusFilter 
+    search, 
+    status: statusFilter || undefined 
   });
 
   const isAdmin = user?.role === 'ADMINISTRATOR';
-
-  const handleEdit = (item: any) => {
-    setEditingItem(item);
-    setIsDialogOpen(true);
-  };
-
-  const closeDialog = () => {
-    setIsDialogOpen(false);
-    setEditingItem(undefined);
-  };
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
           <h2 className="text-3xl font-bold tracking-tight">Equipment Fleet</h2>
-          <p className="text-muted-foreground">Manage your heavy machinery inventory.</p>
+          <p className="text-muted-foreground">Manage your equipment inventory with ML-powered risk insights</p>
         </div>
         
         {isAdmin && (
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+          <Dialog open={isNewEquipmentOpen} onOpenChange={setIsNewEquipmentOpen}>
             <DialogTrigger asChild>
-              <Button onClick={() => setEditingItem(undefined)}>
-                <Plus className="mr-2 h-4 w-4" /> Add Equipment
+              <Button>
+                <Plus className="mr-2 h-4 w-4" /> New Equipment
               </Button>
             </DialogTrigger>
-            <DialogContent className="max-w-2xl">
+            <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
-                <DialogTitle>{editingItem ? "Edit Equipment" : "Add New Equipment"}</DialogTitle>
+                <DialogTitle>Add Equipment</DialogTitle>
                 <DialogDescription>
-                  {editingItem ? "Update details for this asset." : "Enter details for the new machine."}
+                  Add new equipment to your fleet
                 </DialogDescription>
               </DialogHeader>
-              <EquipmentForm 
-                onSuccess={closeDialog} 
-                initialData={editingItem}
-              />
+              <EquipmentForm onSuccess={() => setIsNewEquipmentOpen(false)} />
             </DialogContent>
           </Dialog>
         )}
       </div>
 
       {/* Filters */}
-      <div className="flex flex-col sm:flex-row gap-4">
+      <div className="flex gap-4">
         <div className="relative flex-1">
-          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="Search equipment by name or serial number..."
-            className="pl-8"
+            placeholder="Search equipment..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
+            className="pl-10"
           />
         </div>
         <Select 
-          value={statusFilter || "ALL"} 
-          onValueChange={(val) => setStatusFilter(val === "ALL" ? undefined : val as any)}
+          value={statusFilter || "all"} 
+          onValueChange={(val) => setStatusFilter(val === "all" ? "" : val as "AVAILABLE" | "RENTED" | "MAINTENANCE")}
         >
           <SelectTrigger className="w-[180px]">
-             <div className="flex items-center gap-2">
-                <Filter className="h-4 w-4" />
-                <SelectValue placeholder="Filter by Status" />
-             </div>
+            <SelectValue placeholder="All Status" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="ALL">All Statuses</SelectItem>
+            <SelectItem value="all">All Status</SelectItem>
             <SelectItem value="AVAILABLE">Available</SelectItem>
             <SelectItem value="RENTED">Rented</SelectItem>
             <SelectItem value="MAINTENANCE">Maintenance</SelectItem>
@@ -117,82 +138,123 @@ export default function EquipmentList() {
         </Select>
       </div>
 
-      {/* Grid */}
-      {isLoading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {[1,2,3].map(i => <div key={i} className="h-64 rounded-xl bg-slate-100 animate-pulse" />)}
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {equipment?.map((item) => (
-            <Card key={item.id} className="group hover:shadow-lg transition-all duration-300 border-l-4" style={{ 
-              borderLeftColor: item.status === 'AVAILABLE' ? '#22c55e' : item.status === 'RENTED' ? '#f97316' : '#ef4444' 
-            }}>
-              <CardHeader>
-                <div className="flex justify-between items-start">
-                  <div>
-                    <CardTitle className="text-lg font-bold flex items-center gap-2">
-                       {item.name}
-                    </CardTitle>
-                    <CardDescription className="font-mono text-xs mt-1">
-                      {item.serialNumber || 'No S/N'}
-                    </CardDescription>
-                  </div>
-                  <Badge variant="outline" className={cn(
-                    "uppercase text-[10px] tracking-wider font-bold",
-                    item.status === 'AVAILABLE' ? "bg-green-50 text-green-700 border-green-200" : 
-                    item.status === 'RENTED' ? "bg-orange-50 text-orange-700 border-orange-200" : 
-                    "bg-red-50 text-red-700 border-red-200"
-                  )}>
-                    {item.status}
-                  </Badge>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Category:</span>
-                  <span className="font-medium">{item.category}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Daily Rate:</span>
-                  <span className="font-medium">${item.dailyRate}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Location:</span>
-                  <span className="font-medium">{item.location}</span>
-                </div>
-                {item.condition && (
-                   <div className="flex justify-between text-sm">
-                    <span className="text-muted-foreground">Condition:</span>
-                    <span className="font-medium text-xs bg-slate-100 px-2 py-0.5 rounded text-slate-700">
-                      {item.condition}
-                    </span>
-                  </div>
-                )}
-              </CardContent>
-              {isAdmin && (
-                <CardFooter className="bg-slate-50/50 p-4 border-t">
-                  <Button 
-                    variant="ghost" 
-                    size="sm" 
-                    className="w-full text-slate-500 hover:text-primary"
-                    onClick={() => handleEdit(item)}
-                  >
-                    Edit Details
-                  </Button>
-                </CardFooter>
-              )}
-            </Card>
-          ))}
-          
-          {equipment?.length === 0 && (
-            <div className="col-span-full py-20 text-center bg-slate-50 rounded-xl border border-dashed">
-              <Truck className="h-12 w-12 mx-auto text-slate-300 mb-4" />
-              <p className="text-lg font-medium text-slate-600">No equipment found</p>
-              <p className="text-slate-400">Try adjusting your filters or search terms.</p>
-            </div>
-          )}
-        </div>
+      {/* Equipment Table */}
+      <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
+        <Table>
+          <TableHeader className="bg-slate-50">
+            <TableRow>
+              <TableHead>Equipment</TableHead>
+              <TableHead>Category</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Risk Level</TableHead>
+              <TableHead>Daily Rate</TableHead>
+              {isAdmin && <TableHead className="text-right">Actions</TableHead>}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {isLoading ? (
+              <TableRow>
+                <TableCell colSpan={isAdmin ? 6 : 5} className="text-center py-12 text-muted-foreground">
+                  Loading equipment...
+                </TableCell>
+              </TableRow>
+            ) : equipment?.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={isAdmin ? 6 : 5} className="text-center py-12 text-muted-foreground">
+                  No equipment found.
+                </TableCell>
+              </TableRow>
+            ) : (
+              equipment?.map((equip) => (
+                <TableRow 
+                  key={equip.id}
+                  className="cursor-pointer hover:bg-slate-50"
+                  onClick={() => setViewingEquipment(equip)}
+                >
+                  <TableCell>
+                    <div className="font-medium">{equip.name}</div>
+                    <div className="text-sm text-muted-foreground font-mono">
+                      {equip.equipmentId}
+                    </div>
+                  </TableCell>
+                  <TableCell>{equip.category}</TableCell>
+                  <TableCell>
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        equip.status === 'AVAILABLE' && "bg-green-50 text-green-700 border-green-200",
+                        equip.status === 'RENTED' && "bg-blue-50 text-blue-700 border-blue-200",
+                        equip.status === 'MAINTENANCE' && "bg-orange-50 text-orange-700 border-orange-200"
+                      )}
+                    >
+                      {equip.status}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <RiskBadge equipmentId={equip.id} />
+                  </TableCell>
+                  <TableCell className="font-semibold">${equip.dailyRate}/day</TableCell>
+                  {isAdmin && (
+                    <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setEditingEquipment(equip)}
+                      >
+                        Edit
+                      </Button>
+                    </TableCell>
+                  )}
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </div>
+
+      {/* Edit Dialog */}
+      {editingEquipment && (
+        <Dialog open={!!editingEquipment} onOpenChange={() => setEditingEquipment(null)}>
+          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Edit Equipment</DialogTitle>
+              <DialogDescription>
+                Update equipment details
+              </DialogDescription>
+            </DialogHeader>
+            <EquipmentForm
+              initialData={editingEquipment}
+              onSuccess={() => setEditingEquipment(null)}
+            />
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Detail View Dialog */}
+      {viewingEquipment && (
+        <Dialog open={!!viewingEquipment} onOpenChange={() => setViewingEquipment(null)}>
+          <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Equipment Details</DialogTitle>
+              <DialogDescription>
+                View complete equipment information
+              </DialogDescription>
+            </DialogHeader>
+            <EquipmentDetailView equipment={viewingEquipment} />
+            {isAdmin && (
+              <div className="flex justify-end pt-4 border-t">
+                <Button
+                  onClick={() => {
+                    setEditingEquipment(viewingEquipment);
+                    setViewingEquipment(null);
+                  }}
+                >
+                  Edit Equipment
+                </Button>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
       )}
     </div>
   );

@@ -6,7 +6,7 @@ import {
 } from './schema';
 
 // Types for build-time safety
-import type { User, Equipment, Rental, JobSite, Vendor, Invoice } from './schema';
+import type { User, Equipment, Rental, JobSite, Vendor, Invoice, MaintenanceEvent } from './schema';
 
 // ============================================
 // SHARED ERROR SCHEMAS
@@ -31,6 +31,57 @@ export const errorSchemas = {
 // API CONTRACT
 // ============================================
 export const api = {
+  riskScore: {
+    calculate: {
+      method: 'POST' as const,
+      path: '/api/risk-score/equipment',
+      input: z.object({
+        equipmentId: z.number(),
+        asOfDate: z.string().optional(),
+      }),
+      responses: {
+        200: z.object({
+          equipmentId: z.number(),
+          riskScore: z.number(),
+          riskLevel: z.enum(['LOW', 'MEDIUM', 'HIGH']),
+          drivers: z.array(z.string()),
+          modelVersion: z.string(),
+        }),
+        404: errorSchemas.notFound,
+      },
+    },
+    batch: {
+      method: 'POST' as const,
+      path: '/api/risk-score/equipment/batch',
+      input: z.object({
+        equipmentIds: z.array(z.number()),
+      }),
+      responses: {
+        200: z.array(z.object({
+          equipmentId: z.number(),
+          riskScore: z.number(),
+          riskLevel: z.enum(['LOW', 'MEDIUM', 'HIGH']),
+          drivers: z.array(z.string()),
+          modelVersion: z.string(),
+        })),
+      },
+    },
+    history: {
+      method: 'GET' as const,
+      path: '/api/risk-score/equipment/:id/history',
+      responses: {
+        200: z.array(z.object({
+          id: z.number(),
+          equipmentId: z.number(),
+          riskScore: z.number(),
+          riskLevel: z.string(),
+          drivers: z.string(),
+          modelVersion: z.string(),
+          scoredAt: z.string(),
+        })),
+      },
+    },
+  },
   auth: {
     login: {
       method: 'POST' as const,
@@ -121,26 +172,180 @@ export const api = {
     list: {
       method: 'GET' as const,
       path: '/api/job-sites',
-      responses: { 200: z.array(z.custom<JobSite>()) },
+      responses: {
+        200: z.array(z.object({
+          id: z.number(),
+          jobId: z.string(),
+          name: z.string(),
+          address: z.string().nullable(),
+          contactPerson: z.string().nullable(),
+          contactPhone: z.string().nullable(),
+          createdAt: z.string().nullable(), // Changed from z.date()
+          _count: z.object({
+            rentals: z.number(),
+          }).optional(),
+        })),
+      },
+    },
+    get: {
+      method: 'GET' as const,
+      path: '/api/job-sites/:id',
+      responses: {
+        200: z.object({
+          id: z.number(),
+          jobId: z.string(),
+          name: z.string(),
+          address: z.string().nullable(),
+          contactPerson: z.string().nullable(),
+          contactPhone: z.string().nullable(),
+          createdAt: z.string().nullable(), // Changed from z.date()
+          rentals: z.array(z.object({
+            id: z.number(),
+            status: z.string(),
+            receiveDate: z.string(), // Changed from z.date()
+            returnDate: z.string().nullable(), // Changed from z.date()
+            equipment: z.object({
+              id: z.number(),
+              name: z.string(),
+              equipmentId: z.string(),
+            }),
+          })),
+        }),
+        404: z.object({ message: z.string() }),
+      },
     },
     create: {
       method: 'POST' as const,
       path: '/api/job-sites',
       input: insertJobSiteSchema,
-      responses: { 201: z.custom<JobSite>() },
+      responses: {
+        201: z.object({
+          id: z.number(),
+          jobId: z.string(),
+          name: z.string(),
+          address: z.string().nullable(),
+          contactPerson: z.string().nullable(),
+          contactPhone: z.string().nullable(),
+          createdAt: z.string().nullable(), // Changed from z.date()
+        }),
+        400: z.object({ message: z.string() }),
+      },
+    },
+    update: {
+      method: 'PATCH' as const,
+      path: '/api/job-sites/:id',
+      input: insertJobSiteSchema.partial(),
+      responses: {
+        200: z.object({
+          id: z.number(),
+          jobId: z.string(),
+          name: z.string(),
+          address: z.string().nullable(),
+          contactPerson: z.string().nullable(),
+          contactPhone: z.string().nullable(),
+          createdAt: z.string().nullable(), // Changed from z.date()
+        }),
+        404: z.object({ message: z.string() }),
+      },
+    },
+    delete: {
+      method: 'DELETE' as const,
+      path: '/api/job-sites/:id',
+      responses: {
+        200: z.object({ message: z.string() }),
+        404: z.object({ message: z.string() }),
+        409: z.object({ message: z.string() }), // Has active rentals
+      },
     },
   },
   vendors: {
     list: {
       method: 'GET' as const,
       path: '/api/vendors',
-      responses: { 200: z.array(z.custom<Vendor>()) },
+      responses: {
+        200: z.array(z.object({
+          id: z.number(),
+          vendorId: z.string(),
+          name: z.string(),
+          address: z.string().nullable(),
+          salesPerson: z.string().nullable(),
+          contact: z.string().nullable(),
+          createdAt: z.string().nullable(), // Changed from z.date()
+          _count: z.object({
+            rentals: z.number(),
+          }).optional(),
+        })),
+      },
+    },
+    get: {
+      method: 'GET' as const,
+      path: '/api/vendors/:id',
+      responses: {
+        200: z.object({
+          id: z.number(),
+          vendorId: z.string(),
+          name: z.string(),
+          address: z.string().nullable(),
+          salesPerson: z.string().nullable(),
+          contact: z.string().nullable(),
+          createdAt: z.string().nullable(), // Changed from z.date()
+          rentals: z.array(z.object({
+            id: z.number(),
+            status: z.string(),
+            receiveDate: z.string(), // Changed from z.date()
+            returnDate: z.string().nullable(), // Changed from z.date()
+            equipment: z.object({
+              id: z.number(),
+              name: z.string(),
+              equipmentId: z.string(),
+            }),
+          })),
+        }),
+        404: z.object({ message: z.string() }),
+      },
     },
     create: {
       method: 'POST' as const,
       path: '/api/vendors',
       input: insertVendorSchema,
-      responses: { 201: z.custom<Vendor>() },
+      responses: {
+        201: z.object({
+          id: z.number(),
+          vendorId: z.string(),
+          name: z.string(),
+          address: z.string().nullable(),
+          salesPerson: z.string().nullable(),
+          contact: z.string().nullable(),
+          createdAt: z.string().nullable(), // Changed from z.date()
+        }),
+        400: z.object({ message: z.string() }),
+      },
+    },
+    update: {
+      method: 'PATCH' as const,
+      path: '/api/vendors/:id',
+      input: insertVendorSchema.partial(),
+      responses: {
+        200: z.object({
+          id: z.number(),
+          vendorId: z.string(),
+          name: z.string(),
+          address: z.string().nullable(),
+          salesPerson: z.string().nullable(),
+          contact: z.string().nullable(),
+          createdAt: z.string().nullable(), // Changed from z.date()
+        }),
+        404: z.object({ message: z.string() }),
+      },
+    },
+    delete: {
+      method: 'DELETE' as const,
+      path: '/api/vendors/:id',
+      responses: {
+        200: z.object({ message: z.string() }),
+        404: z.object({ message: z.string() }),
+        409: z.object({ message: z.string() }), // Has active rentals
+      },
     },
   },
   rentals: {
@@ -217,7 +422,119 @@ export const api = {
       path: '/api/reports/annual-rental',
       responses: { 200: z.array(z.any()) },
     },
-  }
+  },
+  ml: {
+    modelMetrics: {
+      method: 'GET' as const,
+      path: '/api/ml/model-metrics',
+      responses: {
+        200: z.object({
+          version: z.string(),
+          trainedAt: z.string(),
+          datasetSize: z.number(),
+          accuracy: z.number(),
+          precision: z.object({
+            HIGH: z.number(),
+            MEDIUM: z.number(),
+            LOW: z.number(),
+          }),
+          recall: z.object({
+            HIGH: z.number(),
+            MEDIUM: z.number(),
+            LOW: z.number(),
+          }),
+          f1Score: z.object({
+            HIGH: z.number(),
+            MEDIUM: z.number(),
+            LOW: z.number(),
+          }),
+          confusionMatrix: z.object({
+            HIGH: z.object({
+              predictedHIGH: z.number(),
+              predictedMEDIUM: z.number(),
+              predictedLOW: z.number(),
+            }),
+            MEDIUM: z.object({
+              predictedHIGH: z.number(),
+              predictedMEDIUM: z.number(),
+              predictedLOW: z.number(),
+            }),
+            LOW: z.object({
+              predictedHIGH: z.number(),
+              predictedMEDIUM: z.number(),
+              predictedLOW: z.number(),
+            }),
+          }),
+          featureImportance: z.array(z.object({
+            feature: z.string(),
+            importance: z.number(),
+            description: z.string(),
+          })),
+          predictionHistory: z.array(z.object({
+            date: z.string(),
+            total: z.number(),
+            high: z.number(),
+            medium: z.number(),
+            low: z.number(),
+          })),
+          hyperparameters: z.object({
+            algorithm: z.string(),
+            nEstimators: z.number(),
+            maxDepth: z.number(),
+            minSamplesSplit: z.number(),
+            classWeight: z.string(),
+          }),
+        }),
+      },
+    },
+    featureImportance: {
+      method: 'GET' as const,
+      path: '/api/ml/feature-importance',
+      responses: {
+        200: z.array(z.object({
+          feature: z.string(),
+          importance: z.number(),
+          description: z.string(),
+        })),
+      },
+    },
+  },
+  maintenance: {
+    list: {
+      method: 'GET' as const,
+      path: '/api/maintenance',
+      input: z.object({
+        equipmentId: z.string().optional(),
+      }).optional(),
+      responses: {
+        200: z.array(z.custom<MaintenanceEvent>()),
+      },
+    },
+    create: {
+      method: 'POST' as const,
+      path: '/api/maintenance',
+      input: z.object({
+        equipmentId: z.number(),
+        maintenanceDate: z.string(),
+        maintenanceType: z.enum(['INSPECTION', 'MINOR_SERVICE', 'MAJOR_SERVICE']),
+        description: z.string().optional(),
+        performedBy: z.string().optional(),
+        cost: z.string().optional(),
+        nextDueDate: z.string().optional(),
+      }),
+      responses: {
+        201: z.custom<MaintenanceEvent>(),
+        400: errorSchemas.validation,
+      },
+    },
+    getByEquipment: {
+      method: 'GET' as const,
+      path: '/api/maintenance/equipment/:id',
+      responses: {
+        200: z.array(z.custom<MaintenanceEvent>()),
+      },
+    },
+  },
 };
 
 export function buildUrl(path: string, params?: Record<string, string | number>): string {

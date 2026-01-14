@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Truck, Loader2 } from "lucide-react";
 
 import landingImg from "@assets/pexels-apasaric-1238864_1767415604985.jpg";
+import { FaTruckMonster } from "react-icons/fa";
 
 export default function Login() {
   const [isRegister, setIsRegister] = useState(false);
@@ -16,10 +17,12 @@ export default function Login() {
   const { loginMutation, registerMutation, user } = useAuth();
   const [, setLocation] = useLocation();
 
+  useEffect(() => {
   if (user) {
     setLocation("/");
-    return null;
   }
+}, [user, setLocation]);
+
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -41,8 +44,8 @@ export default function Login() {
         
         <div className="z-10">
           <div className="flex items-center gap-2 mb-8">
-            <Truck className="h-10 w-10 text-primary" />
-            <span className="text-2xl font-bold font-display tracking-widest text-primary">MOSITES</span>
+            <FaTruckMonster  className="h-10 w-10 text-primary" />
+            <span className="text-2xl font-bold font-display tracking-widest text-primary">SMASH & CRAFT</span>
           </div>
           <h1 className="text-5xl font-bold mb-6 leading-tight">
             Building the Future <br/>
@@ -68,7 +71,7 @@ export default function Login() {
         />
 
         <div className="z-10 text-sm text-slate-300">
-          © 2024 Mosites Construction Co. All rights reserved.
+          © 2024 Smash & Craft Construction Co. All rights reserved.
         </div>
       </div>
 

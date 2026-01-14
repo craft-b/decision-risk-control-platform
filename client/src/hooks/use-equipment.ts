@@ -88,10 +88,6 @@ export function useUpdateEquipment() {
       });
 
       if (!res.ok) {
-        if (res.status === 400) {
-          const error = api.equipment.update.responses[400].parse(await res.json());
-          throw new Error(error.message);
-        }
         throw new Error("Failed to update equipment");
       }
       return api.equipment.update.responses[200].parse(await res.json());

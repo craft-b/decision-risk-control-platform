@@ -11,6 +11,13 @@ import Dashboard from "@/pages/dashboard";
 import EquipmentList from "@/pages/equipment-list";
 import RentalsList from "@/pages/rentals-list";
 import NotFound from "@/pages/not-found";
+import RiskAnalytics from "@/pages/risk-monitoring";
+import MaintenanceLog from "./pages/maintenance-log";
+import JobSitesList from '@/pages/job-sites-list';
+import VendorsList from '@/pages/vendors-list';
+import PredictiveMaintenanceDashboard from '@/pages/predictive-maintenance-dashboard';
+import MLPerformanceDashboard from "./pages/ml-dashboard";
+
 
 // Protected Route Wrapper
 function ProtectedRoute({ component: Component }: { component: React.ComponentType }) {
@@ -50,7 +57,24 @@ function Router() {
       <Route path="/rentals">
         <ProtectedRoute component={RentalsList} />
       </Route>
-      
+      <Route path="/risk-analytics">
+        <ProtectedRoute component={RiskAnalytics} />
+      </Route>
+      <Route path="/maintenance">
+        <ProtectedRoute component={MaintenanceLog} />
+      </Route>
+      <Route path="/job-sites">
+        <ProtectedRoute component={JobSitesList} />
+      </Route> 
+      <Route path="/vendors">
+        <ProtectedRoute component={VendorsList} />
+      </Route>
+      <Route path="/predictive-maintenance">
+        <ProtectedRoute component={PredictiveMaintenanceDashboard} />
+      </Route>
+      <Route path="ml-performance">
+        <ProtectedRoute component={MLPerformanceDashboard} />
+      </Route>
       <Route component={NotFound} />
     </Switch>
   );
