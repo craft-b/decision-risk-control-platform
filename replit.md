@@ -1,4 +1,4 @@
-# Mosites Construction Rental Equipment System
+# Smash & Craft Construction Rental Equipment System
 
 ## Overview
 

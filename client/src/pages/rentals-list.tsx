@@ -19,12 +19,18 @@ import {
   DialogTrigger,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
-import { Label } from "@/components/ui/label";
-import { Plus, CheckSquare, CalendarDays } from "lucide-react";
+import { Plus, CheckSquare, CalendarDays, Edit, Eye } from "lucide-react";
 import { format } from "date-fns";
 import { RentalForm } from "@/components/rental-form";
+import { RentalDetailView } from "@/components/rental-detail-view";
 import { cn } from "@/lib/utils";
 
 export default function RentalsList() {
@@ -33,25 +39,40 @@ export default function RentalsList() {
   const completeMutation = useCompleteRental();
   const [isNewRentalOpen, setIsNewRentalOpen] = useState(false);
   const [completeId, setCompleteId] = useState<number | null>(null);
-  
-  // State for completion dialog
-  const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
-  const [notes, setNotes] = useState("");
+  const [editingRental, setEditingRental] = useState<any>(null);
+  const [viewingRentalId, setViewingRentalId] = useState<number | null>(null);
 
   const isAdmin = user?.role === 'ADMINISTRATOR';
 
   const handleComplete = () => {
     if (completeId) {
-      completeMutation.mutate(
-        { id: completeId, endDate, notes },
-        {
-          onSuccess: () => {
-            setCompleteId(null);
-            setNotes("");
-          }
+      completeMutation.mutate({
+        id: completeId,
+        endDate: new Date().toISOString().split('T')[0],
+      }, {
+        onSuccess: () => {
+          setCompleteId(null);
         }
-      );
+      });
     }
+  };
+
+  const handleEdit = (rental: any, e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent row click
+    setEditingRental(rental);
+  };
+
+  const handleViewDetails = (rentalId: number, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setViewingRentalId(rentalId);
+  };
+
+  const handleRowClick = (rentalId: number) => {
+    setViewingRentalId(rentalId);
+  };
+
+  const closeEditDialog = () => {
+    setEditingRental(null);
   };
 
   return (
@@ -69,11 +90,11 @@ export default function RentalsList() {
                 <Plus className="mr-2 h-4 w-4" /> New Rental
               </Button>
             </DialogTrigger>
-            <DialogContent className="max-w-xl">
+            <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>Create Rental Agreement</DialogTitle>
                 <DialogDescription>
-                  Assign equipment to a customer and job site.
+                  Assign equipment to a job site.
                 </DialogDescription>
               </DialogHeader>
               <RentalForm onSuccess={() => setIsNewRentalOpen(false)} />
@@ -86,9 +107,10 @@ export default function RentalsList() {
         <Table>
           <TableHeader className="bg-slate-50">
             <TableRow>
-              <TableHead>Customer / Job Site</TableHead>
+              <TableHead>Job Site / Vendor</TableHead>
               <TableHead>Equipment</TableHead>
               <TableHead>Duration</TableHead>
+              <TableHead>Type</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
@@ -96,37 +118,62 @@ export default function RentalsList() {
           <TableBody>
             {isLoading ? (
                <TableRow>
-                 <TableCell colSpan={5} className="text-center py-12 text-muted-foreground">
+                 <TableCell colSpan={6} className="text-center py-12 text-muted-foreground">
                    Loading rentals...
                  </TableCell>
                </TableRow>
             ) : rentals?.length === 0 ? (
                <TableRow>
-                 <TableCell colSpan={5} className="text-center py-12 text-muted-foreground">
+                 <TableCell colSpan={6} className="text-center py-12 text-muted-foreground">
                    No active rentals found.
                  </TableCell>
                </TableRow>
             ) : (
               rentals?.map((rental) => (
-                <TableRow key={rental.id}>
+                <TableRow 
+                  key={rental.id}
+                  className="cursor-pointer hover:bg-slate-50 transition-colors"
+                  onClick={() => handleRowClick(rental.id)}
+                >
                   <TableCell>
-                    <div className="font-medium text-slate-900">{rental.customerName}</div>
-                    <div className="text-xs text-muted-foreground">{rental.jobSite || 'No site specified'}</div>
+                    <div className="font-medium text-slate-900">
+                      {rental.jobSite?.name || rental.jobSite?.jobId || 'Unknown Job Site'}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {rental.vendor?.name || 'No vendor'}
+                    </div>
                   </TableCell>
                   <TableCell>
                     <div className="font-medium">{rental.equipment?.name || 'Unknown Equipment'}</div>
                     <div className="text-xs text-muted-foreground font-mono">
-                      {rental.equipment?.serialNumber}
+                      {rental.equipment?.serialNumber || rental.equipment?.equipmentId}
                     </div>
                   </TableCell>
                   <TableCell>
                     <div className="flex flex-col text-sm">
-                      <span className="text-green-600 font-medium">{format(new Date(rental.startDate), 'MMM d')}</span>
-                      <span className="text-slate-400 text-xs">to</span>
-                      <span className="text-slate-600 font-medium">
-                        {rental.endDate ? format(new Date(rental.endDate), 'MMM d') : 'Ongoing'}
+                      <span className="text-green-600 font-medium">
+                        {rental.receiveDate ? format(new Date(rental.receiveDate), 'MMM d, yyyy') : 'N/A'}
                       </span>
+                      {rental.returnDate && (
+                        <>
+                          <span className="text-slate-400 text-xs">to</span>
+                          <span className="text-slate-600 font-medium">
+                            {format(new Date(rental.returnDate), 'MMM d, yyyy')}
+                          </span>
+                        </>
+                      )}
+                      {!rental.returnDate && rental.status === 'ACTIVE' && (
+                        <span className="text-xs text-muted-foreground">Ongoing</span>
+                      )}
                     </div>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="outline" className={cn(
+                      rental.buyRent === 'BUY' ? "bg-blue-50 text-blue-700 border-blue-200" :
+                      "bg-purple-50 text-purple-700 border-purple-200"
+                    )}>
+                      {rental.buyRent}
+                    </Badge>
                   </TableCell>
                   <TableCell>
                     <Badge variant="outline" className={cn(
@@ -138,17 +185,43 @@ export default function RentalsList() {
                     </Badge>
                   </TableCell>
                   <TableCell className="text-right">
-                    {rental.status === 'ACTIVE' && isAdmin && (
-                       <Button 
+                    <div className="flex justify-end gap-2">
+                      <Button 
                         size="sm" 
-                        variant="outline" 
-                        className="h-8 gap-2 hover:bg-green-50 hover:text-green-700 hover:border-green-200"
-                        onClick={() => setCompleteId(rental.id)}
-                       >
-                         <CheckSquare className="h-4 w-4" />
-                         Complete
-                       </Button>
-                    )}
+                        variant="ghost" 
+                        className="h-8 w-8 p-0"
+                        onClick={(e) => handleViewDetails(rental.id, e)}
+                      >
+                        <Eye className="h-4 w-4" />
+                      </Button>
+                      {isAdmin && (
+                        <>
+                          <Button 
+                            size="sm" 
+                            variant="outline" 
+                            className="h-8 gap-2 hover:bg-blue-50 hover:text-blue-700 hover:border-blue-200"
+                            onClick={(e) => handleEdit(rental, e)}
+                          >
+                            <Edit className="h-4 w-4" />
+                            Edit
+                          </Button>
+                          {rental.status === 'ACTIVE' && (
+                            <Button 
+                              size="sm" 
+                              variant="outline" 
+                              className="h-8 gap-2 hover:bg-green-50 hover:text-green-700 hover:border-green-200"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setCompleteId(rental.id);
+                              }}
+                            >
+                              <CheckSquare className="h-4 w-4" />
+                              Complete
+                            </Button>
+                          )}
+                        </>
+                      )}
+                    </div>
                   </TableCell>
                 </TableRow>
               ))
@@ -157,32 +230,37 @@ export default function RentalsList() {
         </Table>
       </div>
 
+      {/* Rental Detail Sheet */}
+      <Sheet open={!!viewingRentalId} onOpenChange={(open) => !open && setViewingRentalId(null)}>
+        <SheetContent className="w-full sm:max-w-2xl overflow-y-auto">
+          <SheetHeader>
+            <SheetTitle>Rental Details</SheetTitle>
+            <SheetDescription>
+              Complete information about this rental agreement
+            </SheetDescription>
+          </SheetHeader>
+          <div className="mt-6">
+            {viewingRentalId && (() => {
+              const rental = rentals?.find(r => r.id === viewingRentalId);
+              return rental ? <RentalDetailView rental={rental} /> : <div>Loading...</div>;
+            })()}
+          </div>
+        </SheetContent>
+      </Sheet>
+
       {/* Completion Dialog */}
       <Dialog open={!!completeId} onOpenChange={(open) => !open && setCompleteId(null)}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Complete Rental</DialogTitle>
             <DialogDescription>
-              Mark this rental as returned. This will make the equipment available again.
+              Mark this rental as returned. This will set the return date to today and make the equipment available again.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 py-4">
-             <div className="space-y-2">
-               <Label>Return Date</Label>
-               <Input 
-                 type="date" 
-                 value={endDate}
-                 onChange={(e) => setEndDate(e.target.value)}
-               />
-             </div>
-             <div className="space-y-2">
-               <Label>Notes (Damage, cleaning fees, etc.)</Label>
-               <Input 
-                 placeholder="Optional notes..."
-                 value={notes}
-                 onChange={(e) => setNotes(e.target.value)}
-               />
-             </div>
+          <div className="py-4">
+            <p className="text-sm text-muted-foreground">
+              Are you sure you want to mark this rental as completed? The equipment will become available for rent again.
+            </p>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCompleteId(null)}>Cancel</Button>
@@ -191,6 +269,24 @@ export default function RentalsList() {
               Confirm Return
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Rental Dialog */}
+      <Dialog open={!!editingRental} onOpenChange={(open) => !open && closeEditDialog()}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Edit Rental</DialogTitle>
+            <DialogDescription>
+              Update rental details and status.
+            </DialogDescription>
+          </DialogHeader>
+          {editingRental && (
+            <RentalForm 
+              initialData={editingRental}
+              onSuccess={closeEditDialog} 
+            />
+          )}
         </DialogContent>
       </Dialog>
     </div>

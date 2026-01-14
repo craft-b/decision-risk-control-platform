@@ -1,4 +1,4 @@
-# Mosites Construction Rental Equipment System - Secure Architecture Outline
+# Smash & Craft Construction Rental Equipment System - Secure Architecture Outline
 
 ## Technology Stack
 

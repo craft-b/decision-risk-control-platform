@@ -10,6 +10,7 @@ import {
   FormItem,
   FormLabel,
   FormMessage,
+  FormDescription,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import {
@@ -19,9 +20,24 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
-import { Loader2 } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Loader2, AlertCircle } from "lucide-react";
 import { DialogFooter } from "@/components/ui/dialog";
+
+// Constants for dropdown options
+const EQUIPMENT_CATEGORIES = [
+  "Excavator",
+  "Lift",
+  "Dozer",
+  "Loader",
+  "Generator",
+] as const;
+
+const EQUIPMENT_STATUSES = [
+  { value: "AVAILABLE", label: "Available" },
+  { value: "RENTED", label: "Rented" },
+  { value: "MAINTENANCE", label: "Maintenance" },
+] as const;
 
 type EquipmentFormProps = {
   initialData?: InsertEquipment & { id?: number };
@@ -36,30 +52,76 @@ export function EquipmentForm({ initialData, onSuccess }: EquipmentFormProps) {
   const form = useForm<InsertEquipment>({
     resolver: zodResolver(insertEquipmentSchema),
     defaultValues: initialData || {
+      equipmentId: "",
       name: "",
       category: "",
-      description: "",
+      make: "",
+      model: "",
       serialNumber: "",
       dailyRate: "0",
-      condition: "New",
-      location: "Main Yard",
+      weeklyRate: "",
+      monthlyRate: "",
       status: "AVAILABLE",
     },
   });
 
-  const onSubmit = (data: InsertEquipment) => {
-    if (isEditing && initialData?.id) {
-      updateMutation.mutate({ id: initialData.id, ...data }, { onSuccess });
-    } else {
-      createMutation.mutate(data, { onSuccess });
-    }
+  const onSubmit: React.FormEventHandler<HTMLFormElement> = (e) => {
+    e.preventDefault();
+    form.handleSubmit((data: InsertEquipment) => {
+      if (isEditing && initialData?.id) {
+        updateMutation.mutate(
+          { id: initialData.id, ...data },
+          {
+            onSuccess: () => {
+              onSuccess();
+            },
+          }
+        );
+      } else {
+        createMutation.mutate(data, {
+          onSuccess: () => {
+            form.reset();
+            onSuccess();
+          },
+        });
+      }
+    })(e);
   };
 
   const isPending = createMutation.isPending || updateMutation.isPending;
+  const error = createMutation.error || updateMutation.error;
 
   return (
     <Form {...form}>
-      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+      <form onSubmit={onSubmit} className="space-y-4">
+        {/* Error Alert */}
+        {error && (
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>
+              {error?.message ||
+                `Failed to ${isEditing ? "update" : "create"} equipment. Please try again.`}
+            </AlertDescription>
+          </Alert>
+        )}
+
+        <FormField
+          control={form.control}
+          name="equipmentId"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Equipment ID</FormLabel>
+              <FormControl>
+                <Input placeholder="e.g. EQ-001" {...field} />
+              </FormControl>
+              <FormDescription>
+                Unique identifier for this equipment
+              </FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <FormField
             control={form.control}
@@ -68,7 +130,7 @@ export function EquipmentForm({ initialData, onSuccess }: EquipmentFormProps) {
               <FormItem>
                 <FormLabel>Equipment Name</FormLabel>
                 <FormControl>
-                  <Input placeholder="e.g. Caterpillar 320" {...field} />
+                  <Input placeholder="e.g. Hydraulic Excavator" {...field} />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -81,16 +143,16 @@ export function EquipmentForm({ initialData, onSuccess }: EquipmentFormProps) {
               <FormItem>
                 <FormLabel>Category</FormLabel>
                 <FormControl>
-                  <Select onValueChange={field.onChange} defaultValue={field.value}>
+                  <Select onValueChange={field.onChange} value={field.value}>
                     <SelectTrigger>
                       <SelectValue placeholder="Select category" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="Excavator">Excavator</SelectItem>
-                      <SelectItem value="Lift">Lift</SelectItem>
-                      <SelectItem value="Dozer">Dozer</SelectItem>
-                      <SelectItem value="Loader">Loader</SelectItem>
-                      <SelectItem value="Generator">Generator</SelectItem>
+                      {EQUIPMENT_CATEGORIES.map((category) => (
+                        <SelectItem key={category} value={category}>
+                          {category}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </FormControl>
@@ -100,29 +162,19 @@ export function EquipmentForm({ initialData, onSuccess }: EquipmentFormProps) {
           />
         </div>
 
-        <FormField
-          control={form.control}
-          name="description"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Description</FormLabel>
-              <FormControl>
-                <Textarea placeholder="Details about the equipment..." {...field} value={field.value || ''} />
-              </FormControl>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <FormField
             control={form.control}
-            name="serialNumber"
+            name="make"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Serial Number</FormLabel>
+                <FormLabel>Make (Optional)</FormLabel>
                 <FormControl>
-                  <Input placeholder="SN-123456" {...field} value={field.value || ''} />
+                  <Input 
+                    placeholder="e.g. Caterpillar" 
+                    {...field} 
+                    value={field.value ?? ""} 
+                  />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -130,17 +182,15 @@ export function EquipmentForm({ initialData, onSuccess }: EquipmentFormProps) {
           />
           <FormField
             control={form.control}
-            name="dailyRate"
+            name="model"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Daily Rate ($)</FormLabel>
+                <FormLabel>Model (Optional)</FormLabel>
                 <FormControl>
                   <Input 
-                    type="number" 
-                    step="0.01" 
-                    placeholder="0.00" 
+                    placeholder="e.g. 320" 
                     {...field} 
-                    onChange={(e) => field.onChange(e.target.value)} // Keep as string for numeric type
+                    value={field.value ?? ""} 
                   />
                 </FormControl>
                 <FormMessage />
@@ -149,15 +199,40 @@ export function EquipmentForm({ initialData, onSuccess }: EquipmentFormProps) {
           />
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-           <FormField
+        <FormField
+          control={form.control}
+          name="serialNumber"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Serial Number (Optional)</FormLabel>
+              <FormControl>
+                <Input 
+                  placeholder="SN-123456" 
+                  {...field} 
+                  value={field.value ?? ""} 
+                />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <FormField
             control={form.control}
-            name="condition"
+            name="dailyRate"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Condition</FormLabel>
+                <FormLabel>Daily Rate ($)</FormLabel>
                 <FormControl>
-                  <Input placeholder="e.g. Good, Needs Service" {...field} value={field.value || ''} />
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    placeholder="0.00"
+                    {...field}
+                    onChange={(e) => field.onChange(e.target.value)}
+                  />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -165,12 +240,41 @@ export function EquipmentForm({ initialData, onSuccess }: EquipmentFormProps) {
           />
           <FormField
             control={form.control}
-            name="location"
+            name="weeklyRate"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Location</FormLabel>
+                <FormLabel>Weekly Rate (Optional)</FormLabel>
                 <FormControl>
-                  <Input placeholder="e.g. Warehouse A" {...field} value={field.value || ''} />
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    placeholder="0.00"
+                    {...field}
+                    value={field.value ?? ""}
+                    onChange={(e) => field.onChange(e.target.value)}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name="monthlyRate"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Monthly Rate (Optional)</FormLabel>
+                <FormControl>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    placeholder="0.00"
+                    {...field}
+                    value={field.value ?? ""}
+                    onChange={(e) => field.onChange(e.target.value)}
+                  />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -185,24 +289,37 @@ export function EquipmentForm({ initialData, onSuccess }: EquipmentFormProps) {
             <FormItem>
               <FormLabel>Status</FormLabel>
               <FormControl>
-                <Select onValueChange={field.onChange} defaultValue={field.value}>
+                <Select onValueChange={field.onChange} value={field.value}>
                   <SelectTrigger>
                     <SelectValue placeholder="Select status" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="AVAILABLE">Available</SelectItem>
-                    <SelectItem value="RENTED">Rented</SelectItem>
-                    <SelectItem value="MAINTENANCE">Maintenance</SelectItem>
+                    {EQUIPMENT_STATUSES.map((status) => (
+                      <SelectItem key={status.value} value={status.value}>
+                        {status.label}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </FormControl>
+              <FormDescription>
+                {isEditing && field.value === "RENTED" && (
+                  <span className="text-amber-600">
+                    ⚠️ Changing status may affect active rentals
+                  </span>
+                )}
+              </FormDescription>
               <FormMessage />
             </FormItem>
           )}
         />
 
         <DialogFooter>
-          <Button type="submit" disabled={isPending} className="w-full md:w-auto">
+          <Button
+            type="submit"
+            disabled={isPending}
+            className="w-full md:w-auto"
+          >
             {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             {isEditing ? "Update Equipment" : "Add Equipment"}
           </Button>

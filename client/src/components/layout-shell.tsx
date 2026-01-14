@@ -6,8 +6,15 @@ import {
   CalendarRange, 
   LogOut, 
   Menu,
-  ShieldAlert
+  ShieldAlert,
+  Activity,
+  MapPin,
+  Building2,
+  Wrench,
+  Brain,
+  TrendingUp
 } from "lucide-react";
+import { FaTruckMonster } from "react-icons/fa";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -26,19 +33,25 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
     { name: 'Dashboard', href: '/', icon: LayoutDashboard },
     { name: 'Equipment', href: '/equipment', icon: Truck },
     { name: 'Rentals', href: '/rentals', icon: CalendarRange },
+    { name: 'Job Sites', href: '/job-sites', icon: MapPin },
+    { name: 'Vendors', href: '/vendors', icon: Building2 },
+    { name: 'Maintenance', href: '/maintenance', icon: Wrench }, 
+    { name: 'Risk Analytics', href: '/risk-analytics', icon: Activity }, 
+    { name: 'Predictive Maintenance', href: '/predictive-maintenance', icon: Brain }, 
+    { name: 'ML Performance', href: '/ml-performance', icon: TrendingUp },
   ];
 
   const NavContent = () => (
     <div className="flex flex-col h-full bg-slate-900 text-white">
       <div className="p-6 border-b border-slate-800">
         <h1 className="text-2xl font-bold font-display tracking-widest text-primary flex items-center gap-2">
-          <Truck className="h-8 w-8" />
-          MOSITES
+          <FaTruckMonster className="h-6 w-6" />
+          CRAFT & SMASH
         </h1>
         <p className="text-xs text-slate-400 mt-1 uppercase tracking-widest">Rental Systems</p>
       </div>
 
-      <nav className="flex-1 px-4 py-6 space-y-2">
+      <nav className="flex-1 px-4 py-6 space-y-2 overflow-y-auto">
         {navigation.map((item) => {
           const isActive = location === item.href;
           return (
@@ -92,8 +105,8 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
       {/* Mobile Header */}
       <div className="md:hidden fixed top-0 left-0 right-0 h-16 bg-slate-900 z-50 flex items-center px-4 justify-between border-b border-slate-800">
          <h1 className="text-xl font-bold font-display text-primary flex items-center gap-2">
-          <Truck className="h-6 w-6" />
-          MOSITES
+          <FaTruckMonster className="h-6 w-6" />
+          CRAFT & SMASH
         </h1>
         <Sheet open={open} onOpenChange={setOpen}>
           <SheetTrigger asChild>
