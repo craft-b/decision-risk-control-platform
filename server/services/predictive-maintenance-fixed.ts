@@ -138,11 +138,18 @@ function convertMLResponse(
     riskBand:           result.risk_level,
     riskScore:          Math.round(result.failure_probability * 100),
     confidence:         0.85, // FastAPI model confidence — could be added to API response later
-    topDrivers:         result.top_risk_drivers.map(d => ({
-      feature:     d,
-      impact:      0,
-      description: d,
-    })),
+    topDrivers: (() => {
+      const drivers = result.top_risk_drivers;
+      if (Array.isArray(drivers)) {
+        return drivers.map(d => ({ feature: d, impact: 0, description: d }));
+      }
+      // Handle object format: { "driver name": "detail string" }
+      return Object.entries(drivers).map(([key, val]) => ({
+        feature:     key,
+        impact:      0,
+        description: `${key}: ${val}`,
+      }));
+    })(),
     snapshotTs,
     modelVersion:  result.model_version,
     recommendation: result.recommendation,
