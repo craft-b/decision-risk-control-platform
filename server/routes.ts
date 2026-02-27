@@ -146,6 +146,12 @@ export async function registerRoutes(
     };
   }
 
+  // ============================================
+  // HEALTH ROUTES
+  // ============================================
+  app.get('/api/health', (req, res) => {
+    res.json({ status: 'healthy', timestamp: new Date().toISOString() });
+  });
 
   // ============================================
   // AUTH ROUTES
