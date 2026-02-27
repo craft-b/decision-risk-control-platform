@@ -1,0 +1,139 @@
+# infrastructure/ci/github-actions.yml
+# CI Pipeline — Enterprise Asset Intelligence
+# Runs on every push and pull request to main
+#
+# Jobs:
+#   1. test-ml-service   — Python tests + model validation
+#   2. test-server       — TypeScript type checking + lint
+#   3. test-client       — React build validation
+
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+
+  # ── Python ML Service ────────────────────────────────────────────────────
+  test-ml-service:
+    name: ML Service Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: ml-service/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          pip install -r ml-service/requirements.txt
+
+      - name: Pull model artifacts via DVC
+        run: |
+          pip install dvc
+          dvc pull ml-service/registry.dvc --no-run-cache
+        env:
+          # Add DVC remote credentials here when using cloud storage
+          # For local remote, artifacts are committed via registry.dvc pointer
+          DVC_NO_ANALYTICS: "true"
+        continue-on-error: true  # Don't fail CI if DVC remote not configured
+
+      - name: Run ML service tests
+        run: |
+          cd ml-service
+          python -m pytest tests/ -v --tb=short
+        env:
+          LLM_PROVIDER: none        # Disable LLM calls in CI
+          MODEL_VERSION: v1.0
+
+      - name: Validate model artifacts exist
+        run: |
+          python -c "
+          from pathlib import Path
+          registry = Path('ml-service/registry')
+          required = [
+            'feature_cols_v1.0.json',
+            'metadata_v1.0.json',
+            'clip_thresholds_v1.0.json',
+            'feature_importance_v1.0.json',
+          ]
+          missing = [f for f in required if not (registry / f).exists()]
+          if missing:
+            print(f'FAIL: Missing artifacts: {missing}')
+            exit(1)
+          print('PASS: All required artifacts present')
+          "
+
+      - name: Validate FastAPI app starts
+        run: |
+          cd ml-service
+          timeout 15 python -c "
+          import sys
+          sys.path.insert(0, '.')
+          from api.schemas.prediction import SnapshotInput, PredictionOutput
+          from engine.genai_advisor import is_available
+          print('PASS: Imports resolved correctly')
+          print(f'LLM available: {is_available()}')
+          "
+        env:
+          LLM_PROVIDER: none
+
+  # ── Node.js Server ───────────────────────────────────────────────────────
+  test-server:
+    name: Server Type Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript type check
+        run: npx tsc --noEmit
+
+      - name: Check for unused imports
+        run: |
+          if [ -f "infrastructure/scripts/fix-imports.sh" ]; then
+            bash infrastructure/scripts/fix-imports.sh --check
+          fi
+        continue-on-error: true
+
+  # ── React Client ─────────────────────────────────────────────────────────
+  test-client:
+    name: Client Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build client
+        run: npm run build
+        env:
+          NODE_ENV: production

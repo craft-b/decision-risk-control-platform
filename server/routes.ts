@@ -10,7 +10,7 @@ import { riskScoringService } from './services/risk-scoring';
 import { maintenanceEvents, equipment, rentals } from "@shared/schema";
 import { eq, desc, count, sql } from "drizzle-orm";
 import { db } from "./db";
-import { predictiveMaintenanceService } from './services/predictive-maintenance';
+import { predictiveMaintenanceService } from './services/predictive-maintenance-fixed';
 import { featureEngineeringService } from './services/feature-engineering';
 
 declare module "express-session" {
@@ -841,12 +841,12 @@ export async function registerRoutes(
       .from(assetFeatureSnapshots);
     
     const [predictionDates] = await db
-      .select({
-        oldest: sql`MIN(${assetRiskPredictions.snapshotTs})`,
-        newest: sql`MAX(${assetRiskPredictions.snapshotTs})`,
-      })
-      .from(assetRiskPredictions);
-    
+    .select({
+      oldest: sql`MIN(${assetRiskPredictions.predictedAt})`,
+      newest: sql`MAX(${assetRiskPredictions.predictedAt})`,
+    })
+    .from(assetRiskPredictions);
+
     res.json({
       snapshots: {
         total: Number(snapshotStats?.total) || 0,

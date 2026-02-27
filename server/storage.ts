@@ -216,7 +216,11 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateEquipment(id: number, equip: Partial<InsertEquipment>): Promise<Equipment> {
-    await db.update(equipment).set(equip).where(eq(equipment.id, id));
+    const updateData: any = { ...equip };
+    if (updateData.purchaseDate && typeof updateData.purchaseDate === 'string') {
+      updateData.purchaseDate = new Date(updateData.purchaseDate);
+    }
+    await db.update(equipment).set(updateData).where(eq(equipment.id, id));
     const [updated] = await db.select().from(equipment).where(eq(equipment.id, id));
     return updated!;
   }
