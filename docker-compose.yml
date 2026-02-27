@@ -1,0 +1,130 @@
+# docker-compose.yml
+# Enterprise Asset Intelligence — Full Stack
+#
+# Starts three services:
+#   - client:      React frontend (Nginx)   → http://localhost
+#   - server:      Node.js API gateway      → http://localhost:5000
+#   - ml-service:  FastAPI ML service       → http://localhost:8000
+#
+# The browser always talks to the HOST ports above.
+# Inter-service calls use Docker DNS: http://ml-service:8000
+#
+# Requirements: 16 GB RAM recommended, Docker Desktop 4.x+
+#
+# Usage:
+#   cp .env.example .env          # fill in secrets first
+#   docker-compose up --build     # first run (builds all images)
+#   docker-compose up             # subsequent runs
+#   docker-compose down           # stop + remove containers
+#   docker-compose logs -f ml-service
+
+version: "3.9"
+
+services:
+
+  # ── React Frontend (Nginx) ───────────────────────────────────────────────
+  # VITE_ vars are baked in at image build time — pass them as build args,
+  # not runtime environment variables.
+  client:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.client
+      args:
+        # Nginx proxies /api → server:5000, so the browser uses relative paths.
+        # Override only if you're deploying client and server on different domains.
+        VITE_API_URL: ${VITE_API_URL:-}
+    ports:
+      - "80:80"
+    depends_on:
+      server:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  # ── Node.js API Gateway ──────────────────────────────────────────────────
+  server:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.server
+    ports:
+      - "5000:5000"
+    depends_on:
+      ml-service:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 5000
+      DATABASE_URL: ${DATABASE_URL}
+      SESSION_SECRET: ${SESSION_SECRET}
+      JWT_SECRET: ${JWT_SECRET}
+      # Resolved via Docker DNS — never use localhost here
+      ML_SERVICE_URL: http://ml-service:8000
+      MODEL_VERSION: ${MODEL_VERSION:-v1}
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('http').get('http://localhost:5000/api/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # ── Python FastAPI ML Service ────────────────────────────────────────────
+  ml-service:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.ml-service
+    ports:
+      - "8000:8000"
+    environment:
+      ENVIRONMENT: production          # Python convention, not NODE_ENV
+      ML_SERVICE_PORT: 8000
+      # Supply either DATABASE_URL or the individual DB_* vars — not both.
+      # Individual vars are used by SQLAlchemy connection pooling in ml-service.
+      DATABASE_URL: ${DATABASE_URL}
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT:-3306}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+      LLM_PROVIDER: ${LLM_PROVIDER:-groq}
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      GROQ_MODEL: ${GROQ_MODEL:-llama3-8b-8192}
+      MODEL_VERSION: ${MODEL_VERSION:-v1}
+    volumes:
+      # Model artifacts persist across container rebuilds.
+      # Train once locally, ship the registry dir — no retraining on start.
+      - ./ml-service/registry:/app/registry
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+# ── Shared network ───────────────────────────────────────────────────────────
+# All three containers join this network automatically.
+# Inter-service calls use service name as hostname (e.g. http://ml-service:8000).
+# Only ports listed under `ports:` above are exposed to the host machine.
+networks:
+  default:
+    name: enterprise-asset-network

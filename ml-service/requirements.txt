@@ -1,0 +1,43 @@
+# ml-service/requirements.txt
+# Updated: 2026-02 | Python 3.11+
+# Pinned to actual venv versions — verified working on Windows
+
+# ── API Framework ─────────────────────────────────────────────────────────────
+fastapi==0.115.0
+uvicorn[standard]==0.30.0
+
+# ── ML Core ───────────────────────────────────────────────────────────────────
+scikit-learn==1.8.0
+imbalanced-learn==0.14.1
+numpy==2.4.1
+pandas==2.3.3
+joblib==1.5.3
+scipy==1.17.0
+sklearn-compat==0.1.5
+
+# ── Database ──────────────────────────────────────────────────────────────────
+sqlalchemy==2.0.46
+pymysql==1.1.2
+mysql-connector-python==9.5.0
+
+# ── LLM Providers ─────────────────────────────────────────────────────────────
+groq==0.11.0
+requests==2.32.3
+
+# ── Data Validation ───────────────────────────────────────────────────────────
+pydantic==2.9.2
+
+# ── Environment ───────────────────────────────────────────────────────────────
+python-dotenv==1.2.1
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+python-dateutil==2.9.0.post0
+pytz==2025.2
+tzdata==2025.3
+typing_extensions==4.15.0
+greenlet==3.3.1
+
+# ── Experiment Tracking (optional) ────────────────────────────────────────────
+# Only active when MLFLOW_TRACKING_URI is set in .env
+# Install separately when ready: pip install mlflow
+# mlflow==2.16.2
