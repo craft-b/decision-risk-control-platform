@@ -211,6 +211,7 @@ export const assetRiskPredictions = mysqlTable("asset_risk_predictions", {
   topDriver2Impact: decimal("top_driver_2_impact", { precision: 5, scale: 4 }),
   topDriver3: varchar("top_driver_3", { length: 100 }),
   topDriver3Impact: decimal("top_driver_3_impact", { precision: 5, scale: 4 }),
+  recommendation: text("recommendation"),
   
   // Metadata
   modelVersion: varchar("model_version", { length: 50 }).notNull(),
