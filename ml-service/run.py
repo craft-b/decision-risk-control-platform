@@ -13,6 +13,10 @@ from pathlib import Path
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
 
+# Load .env from project root (one level up from ml-service/)
+from dotenv import load_dotenv
+load_dotenv(ROOT.parent / ".env")
+
 import uvicorn
 
 if __name__ == "__main__":

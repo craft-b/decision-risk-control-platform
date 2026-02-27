@@ -10,8 +10,7 @@
 import { db } from "../db";
 import { assetRiskPredictions, equipment } from "@shared/schema";
 import { eq, desc } from "drizzle-orm";
-import { featureEngineeringService } from "./feature-engineering-enhanced";
-
+import { enhancedFeatureService as featureEngineeringService } from "./feature-engineering-enhanced";
 const ML_SERVICE_URL = process.env.ML_SERVICE_URL || "http://localhost:8000";
 const ML_TIMEOUT_MS  = 10_000;
 
@@ -113,12 +112,18 @@ function buildSnapshotPayload(
 }
 
 async function savePrediction(prediction: RiskPrediction): Promise<void> {
+  const drivers = prediction.topDrivers;
   await db.insert(assetRiskPredictions).values({
     equipmentId:        prediction.equipmentId,
+    snapshotTs:         prediction.snapshotTs,
     failureProbability: prediction.failureProbability.toFixed(4),
-    riskLevel:          prediction.riskBand,
-    topRiskDrivers:     JSON.stringify(prediction.topDrivers.map(d => d.feature)),
-    recommendation:     prediction.recommendation,
+    riskBand:           prediction.riskBand,
+    topDriver1:         drivers[0]?.feature ?? null,
+    topDriver1Impact:   drivers[0]?.impact?.toFixed(4) ?? null,
+    topDriver2:         drivers[1]?.feature ?? null,
+    topDriver2Impact:   drivers[1]?.impact?.toFixed(4) ?? null,
+    topDriver3:         drivers[2]?.feature ?? null,
+    topDriver3Impact:   drivers[2]?.impact?.toFixed(4) ?? null,
     modelVersion:       prediction.modelVersion,
   });
 }
@@ -185,30 +190,27 @@ class PredictiveMaintenanceService {
       .select()
       .from(assetRiskPredictions)
       .where(eq(assetRiskPredictions.equipmentId, equipmentId))
-      .orderBy(desc(assetRiskPredictions.predictionTs))
-      .limit(1);
+      .orderBy(desc(assetRiskPredictions.predictedAt))      .limit(1);
 
     if (!stored) return null;
 
     // Parse stored top risk drivers
-    let topDrivers: RiskPrediction["topDrivers"] = [];
-    try {
-      const drivers = JSON.parse(stored.topRiskDrivers ?? "[]") as string[];
-      topDrivers = drivers.map(d => ({ feature: d, impact: 0, description: d }));
-    } catch {
-      topDrivers = [];
-    }
+    const topDrivers: RiskPrediction["topDrivers"] = [
+      stored.topDriver1 ? { feature: stored.topDriver1, impact: Number(stored.topDriver1Impact ?? 0), description: stored.topDriver1 } : null,
+      stored.topDriver2 ? { feature: stored.topDriver2, impact: Number(stored.topDriver2Impact ?? 0), description: stored.topDriver2 } : null,
+      stored.topDriver3 ? { feature: stored.topDriver3, impact: Number(stored.topDriver3Impact ?? 0), description: stored.topDriver3 } : null,
+    ].filter(Boolean) as RiskPrediction["topDrivers"];
 
     return {
       equipmentId:        stored.equipmentId,
       failureProbability: Number(stored.failureProbability),
-      riskBand:           (stored.riskLevel ?? "LOW") as "LOW" | "MEDIUM" | "HIGH",
+      riskBand:           (stored.riskBand ?? "LOW") as "LOW" | "MEDIUM" | "HIGH",
       riskScore:          Math.round(Number(stored.failureProbability) * 100),
       confidence:         0.85,
       topDrivers,
-      snapshotTs:         stored.predictionTs,
+      snapshotTs:         stored.snapshotTs,
       modelVersion:       stored.modelVersion ?? "v1.0",
-      recommendation:     stored.recommendation ?? null,
+      recommendation:     null,
     };
   }
 
