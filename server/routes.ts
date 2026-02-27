@@ -717,16 +717,17 @@ export async function registerRoutes(
       }
 
       // Get prediction history (last 3 months)
+      // Get prediction history (last 3 months)
       const predictionHistory = await db.execute(sql`
         SELECT 
-          DATE_FORMAT(${assetRiskPredictions.snapshotTs}, '%Y-%m') as month,
+          DATE_FORMAT(snapshot_ts, '%Y-%m') as month,
           COUNT(*) as total,
-          SUM(CASE WHEN ${assetRiskPredictions.riskBand} = 'HIGH' THEN 1 ELSE 0 END) as high,
-          SUM(CASE WHEN ${assetRiskPredictions.riskBand} = 'MEDIUM' THEN 1 ELSE 0 END) as medium,
-          SUM(CASE WHEN ${assetRiskPredictions.riskBand} = 'LOW' THEN 1 ELSE 0 END) as low
-        FROM ${assetRiskPredictions}
-        WHERE ${assetRiskPredictions.snapshotTs} >= DATE_SUB(NOW(), INTERVAL 3 MONTH)
-        GROUP BY DATE_FORMAT(${assetRiskPredictions.snapshotTs}, '%Y-%m')
+          SUM(CASE WHEN risk_band = 'HIGH' THEN 1 ELSE 0 END) as high,
+          SUM(CASE WHEN risk_band = 'MEDIUM' THEN 1 ELSE 0 END) as medium,
+          SUM(CASE WHEN risk_band = 'LOW' THEN 1 ELSE 0 END) as low
+        FROM asset_risk_predictions
+        WHERE snapshot_ts >= DATE_SUB(NOW(), INTERVAL 3 MONTH)
+        GROUP BY DATE_FORMAT(snapshot_ts, '%Y-%m')
         ORDER BY month
       `);
 
@@ -739,7 +740,7 @@ export async function registerRoutes(
         { feature: 'Category Risk Factor', importance: 0.08, description: 'Equipment type baseline risk' },
         { feature: 'Rental Frequency', importance: 0.06, description: 'Utilization rate' },
       ];
-
+      
       // Build confusion matrix from stored data
       const confusionMatrix = {
         HIGH: {
@@ -781,7 +782,7 @@ export async function registerRoutes(
         },
         confusionMatrix,
         featureImportance,
-        predictionHistory: (predictionHistory as any[]).map(row => ({
+        predictionHistory: ((predictionHistory as any)[0] as any[]).map(row => ({
           date: row.month,
           total: Number(row.total),
           high: Number(row.high),
