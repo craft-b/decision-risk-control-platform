@@ -125,6 +125,7 @@ async function savePrediction(prediction: RiskPrediction): Promise<void> {
     topDriver3:         drivers[2]?.feature ?? null,
     topDriver3Impact:   drivers[2]?.impact?.toFixed(4) ?? null,
     modelVersion:       prediction.modelVersion,
+    recommendation:     prediction.recommendation,
   });
 }
 
@@ -207,7 +208,7 @@ class PredictiveMaintenanceService {
       stored.topDriver2 ? { feature: stored.topDriver2, impact: Number(stored.topDriver2Impact ?? 0), description: stored.topDriver2 } : null,
       stored.topDriver3 ? { feature: stored.topDriver3, impact: Number(stored.topDriver3Impact ?? 0), description: stored.topDriver3 } : null,
     ].filter(Boolean) as RiskPrediction["topDrivers"];
-
+     
     return {
       equipmentId:        stored.equipmentId,
       failureProbability: Number(stored.failureProbability),
@@ -217,7 +218,7 @@ class PredictiveMaintenanceService {
       topDrivers,
       snapshotTs:         stored.snapshotTs,
       modelVersion:       stored.modelVersion ?? "v1.0",
-      recommendation:     null,
+      recommendation:     stored.recommendation ?? null,
     };
   }
 
