@@ -89,7 +89,7 @@ class EnhancedFeatureEngineeringService {
 
     // ── Asset age ────────────────────────────────────────────────────────
     const equipAny = equip as any;
-    const rawPurchaseDate = equipAny.purchaseDate ?? equipAny.createdAt ?? null;
+    const rawPurchaseDate = equipAny.purchaseDate ?? null;
     const purchaseDate = rawPurchaseDate ? new Date(rawPurchaseDate) : new Date(now);
     if (!rawPurchaseDate) {
       purchaseDate.setFullYear(purchaseDate.getFullYear() - 3); // default 3yr if unknown
@@ -142,7 +142,8 @@ class EnhancedFeatureEngineeringService {
       .where(
         and(
           eq(maintenanceEvents.equipmentId, equipmentId),
-          gte(maintenanceEvents.maintenanceDate, d90)
+          gte(maintenanceEvents.maintenanceDate, d90),
+          sql`${maintenanceEvents.maintenanceType} IN ('MAJOR_SERVICE', 'MINOR_SERVICE')`
         )
       );
 
@@ -152,13 +153,18 @@ class EnhancedFeatureEngineeringService {
       .where(
         and(
           eq(maintenanceEvents.equipmentId, equipmentId),
-          gte(maintenanceEvents.maintenanceDate, d180)
+          gte(maintenanceEvents.maintenanceDate, d180),
+          sql`${maintenanceEvents.maintenanceType} IN ('MAJOR_SERVICE', 'MINOR_SERVICE')`
         )
       );
 
-    const maintenanceEvents90d = maint90.length;
-    const maintenanceCost180d = maint180.reduce((sum, e) => sum + Number(e.cost || 0), 0);
-    const avgDowntimePerEvent = maint90.length > 0 ? 8 : 0; // estimate 8hrs per event
+    // Cap at realistic max — simulated data can produce unrealistically high counts
+    const maintenanceEvents90d = Math.min(maint90.length, 6);
+    // Use per-event average cost × capped count to avoid inflated totals
+    const rawCost180d = maint180.reduce((sum, e) => sum + Number(e.cost || 0), 0);
+    const avgEventCost = maint180.length > 0 ? rawCost180d / maint180.length : 0;
+    const maintenanceCost180d = avgEventCost * Math.min(maint180.length, 12);
+    const avgDowntimePerEvent = maint90.length > 0 ? 8 : 0;
 
     // Days since last maintenance
     const [lastMaint] = await db
@@ -176,7 +182,12 @@ class EnhancedFeatureEngineeringService {
     const allMaint = await db
       .select()
       .from(maintenanceEvents)
-      .where(eq(maintenanceEvents.equipmentId, equipmentId))
+      .where(
+        and(
+          eq(maintenanceEvents.equipmentId, equipmentId),
+          sql`${maintenanceEvents.maintenanceType} IN ('MAJOR_SERVICE', 'MINOR_SERVICE')`
+        )
+      )
       .orderBy(maintenanceEvents.maintenanceDate);
 
     let meanTimeBetweenFailures: number | null = null;
@@ -187,7 +198,10 @@ class EnhancedFeatureEngineeringService {
         const curr = new Date(allMaint[i].maintenanceDate!).getTime();
         gaps.push((curr - prev) / (24 * 3600 * 1000));
       }
-      meanTimeBetweenFailures = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+      meanTimeBetweenFailures = Math.max(
+        gaps.reduce((a, b) => a + b, 0) / gaps.length,
+        14  // minimum 14 days between failures — anything lower is data noise
+      );
     }
 
     // ── Sensor data ──────────────────────────────────────────────────────
@@ -218,7 +232,9 @@ class EnhancedFeatureEngineeringService {
     const maintOverdue = daysSinceLastMaintenance !== null && daysSinceLastMaintenance > intervalDays ? 1 : 0;
 
     const costPerEvent = maintenanceEvents90d > 0 ? maintenanceCost180d / maintenanceEvents90d : 0;
-    const maintBurden = maintenanceCost180d / Math.max(totalHoursLifetime, 1);
+    // Use asset age in hours as denominator when lifetime hours unavailable
+    const effectiveHours = totalHoursLifetime > 0 ? totalHoursLifetime : assetAgeYears * 500;
+    const maintBurden = maintenanceCost180d / Math.max(effectiveHours, 100);
 
     // ── Composite risk scores ────────────────────────────────────────────
     const hoursFactor = Math.min(totalHoursLifetime / 5000, 1);
