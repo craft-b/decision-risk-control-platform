@@ -38,7 +38,7 @@ async function callMLService(
   predicted_failure:  boolean;
   risk_level:         "LOW" | "MEDIUM" | "HIGH";
   model_version:      string;
-  top_risk_drivers:   string[];
+  top_risk_drivers:   Record<string, number> | string[];
   recommendation:     string | null;
 }> {
   const controller = new AbortController();
@@ -111,19 +111,26 @@ function buildSnapshotPayload(
   };
 }
 
-async function savePrediction(prediction: RiskPrediction): Promise<void> {
-  const drivers = prediction.topDrivers;
+async function savePrediction(
+  prediction: RiskPrediction,
+  rawDrivers?: Record<string, number> | string[]
+): Promise<void> {
+  // Use raw impact scores from ML service if available
+  const driverEntries = rawDrivers && !Array.isArray(rawDrivers)
+    ? Object.entries(rawDrivers)
+    : prediction.topDrivers.map(d => [d.feature, d.impact] as [string, number]);
+
   await db.insert(assetRiskPredictions).values({
     equipmentId:        prediction.equipmentId,
     snapshotTs:         prediction.snapshotTs,
     failureProbability: prediction.failureProbability.toFixed(4),
     riskBand:           prediction.riskBand,
-    topDriver1:         drivers[0]?.feature ?? null,
-    topDriver1Impact:   drivers[0]?.impact?.toFixed(4) ?? null,
-    topDriver2:         drivers[1]?.feature ?? null,
-    topDriver2Impact:   drivers[1]?.impact?.toFixed(4) ?? null,
-    topDriver3:         drivers[2]?.feature ?? null,
-    topDriver3Impact:   drivers[2]?.impact?.toFixed(4) ?? null,
+    topDriver1:         driverEntries[0]?.[0] ?? null,
+    topDriver1Impact:   driverEntries[0]?.[1]?.toFixed(4) ?? null,
+    topDriver2:         driverEntries[1]?.[0] ?? null,
+    topDriver2Impact:   driverEntries[1]?.[1]?.toFixed(4) ?? null,
+    topDriver3:         driverEntries[2]?.[0] ?? null,
+    topDriver3Impact:   driverEntries[2]?.[1]?.toFixed(4) ?? null,
     modelVersion:       prediction.modelVersion,
     recommendation:     prediction.recommendation,
   });
@@ -144,11 +151,10 @@ function convertMLResponse(
       if (Array.isArray(drivers)) {
         return drivers.map(d => ({ feature: d, impact: 0, description: d }));
       }
-      // Handle object format: { "driver name": "detail string" }
       return Object.entries(drivers).map(([key, val]) => ({
         feature:     key,
-        impact:      0,
-        description: `${key}: ${val}`,
+        impact:      typeof val === 'number' ? val : Number(val),
+        description: key,
       }));
     })(),
     snapshotTs,
@@ -179,7 +185,7 @@ class PredictiveMaintenanceService {
     const result      = await callMLService(payload);
     const prediction  = convertMLResponse(result, snapshot.snapshotTs);
 
-    await savePrediction(prediction);
+    await savePrediction(prediction, result.top_risk_drivers);
 
     console.log(
       `[PM] EQ-${equipmentId} → ${prediction.riskBand} ` +

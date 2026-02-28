@@ -75,7 +75,9 @@ class EquipmentPredictor:
         if importance_files:
             with open(importance_files[0]) as f:
                 self.feature_importance = json.load(f)
-
+            print(f"[PREDICTOR] Feature importance loaded: {len(self.feature_importance)} features from {importance_files[0].name}")
+        else:
+            print(f"[PREDICTOR] WARNING: No feature importance file found in {REGISTRY}")
     # ─────────────────────────────────────────────────────────────────────
     # PUBLIC API
     # ─────────────────────────────────────────────────────────────────────
@@ -179,72 +181,58 @@ class EquipmentPredictor:
             return "MEDIUM"
         return "HIGH"
 
-    def _get_risk_drivers(self, snapshot: dict, prob: float) -> list[str]:
+    def _get_risk_drivers(self, snapshot: dict, prob: float) -> dict:
         """
-        Generate human-readable risk drivers by combining:
-        - Feature importance from the trained model
-        - Actual feature values from the snapshot
-        Mirrors the explainScore() logic from the TypeScript layer.
+        Returns dict of {driver_description: impact_score} where impact is
+        derived from feature importance weights for the triggered features.
         """
-        drivers = []
+        drivers = {}
 
-        # Maintenance state — highest business impact
+        # Feature importance lookup (normalized 0-1)
+        fi = self.feature_importance  # {feature_name: importance_score}
+
         days_since = snapshot.get("days_since_last_maintenance", 999)
         maint_overdue = snapshot.get("maint_overdue", 0)
-
         if maint_overdue:
-            drivers.append(f"⚠️ Maintenance overdue ({int(days_since)} days since last service)")
+            drivers[f"⚠️ Maintenance overdue ({int(days_since)} days since last service)"] = fi.get("days_since_last_maintenance", 0.15)
         elif days_since > 90:
-            drivers.append(f"Approaching maintenance threshold ({int(days_since)} days since last service)")
+            drivers[f"Approaching maintenance threshold ({int(days_since)} days since last service)"] = fi.get("days_since_last_maintenance", 0.10)
 
-        # Mechanical wear
         wear_score = snapshot.get("mechanical_wear_score", 0)
         if wear_score >= 7:
-            drivers.append(f"High mechanical wear score: {wear_score:.1f}/10")
+            drivers[f"High mechanical wear score: {wear_score:.1f}/10"] = fi.get("mechanical_wear_score", 0.18)
         elif wear_score >= 5:
-            drivers.append(f"Moderate mechanical wear: {wear_score:.1f}/10")
+            drivers[f"Moderate mechanical wear: {wear_score:.1f}/10"] = fi.get("mechanical_wear_score", 0.10)
 
-        # Abuse / operational stress
         abuse_score = snapshot.get("abuse_score", 0)
         if abuse_score >= 6:
-            drivers.append(f"High operational stress score: {abuse_score:.1f}/10")
+            drivers[f"High operational stress score: {abuse_score:.1f}/10"] = fi.get("abuse_score", 0.12)
 
-        # Neglect
         neglect_score = snapshot.get("neglect_score", 0)
         if neglect_score >= 6:
-            drivers.append(f"Maintenance neglect score: {neglect_score:.1f}/10")
+            drivers[f"Maintenance neglect score: {neglect_score:.1f}/10"] = fi.get("neglect_score", 0.12)
 
-        # Usage intensity
         intensity = snapshot.get("usage_intensity", 0)
         if intensity > 10:
-            drivers.append(f"High usage intensity: {intensity:.1f} hrs/day (two-shift operation)")
+            drivers[f"High usage intensity: {intensity:.1f} hrs/day"] = fi.get("usage_intensity", 0.14)
         elif intensity > 8:
-            drivers.append(f"Above-average usage intensity: {intensity:.1f} hrs/day")
+            drivers[f"Above-average usage intensity: {intensity:.1f} hrs/day"] = fi.get("usage_intensity", 0.09)
 
-        # Age
         age = snapshot.get("asset_age_years", 0)
         if age > 8:
-            drivers.append(f"Asset age: {age:.1f} years (approaching end of useful life)")
+            drivers[f"Asset age: {age:.1f} years (approaching end of useful life)"] = fi.get("asset_age_years", 0.16)
         elif age > 5:
-            drivers.append(f"Asset age: {age:.1f} years")
+            drivers[f"Asset age: {age:.1f} years"] = fi.get("asset_age_years", 0.10)
 
-        # Lifetime hours
         hours = snapshot.get("total_hours_lifetime", 0)
         if hours > 5000:
-            drivers.append(f"High lifetime hours: {int(hours):,} hrs (major rebuild territory)")
+            drivers[f"High lifetime hours: {int(hours):,} hrs (major rebuild territory)"] = fi.get("total_hours_lifetime", 0.13)
         elif hours > 3000:
-            drivers.append(f"Elevated lifetime hours: {int(hours):,} hrs")
-
-        # Sensor alerts
-        error_count = snapshot.get("error_code_count", 0) or 0
-        if error_count > 0:
-            drivers.append(f"{error_count} active error code(s) detected")
-
-        warning_count = snapshot.get("warning_count", 0) or 0
-        if warning_count > 10:
-            drivers.append(f"{warning_count} unresolved warnings")
+            drivers[f"Elevated lifetime hours: {int(hours):,} hrs"] = fi.get("total_hours_lifetime", 0.08)
 
         if not drivers:
-            drivers.append("Low activity, well maintained — within normal operating parameters")
+            drivers["Low activity, well maintained — within normal operating parameters"] = 0.02
 
-        return drivers[:5]  # cap at 5 for UI display
+        # Sort by impact descending, cap at 5
+        top = dict(sorted(drivers.items(), key=lambda x: x[1], reverse=True)[:5])
+        return top

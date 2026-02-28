@@ -111,7 +111,7 @@ class PredictionOutput(BaseModel):
     predicted_failure: bool
     risk_level: RiskLevel
     model_version: str
-    top_risk_drivers: list[str]        # from feature importance, human-readable
+    top_risk_drivers: dict[str, float]     # from feature importance, human-readable
     recommendation: Optional[str]      # from genai_advisor — may be None if LLM unavailable
 
 
