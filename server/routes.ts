@@ -731,15 +731,66 @@ export async function registerRoutes(
         ORDER BY month
       `);
 
-      // Feature importance (from model training - static for now)
-      const featureImportance = [
-        { feature: 'Equipment Age', importance: 0.28, description: 'Years since manufacture' },
-        { feature: 'Usage Hours', importance: 0.24, description: 'Total operational hours' },
-        { feature: 'Maintenance Frequency', importance: 0.19, description: 'Service events per year' },
-        { feature: 'Days Since Last Service', importance: 0.15, description: 'Time since maintenance' },
-        { feature: 'Category Risk Factor', importance: 0.08, description: 'Equipment type baseline risk' },
-        { feature: 'Rental Frequency', importance: 0.06, description: 'Utilization rate' },
-      ];
+      // Feature importance — load from ML model registry
+      let featureImportance: { feature: string; importance: number; description: string }[] = [];
+      try {
+        const fs = await import('fs');
+        const path = await import('path');
+        const registryPath = path.join(process.cwd(), 'ml-service', 'registry');
+        const files = fs.readdirSync(registryPath).filter((f: string) => f.startsWith('feature_importance_'));
+        if (files.length > 0) {
+          const latest = files.sort().reverse()[0];
+          const raw = JSON.parse(fs.readFileSync(path.join(registryPath, latest), 'utf-8'));
+          // Map raw feature names to human-readable labels
+          const featureLabels: Record<string, string> = {
+            mechanical_wear_score: 'Mechanical Wear Score',
+            neglect_score: 'Maintenance Neglect Score',
+            aging_factor: 'Aging Factor',
+            cost_per_event: 'Cost Per Maintenance Event',
+            log_cost_per_event: 'Cost Per Event (log)',
+            log_maintenance_cost_180d: 'Maintenance Cost 180d (log)',
+            maintenance_cost_180d: 'Maintenance Cost 180d',
+            days_since_last_maintenance: 'Days Since Last Service',
+            wear_rate: 'Wear Rate',
+            asset_age_years: 'Equipment Age',
+            maintenance_events_90d: 'Maintenance Events 90d',
+            category_encoded: 'Equipment Category',
+            abuse_score: 'Operational Stress Score',
+            log_total_hours_lifetime: 'Lifetime Hours (log)',
+            total_hours_lifetime: 'Total Lifetime Hours',
+          };
+          const featureDescriptions: Record<string, string> = {
+            mechanical_wear_score: 'Composite wear indicator (0-10)',
+            neglect_score: 'Maintenance neglect composite (0-10)',
+            aging_factor: 'Age-based deterioration factor',
+            cost_per_event: 'Average cost per maintenance event',
+            days_since_last_maintenance: 'Days since last service',
+            wear_rate: 'Rate of mechanical wear accumulation',
+            asset_age_years: 'Years since manufacture',
+            maintenance_events_90d: 'Service events in last 90 days',
+            abuse_score: 'Operational stress composite (0-10)',
+            total_hours_lifetime: 'Total operational hours',
+          };
+          featureImportance = Object.entries(raw)
+            .filter(([, v]) => (v as number) > 0.005)
+            .sort(([, a], [, b]) => (b as number) - (a as number))
+            .slice(0, 10)
+            .map(([key, importance]) => ({
+              feature: featureLabels[key] || key,
+              importance: importance as number,
+              description: featureDescriptions[key] || key,
+            }));
+        }
+      } catch (e) {
+        // Fallback to static if registry not accessible
+        featureImportance = [
+          { feature: 'Mechanical Wear Score', importance: 0.148, description: 'Composite wear indicator (0-10)' },
+          { feature: 'Maintenance Neglect Score', importance: 0.143, description: 'Maintenance neglect composite (0-10)' },
+          { feature: 'Days Since Last Service', importance: 0.063, description: 'Days since last service' },
+          { feature: 'Equipment Age', importance: 0.056, description: 'Years since manufacture' },
+          { feature: 'Wear Rate', importance: 0.058, description: 'Rate of mechanical wear' },
+        ];
+      }
       
       // Build confusion matrix from stored data
       const confusionMatrix = {
