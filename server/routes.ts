@@ -145,6 +145,118 @@ export async function registerRoutes(
       },
     };
   }
+  
+  // ── SIMULATION ───────────────────────────────────────────────────────────────
+  app.get("/api/simulate/state", requireAuth, async (req, res) => {
+    try {
+      const [state] = await db.execute(sql`SELECT * FROM simulation_state WHERE id = 1`) as any;
+      res.json(state[0] || { cursorDate: null, totalDaysRun: 0 });
+    } catch (e) {
+      res.status(500).json({ message: "Failed to get simulation state" });
+    }
+  });
+
+  app.post("/api/simulate/day", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const days = Math.min(Math.max(parseInt(req.body.days) || 1, 1), 30);
+
+      // Get all equipment
+      const equipmentList = await db.select({ id: equipment.id, category: equipment.category }).from(equipment);
+
+      // Get current cursor
+      const [stateRows] = await db.execute(sql`SELECT cursor_date, total_days_run FROM simulation_state WHERE id = 1`) as any;
+      let cursorDate = stateRows[0]?.cursor_date
+        ? new Date(stateRows[0].cursor_date)
+        : new Date(Date.now() - 2 * 365.25 * 24 * 3600 * 1000);
+
+      let totalInserted = 0;
+      let maintenanceInserted = 0;
+
+      for (let d = 0; d < days; d++) {
+        cursorDate = new Date(cursorDate.getTime() + 24 * 3600 * 1000);
+        const dateStr = cursorDate.toISOString().split("T")[0];
+
+        for (const equip of equipmentList) {
+          const category = equip.category || "Excavator";
+
+          // Generate realistic sensor readings with category-based variance
+          const baseTemp = { Crane: 78, Excavator: 82, Dozer: 85, Loader: 80, Compressor: 70, Generator: 75 }[category] || 80;
+          const isStressed = Math.random() < 0.08; // 8% chance of stressed day
+          const isIdle     = Math.random() < 0.15; // 15% chance of idle day
+
+          const engineRpm         = isIdle ? 0 : Math.round(1200 + Math.random() * 800 + (isStressed ? 600 : 0));
+          const engineTemp        = isIdle ? 20 : Math.round(baseTemp + Math.random() * 15 + (isStressed ? 25 : 0));
+          const oilPressure       = isIdle ? 0 : Math.round(35 + Math.random() * 15 - (isStressed ? 8 : 0));
+          const coolantTemp       = isIdle ? 20 : Math.round(85 + Math.random() * 10 + (isStressed ? 15 : 0));
+          const hydraulicPressure = isIdle ? 0 : Math.round(2000 + Math.random() * 500 + (isStressed ? 300 : 0));
+          const hydraulicTemp     = isIdle ? 20 : Math.round(45 + Math.random() * 20 + (isStressed ? 15 : 0));
+          const vibrationX        = parseFloat((0.1 + Math.random() * 0.8 + (isStressed ? 1.2 : 0)).toFixed(3));
+          const vibrationY        = parseFloat((0.1 + Math.random() * 0.8 + (isStressed ? 1.0 : 0)).toFixed(3));
+          const vibrationZ        = parseFloat((0.1 + Math.random() * 0.6 + (isStressed ? 0.8 : 0)).toFixed(3));
+          const operatingHours    = isIdle ? 0 : parseFloat((4 + Math.random() * 6).toFixed(2));
+          const loadPct           = isIdle ? 0 : Math.round(30 + Math.random() * 60 + (isStressed ? 20 : 0));
+          const idleTime          = parseFloat((Math.random() * 2).toFixed(2));
+          const fuelConsumption   = isIdle ? 0 : parseFloat((8 + Math.random() * 12 + (isStressed ? 5 : 0)).toFixed(2));
+          const ambientTemp       = Math.round(10 + Math.random() * 25);
+          const warningCount      = isStressed ? Math.floor(Math.random() * 3) : 0;
+          const errorCodes        = isStressed && Math.random() < 0.3 ? `E${Math.floor(100 + Math.random() * 900)}` : null;
+
+          await db.execute(sql`
+            INSERT INTO sensor_data_logs
+              (equipment_id, timestamp, engine_rpm, engine_temp, oil_pressure, coolant_temp,
+              fuel_consumption, hydraulic_pressure, hydraulic_temp, hydraulic_flow_rate,
+              vibration_x, vibration_y, vibration_z, operating_hours, load_percentage,
+              idle_time, ambient_temp, error_codes, warning_count)
+            VALUES (${equip.id}, ${dateStr}, ${engineRpm}, ${engineTemp}, ${oilPressure}, ${coolantTemp},
+              ${fuelConsumption}, ${hydraulicPressure}, ${hydraulicTemp}, ${Math.round(hydraulicPressure * 0.8)},
+              ${vibrationX}, ${vibrationY}, ${vibrationZ}, ${operatingHours}, ${loadPct},
+              ${idleTime}, ${ambientTemp}, ${errorCodes}, ${warningCount})
+          `);
+          totalInserted++;
+
+          // ~15% chance of generating a maintenance event on this day
+          if (Math.random() < 0.15) {
+            const types = ["MINOR_SERVICE", "MINOR_SERVICE", "MINOR_SERVICE", "MAJOR_SERVICE", "INSPECTION"];
+            const type  = types[Math.floor(Math.random() * types.length)];
+            const cost  = type === "MAJOR_SERVICE"
+              ? parseFloat((800 + Math.random() * 1200).toFixed(2))
+              : type === "MINOR_SERVICE"
+              ? parseFloat((150 + Math.random() * 350).toFixed(2))
+              : parseFloat((80 + Math.random() * 120).toFixed(2));
+
+            const nextDue = new Date(cursorDate.getTime() + 90 * 24 * 3600 * 1000)
+              .toISOString().split("T")[0];
+
+            await db.execute(sql`
+              INSERT INTO maintenance_events
+                (equipment_id, maintenance_date, maintenance_type, cost, description, next_due_date)
+              VALUES (${equip.id}, ${dateStr}, ${type}, ${cost}, ${`Simulated ${type.toLowerCase().replace("_", " ")}`}, ${nextDue})
+            `);
+            maintenanceInserted++;
+          }
+        }
+      }
+
+      // Update cursor
+      const newCursorStr = cursorDate.toISOString().split("T")[0];
+      const newTotal = (stateRows[0]?.total_days_run || 0) + days;
+      await db.execute(sql`
+        UPDATE simulation_state SET cursor_date = ${newCursorStr}, total_days_run = ${newTotal} WHERE id = 1
+      `);
+
+      res.json({
+        message: `Simulated ${days} day${days > 1 ? "s" : ""} of operations`,
+        daysSimulated: days,
+        sensorReadings: totalInserted,
+        maintenanceEvents: maintenanceInserted,
+        cursorDate: newCursorStr,
+        totalDaysRun: newTotal,
+      });
+    } catch (e: any) {
+      console.error("[SIMULATE]", e);
+      res.status(500).json({ message: "Simulation failed", error: e.message });
+    }
+  });
 
   // ============================================
   // HEALTH ROUTES

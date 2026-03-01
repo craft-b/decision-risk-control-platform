@@ -276,3 +276,38 @@ export function usePipelineStatus() {
     refetchInterval: 30000, // Refresh every 30 seconds
   });
 }
+
+export function useSimulationState() {
+  return useQuery({
+    queryKey: ["/api/simulate/state"],
+    refetchInterval: false,
+  });
+}
+
+export function useSimulateDay() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  return useMutation({
+    mutationFn: async (days: number) => {
+      const res = await fetch("/api/simulate/day", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ days }),
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    onSuccess: (data) => {
+      toast({
+        title: "Simulation complete",
+        description: `${data.daysSimulated} days simulated — ${data.sensorReadings} sensor readings, ${data.maintenanceEvents} maintenance events generated.`,
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/simulate/state"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/predictive-maintenance/pipeline-status"] });
+    },
+    onError: (e: any) => {
+      toast({ title: "Simulation failed", description: e.message, variant: "destructive" });
+    },
+  });
+}
