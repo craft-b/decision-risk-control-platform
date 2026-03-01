@@ -392,6 +392,13 @@ export const insertMlModelSchema = createInsertSchema(mlModels)
 export const insertMaintenanceOverrideSchema = createInsertSchema(maintenanceOverrides)
   .omit({ id: true, createdAt: true });
 
+export const simulationState = mysqlTable("simulation_state", {
+  id:            int("id").primaryKey().autoincrement(),
+  cursorDate:    varchar("cursor_date", { length: 10 }).notNull(), // YYYY-MM-DD
+  totalDaysRun:  int("total_days_run").notNull().default(0),
+  updatedAt:     timestamp("updated_at").defaultNow(),
+});
+
 export const insertModelTrainingMetricsSchema = createInsertSchema(modelTrainingMetrics)
   .omit({ id: true, createdAt: true });
 

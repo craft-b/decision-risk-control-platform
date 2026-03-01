@@ -30,6 +30,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useSimulationState, useSimulateDay } from "@/hooks/use-predictive-maintenance";
+
+const simulationState = useSimulationState();
+const simulateDay = useSimulateDay();
+const [simDays, setSimDays] = useState(1);
 
 // Pipeline Status Card Component
 function PipelineStatusCard() {
@@ -340,7 +345,55 @@ export default function PredictiveMaintenanceDashboard() {
                   <Tag className="mr-2 h-4 w-4" />
                 )}
                 Label
-              </Button>
+              </Button>  
+            </div>
+
+            <div className="flex items-start gap-4 p-4 border rounded-lg bg-slate-50">
+              <Activity className="h-5 w-5 text-green-600 mt-0.5" />
+              <div className="flex-1">
+                <div className="font-medium">Simulate Operations</div>
+                <div className="text-sm text-muted-foreground mb-3">
+                  Generate realistic sensor readings and maintenance events day-by-day.
+                  {(() => {
+                    const s = simulationState.data as any;
+                    if (!s) return null;
+                    return (
+                      <span className="ml-1 text-xs">
+                        Cursor: <strong>{s.cursor_date}</strong> • {s.total_days_run} days run total
+                      </span>
+                    );
+                  })()}
+                  
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-muted-foreground">Days:</span>
+                    <input
+                      type="range"
+                      min={1}
+                      max={30}
+                      value={simDays}
+                      onChange={(e) => setSimDays(parseInt(e.target.value))}
+                      className="w-24"
+                    />
+                    <span className="text-sm font-medium w-6">{simDays}</span>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => simulateDay.mutate(simDays)}
+                    disabled={simulateDay.isPending}
+                    className="border-green-300 text-green-700 hover:bg-green-50"
+                  >
+                    {simulateDay.isPending ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Play className="mr-2 h-4 w-4" />
+                    )}
+                    Simulate {simDays} Day{simDays > 1 ? "s" : ""}
+                  </Button>
+                </div>
+              </div>
             </div>
           </CardContent>
         </Card>
