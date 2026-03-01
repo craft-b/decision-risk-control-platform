@@ -96,17 +96,30 @@ class EquipmentPredictor:
         # Ensure all numeric
         df = df.apply(pd.to_numeric, errors="coerce").fillna(0)
 
-        prob_failure: float = float(self.model.predict_proba(df)[0][1])
-        predicted_failure: bool = prob_failure >= 0.5
+        proba = self.model.predict_proba(df)[0]
+        model_data = joblib.load(sorted(REGISTRY.glob("random_forest_multiclass_*.pkl"), reverse=True)[0])
+        is_multiclass = model_data.get('model_type') == 'multiclass'
+
+        if is_multiclass:
+            # 3-class: proba = [P(LOW), P(MEDIUM), P(HIGH)]
+            label_inv = model_data.get('label_inv', {0: 'LOW', 1: 'MEDIUM', 2: 'HIGH'})
+            predicted_class = int(np.argmax(proba))
+            risk_level = label_inv[predicted_class]
+            # Use P(HIGH) + 0.5*P(MEDIUM) as a scalar "failure probability" for display
+            prob_failure = float(proba[2] + 0.5 * proba[1])
+        else:
+            # Binary: proba = [P(no_fail), P(fail)]
+            prob_failure = float(proba[1])
+            risk_level = self._prob_to_risk(prob_failure)
 
         return {
-            "equipment_id": snapshot["equipment_id"],
-            "failure_probability": round(prob_failure, 4),
-            "predicted_failure": predicted_failure,
-            "risk_level": self._prob_to_risk(prob_failure),
-            "model_version": self.version,
-            "top_risk_drivers": self._get_risk_drivers(snapshot, prob_failure),
-            "recommendation": None,  # filled by genai_advisor after this call
+            "equipment_id":        snapshot["equipment_id"],
+            "failure_probability": round(min(prob_failure, 1.0), 4),
+            "predicted_failure":   risk_level == "HIGH",
+            "risk_level":          risk_level,
+            "model_version":       self.version,
+            "top_risk_drivers":    self._get_risk_drivers(snapshot, prob_failure),
+            "recommendation":      None,
         }
 
     def predict_batch(self, snapshots: list[dict]) -> list[dict]:
@@ -187,52 +200,54 @@ class EquipmentPredictor:
         derived from feature importance weights for the triggered features.
         """
         drivers = {}
+        fi = self.feature_importance
 
-        # Feature importance lookup (normalized 0-1)
-        fi = self.feature_importance  # {feature_name: importance_score}
-
-        days_since = snapshot.get("days_since_last_maintenance", 999)
+        days_since = snapshot.get("days_since_last_maintenance") or 0
         maint_overdue = snapshot.get("maint_overdue", 0)
         if maint_overdue:
             drivers[f"⚠️ Maintenance overdue ({int(days_since)} days since last service)"] = fi.get("days_since_last_maintenance", 0.15)
-        elif days_since > 90:
+        elif days_since > 60:
+            drivers[f"⚠️ Maintenance overdue ({int(days_since)} days since last service)"] = fi.get("days_since_last_maintenance", 0.15)
+        elif days_since > 30:
             drivers[f"Approaching maintenance threshold ({int(days_since)} days since last service)"] = fi.get("days_since_last_maintenance", 0.10)
 
+        neglect_score = snapshot.get("neglect_score", 0)
+        if neglect_score >= 2.5:
+            drivers[f"Maintenance neglect score: {neglect_score:.1f}/10"] = fi.get("neglect_score", 0.25)
+        elif neglect_score >= 1.5:
+            drivers[f"Moderate maintenance neglect: {neglect_score:.1f}/10"] = fi.get("neglect_score", 0.15)
+
         wear_score = snapshot.get("mechanical_wear_score", 0)
-        if wear_score >= 7:
+        if wear_score >= 4:
             drivers[f"High mechanical wear score: {wear_score:.1f}/10"] = fi.get("mechanical_wear_score", 0.18)
-        elif wear_score >= 5:
+        elif wear_score >= 2:
             drivers[f"Moderate mechanical wear: {wear_score:.1f}/10"] = fi.get("mechanical_wear_score", 0.10)
 
-        abuse_score = snapshot.get("abuse_score", 0)
-        if abuse_score >= 6:
-            drivers[f"High operational stress score: {abuse_score:.1f}/10"] = fi.get("abuse_score", 0.12)
-
-        neglect_score = snapshot.get("neglect_score", 0)
-        if neglect_score >= 6:
-            drivers[f"Maintenance neglect score: {neglect_score:.1f}/10"] = fi.get("neglect_score", 0.12)
-
-        intensity = snapshot.get("usage_intensity", 0)
-        if intensity > 10:
-            drivers[f"High usage intensity: {intensity:.1f} hrs/day"] = fi.get("usage_intensity", 0.14)
-        elif intensity > 8:
-            drivers[f"Above-average usage intensity: {intensity:.1f} hrs/day"] = fi.get("usage_intensity", 0.09)
+        wear_rate = snapshot.get("wear_rate", 0)
+        if wear_rate > 0.05:
+            drivers[f"Elevated wear rate: {wear_rate:.3f}"] = fi.get("wear_rate", 0.09)
 
         age = snapshot.get("asset_age_years", 0)
-        if age > 8:
+        if age > 4:
             drivers[f"Asset age: {age:.1f} years (approaching end of useful life)"] = fi.get("asset_age_years", 0.16)
-        elif age > 5:
+        elif age > 2.5:
             drivers[f"Asset age: {age:.1f} years"] = fi.get("asset_age_years", 0.10)
 
+        abuse_score = snapshot.get("abuse_score", 0)
+        if abuse_score >= 3:
+            drivers[f"High operational stress score: {abuse_score:.1f}/10"] = fi.get("abuse_score", 0.12)
+
         hours = snapshot.get("total_hours_lifetime", 0)
-        if hours > 5000:
-            drivers[f"High lifetime hours: {int(hours):,} hrs (major rebuild territory)"] = fi.get("total_hours_lifetime", 0.13)
-        elif hours > 3000:
+        if hours > 3000:
+            drivers[f"High lifetime hours: {int(hours):,} hrs"] = fi.get("total_hours_lifetime", 0.13)
+        elif hours > 1500:
             drivers[f"Elevated lifetime hours: {int(hours):,} hrs"] = fi.get("total_hours_lifetime", 0.08)
+
+        cost = snapshot.get("cost_per_event", 0)
+        if cost > 800:
+            drivers[f"High maintenance cost per event: ${int(cost):,}"] = fi.get("cost_per_event", 0.07)
 
         if not drivers:
             drivers["Low activity, well maintained — within normal operating parameters"] = 0.02
 
-        # Sort by impact descending, cap at 5
-        top = dict(sorted(drivers.items(), key=lambda x: x[1], reverse=True)[:5])
-        return top
+        return dict(sorted(drivers.items(), key=lambda x: x[1], reverse=True)[:5])
