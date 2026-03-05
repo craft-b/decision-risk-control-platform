@@ -83,34 +83,34 @@ class EquipmentPredictor:
     # ─────────────────────────────────────────────────────────────────────
 
     def predict(self, snapshot: dict) -> dict:
-        """
-        Run inference on a single feature snapshot.
-        Returns failure probability, risk level, and top risk drivers.
-        """
         df = pd.DataFrame([snapshot])
         df = self._apply_transforms(df)
-
-        # Align to exact training feature order — fills missing cols with 0
         df = df.reindex(columns=self.expected_features, fill_value=0)
-
-        # Ensure all numeric
         df = df.apply(pd.to_numeric, errors="coerce").fillna(0)
 
         proba = self.model.predict_proba(df)[0]
-        model_data = joblib.load(sorted(REGISTRY.glob("random_forest_multiclass_*.pkl"), reverse=True)[0])
-        is_multiclass = model_data.get('model_type') == 'multiclass'
 
-        if is_multiclass:
-            # 3-class: proba = [P(LOW), P(MEDIUM), P(HIGH)]
-            label_inv = model_data.get('label_inv', {0: 'LOW', 1: 'MEDIUM', 2: 'HIGH'})
-            predicted_class = int(np.argmax(proba))
-            risk_level = label_inv[predicted_class]
-            # Use P(HIGH) + 0.5*P(MEDIUM) as a scalar "failure probability" for display
-            prob_failure = float(proba[2] + 0.5 * proba[1])
+        # All current models are multiclass — check model_data loaded at startup
+        label_inv = {0: 'LOW', 1: 'MEDIUM', 2: 'HIGH'}
+        HIGH_IDX = 2
+
+        MED_IDX, HIGH_IDX = 1, 2
+
+        high_prob = float(proba[HIGH_IDX])
+        med_prob  = float(proba[MED_IDX])
+        low_prob  = float(proba[0])
+
+        if high_prob >= 0.70:
+            predicted_class = HIGH_IDX
+        elif med_prob >= 0.35:
+            predicted_class = MED_IDX
         else:
-            # Binary: proba = [P(no_fail), P(fail)]
-            prob_failure = float(proba[1])
-            risk_level = self._prob_to_risk(prob_failure)
+            predicted_class = int(np.argmax(proba))  # catches LOW when P(LOW) dominates
+
+        risk_level = label_inv[predicted_class]
+        prob_failure = float(proba[2] + 0.5 * proba[1])
+
+        print(f"[PROBA] EQ-{snapshot['equipment_id']}: LOW={proba[0]:.3f} MED={proba[1]:.3f} HIGH={proba[2]:.3f} → {risk_level}")
 
         return {
             "equipment_id":        snapshot["equipment_id"],

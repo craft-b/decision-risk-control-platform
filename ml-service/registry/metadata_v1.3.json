@@ -1,0 +1,66 @@
+{
+  "version": "v1.3",
+  "algorithm": "Random Forest (multiclass: LOW/MEDIUM/HIGH)",
+  "trained_at": "2026-02-28T23:30:29.623009",
+  "dataset_size": 6068,
+  "accuracy": 0.9399,
+  "train_accuracy": 0.9635,
+  "cv_accuracy": "0.9541 \u00b1 0.0043",
+  "hyperparameters": {
+    "n_estimators": 300,
+    "max_depth": 15,
+    "min_samples_split": 5,
+    "min_samples_leaf": 2,
+    "max_features": "sqrt",
+    "class_weight": "balanced"
+  },
+  "confusion_matrix": {
+    "LOW": {
+      "predictedLOW": 333,
+      "predictedMEDIUM": 0,
+      "predictedHIGH": 0
+    },
+    "MEDIUM": {
+      "predictedLOW": 16,
+      "predictedMEDIUM": 768,
+      "predictedHIGH": 18
+    },
+    "HIGH": {
+      "predictedLOW": 0,
+      "predictedMEDIUM": 39,
+      "predictedHIGH": 40
+    }
+  },
+  "per_class": {
+    "LOW": {
+      "precision": 0.9542,
+      "recall": 1.0,
+      "f1": 0.9765,
+      "support": 333
+    },
+    "MEDIUM": {
+      "precision": 0.9517,
+      "recall": 0.9576,
+      "f1": 0.9546,
+      "support": 802
+    },
+    "HIGH": {
+      "precision": 0.6897,
+      "recall": 0.5063,
+      "f1": 0.5839,
+      "support": 79
+    }
+  },
+  "top_features": [
+    "neglect_score",
+    "days_since_last_maintenance",
+    "wear_rate",
+    "asset_age_years",
+    "aging_factor",
+    "mechanical_wear_score",
+    "utilization_vs_expected",
+    "avg_rental_duration",
+    "log_maintenance_cost_180d",
+    "maintenance_cost_180d"
+  ]
+}
