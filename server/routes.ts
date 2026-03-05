@@ -161,7 +161,12 @@ export async function registerRoutes(
       const days = Math.min(Math.max(parseInt(req.body.days) || 1, 1), 30);
 
       // Get all equipment
-      const equipmentList = await db.select({ id: equipment.id, category: equipment.category }).from(equipment);
+      const equipmentList = await db.select({ 
+        id: equipment.id, 
+        category: equipment.category,
+        currentMileage: equipment.currentMileage,
+        purchaseDate: equipment.purchaseDate,
+      }).from(equipment);
 
       // Get current cursor
       const [stateRows] = await db.execute(sql`SELECT cursor_date, total_days_run FROM simulation_state WHERE id = 1`) as any;

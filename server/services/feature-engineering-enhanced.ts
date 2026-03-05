@@ -89,11 +89,21 @@ class EnhancedFeatureEngineeringService {
 
     // ── Asset age ────────────────────────────────────────────────────────
     const equipAny = equip as any;
-    const rawPurchaseDate = equipAny.purchaseDate ?? null;
-    const purchaseDate = rawPurchaseDate ? new Date(rawPurchaseDate) : new Date(now);
-    if (!rawPurchaseDate) {
-      purchaseDate.setFullYear(purchaseDate.getFullYear() - 3); // default 3yr if unknown
+
+    // Use purchase_date → year_manufactured → created_at → default 3yr
+    let purchaseDate: Date;
+    if (equipAny.purchaseDate || equipAny.purchase_date) {
+      purchaseDate = new Date(equipAny.purchaseDate ?? equipAny.purchase_date);
+    } else if (equipAny.yearManufactured || equipAny.year_manufactured) {
+      const year = Number(equipAny.yearManufactured ?? equipAny.year_manufactured);
+      purchaseDate = new Date(`${year}-01-01`);
+    } else if (equipAny.createdAt || equipAny.created_at) {
+      purchaseDate = new Date(equipAny.createdAt ?? equipAny.created_at);
+    } else {
+      purchaseDate = new Date(now);
+      purchaseDate.setFullYear(purchaseDate.getFullYear() - 3);
     }
+
     const assetAgeYears = (now.getTime() - purchaseDate.getTime()) / (365.25 * 24 * 3600 * 1000);
 
     // ── Hours from equipment record ──────────────────────────────────────
@@ -107,7 +117,7 @@ class EnhancedFeatureEngineeringService {
       .where(
         and(
           eq(rentals.equipmentId, equipmentId),
-          gte(rentals.receiveDate, d30)
+          sql`${rentals.receiveDate} >= ${d30.toISOString().split('T')[0]}`
         )
       );
 
@@ -117,7 +127,7 @@ class EnhancedFeatureEngineeringService {
       .where(
         and(
           eq(rentals.equipmentId, equipmentId),
-          gte(rentals.receiveDate, d90)
+          sql`${rentals.receiveDate} >= ${d30.toISOString().split('T')[0]}`
         )
       );
 
@@ -142,7 +152,7 @@ class EnhancedFeatureEngineeringService {
       .where(
         and(
           eq(maintenanceEvents.equipmentId, equipmentId),
-          gte(maintenanceEvents.maintenanceDate, d90),
+          sql`${maintenanceEvents.maintenanceDate} >= ${d90.toISOString().split('T')[0]}`,
           sql`${maintenanceEvents.maintenanceType} IN ('MAJOR_SERVICE', 'MINOR_SERVICE')`
         )
       );
@@ -153,7 +163,7 @@ class EnhancedFeatureEngineeringService {
       .where(
         and(
           eq(maintenanceEvents.equipmentId, equipmentId),
-          gte(maintenanceEvents.maintenanceDate, d180),
+          sql`${maintenanceEvents.maintenanceDate} >= ${d180.toISOString().split('T')[0]}`,
           sql`${maintenanceEvents.maintenanceType} IN ('MAJOR_SERVICE', 'MINOR_SERVICE')`
         )
       );
@@ -175,7 +185,7 @@ class EnhancedFeatureEngineeringService {
       .limit(1);
 
     const daysSinceLastMaintenance = lastMaint?.maintenanceDate
-      ? (now.getTime() - new Date(lastMaint.maintenanceDate).getTime()) / (24 * 3600 * 1000)
+      ? Math.max(0, (now.getTime() - new Date(lastMaint.maintenanceDate).getTime()) / (24 * 3600 * 1000))
       : null;
 
     // Mean time between failures
@@ -249,7 +259,7 @@ class EnhancedFeatureEngineeringService {
       ? Math.min(daysSinceLastMaintenance / 120, 1)
       : 0.5;
     const neglectScore = Math.min(
-      (neglectDaysFactor * 7 + (maintOverdue ? 3 : 0)),
+      Math.max(0, neglectDaysFactor * 7 + (maintOverdue ? 3 : 0)),
       10
     );
 

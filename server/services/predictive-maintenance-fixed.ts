@@ -54,6 +54,11 @@ async function callMLService(
 
     if (!response.ok) {
       const text = await response.text();
+      console.error(`[PM] ML service ${response.status} error body:`, text);
+      // Pretty-print if JSON
+      try {
+        console.error(`[PM] Parsed:`, JSON.stringify(JSON.parse(text), null, 2));
+      } catch {}
       throw new Error(`ML service returned ${response.status}: ${text}`);
     }
 
@@ -79,35 +84,38 @@ function buildSnapshotPayload(
   equipmentId: number,
   snapshot: Record<string, unknown>
 ): Record<string, unknown> {
-  // Map camelCase TypeScript snapshot → snake_case Python API
+  const safe = (val: unknown, fallback: number): number => {
+    const n = Number(val);
+    return isNaN(n) || val === null || val === undefined ? fallback : n;
+  };
+
   return {
-    equipment_id:                 equipmentId,
-    asset_age_years:              snapshot.assetAgeYears,
-    category:                     snapshot.category ?? "Unknown",
-    total_hours_lifetime:         snapshot.totalHoursLifetime,
-    hours_used_30d:               snapshot.hoursUsed30d,
-    hours_used_90d:               snapshot.hoursUsed90d,
-    rental_days_30d:              snapshot.rentalDays30d,
-    rental_days_90d:              snapshot.rentalDays90d,
-    avg_rental_duration:          snapshot.avgRentalDuration,
-    maintenance_events_90d:       snapshot.maintenanceEvents90d,
-    maintenance_cost_180d:        snapshot.maintenanceCost180d,
-    avg_downtime_per_event:       snapshot.avgDowntimePerEvent,
-    days_since_last_maintenance:  snapshot.daysSinceLastMaintenance ?? 999,
-    mean_time_between_failures:   snapshot.meanTimeBetweenFailures ?? 500,
-    vendor_reliability_score:     snapshot.vendorReliabilityScore,
-    jobsite_risk_score:           snapshot.jobSiteRiskScore,
-    usage_intensity:              snapshot.usageIntensity,
-    usage_trend:                  snapshot.usageTrend,
-    utilization_vs_expected:      snapshot.utilizationVsExpected,
-    wear_rate:                    snapshot.wearRate,
-    aging_factor:                 snapshot.agingFactor,
-    maint_overdue:                snapshot.maintOverdue,
-    cost_per_event:               snapshot.costPerEvent,
-    maint_burden:                 snapshot.maintBurden,
-    mechanical_wear_score:        snapshot.mechanicalWearScore,
-    abuse_score:                  snapshot.abuseScore,
-    neglect_score:                snapshot.neglectScore,
+    equipment_id:                equipmentId,
+    asset_age_years:             safe(snapshot.assetAgeYears, 1),
+    category:                    String(snapshot.category ?? "Unknown"),
+    total_hours_lifetime:        safe(snapshot.totalHoursLifetime, 0),
+    hours_used_30d:              safe(snapshot.hoursUsed30d, 0),
+    hours_used_90d:              safe(snapshot.hoursUsed90d, 0),
+    rental_days_30d:             Math.round(safe(snapshot.rentalDays30d, 0)),
+    rental_days_90d:             Math.round(safe(snapshot.rentalDays90d, 0)),
+    avg_rental_duration:         safe(snapshot.avgRentalDuration, 1),
+    maintenance_events_90d:      safe(snapshot.maintenanceEvents90d, 0),
+    maintenance_cost_180d:       safe(snapshot.maintenanceCost180d, 0),
+    avg_downtime_per_event:      safe(snapshot.avgDowntimePerEvent, 0),
+    days_since_last_maintenance: Math.max(0, safe(snapshot.daysSinceLastMaintenance, 999)),
+    vendor_reliability_score:    safe(snapshot.vendorReliabilityScore, 0.5),
+    jobsite_risk_score:          safe(snapshot.jobSiteRiskScore, 0.5),
+    usage_intensity:             Math.min(safe(snapshot.usageIntensity, 1), 12),
+    usage_trend:                 Math.min(Math.max(safe(snapshot.usageTrend, 1), 0.5), 3.0),
+    utilization_vs_expected:     safe(snapshot.utilizationVsExpected, 1),
+    wear_rate:                   safe(snapshot.wearRate, 0),
+    aging_factor:                Math.min(safe(snapshot.agingFactor, 0.1), 1.0),
+    maint_overdue:               safe(snapshot.maintOverdue, 0),
+    cost_per_event:              safe(snapshot.costPerEvent, 0),
+    maint_burden:                safe(snapshot.maintBurden, 0),
+    mechanical_wear_score:       Math.min(safe(snapshot.mechanicalWearScore, 1), 10),
+    abuse_score:                 Math.min(safe(snapshot.abuseScore, 1), 10),
+    neglect_score:               Math.min(Math.max(0, safe(snapshot.neglectScore, 1)), 10),    mean_time_between_failures:  safe(snapshot.meanTimeBetweenFailures, 500),
   };
 }
 
@@ -173,6 +181,7 @@ class PredictiveMaintenanceService {
    */
   async predictRisk(equipmentId: number): Promise<RiskPrediction> {
     const healthy = await checkMLServiceHealth();
+    console.log(`[PM] Health check result: ${healthy}`);
     if (!healthy) {
       throw new Error(
         `ML service unavailable at ${ML_SERVICE_URL}. ` +
@@ -180,10 +189,20 @@ class PredictiveMaintenanceService {
       );
     }
 
-    const snapshot    = await featureEngineeringService.generateSnapshot(equipmentId, new Date());
-    const payload     = buildSnapshotPayload(equipmentId, snapshot as unknown as Record<string, unknown>);
-    const result      = await callMLService(payload);
-    const prediction  = convertMLResponse(result, snapshot.snapshotTs);
+    const snapshot = await featureEngineeringService.generateSnapshot(equipmentId, new Date());
+    const payload  = buildSnapshotPayload(equipmentId, snapshot as unknown as Record<string, unknown>);
+    console.log(`[PM] RAW PAYLOAD:`, JSON.stringify(payload));
+    // ── Debug: catch NaNs and log full payload before sending ──
+    const invalidFields = Object.entries(payload).filter(([, v]) =>
+      typeof v === 'number' && isNaN(v as number)
+    );
+    if (invalidFields.length > 0) {
+      console.error(`[PM] NaN fields in payload for EQ-${equipmentId}:`, invalidFields.map(([k]) => k));
+    }
+    console.log(`[PM] Payload for EQ-${equipmentId}:`, JSON.stringify(payload, null, 2));
+
+    const result     = await callMLService(payload);
+    const prediction = convertMLResponse(result, snapshot.snapshotTs);
 
     await savePrediction(prediction, result.top_risk_drivers);
 

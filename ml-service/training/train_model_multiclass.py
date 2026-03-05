@@ -80,59 +80,32 @@ def assign_risk_label(row) -> str:
     """
     Assign HIGH/MEDIUM/LOW based on composite feature thresholds.
     Priority: HIGH > MEDIUM > LOW (first match wins).
-    
-    HIGH criteria (any one sufficient):
-    - Mechanical wear score >= 7  (top feature, 14.8% importance)
-    - Neglect score >= 7          (2nd feature, 14.3% importance)
-    - Maintenance overdue AND days > 180
-    - Age >= 12 years AND wear_rate > 0.08
-    - Will fail in 30d (binary label, if available)
-
-    MEDIUM criteria (any one sufficient):
-    - Mechanical wear score >= 4
-    - Neglect score >= 4
-    - Days since last maintenance > 90
-    - Age >= 7 years
-    - Abuse score >= 5
     """
-    wear   = row.get('mechanical_wear_score', 0) or 0
-    neglect = row.get('neglect_score', 0) or 0
-    days_maint = row.get('days_since_last_maintenance', 0) or 0
-    overdue = row.get('maint_overdue', 0) or 0
-    age    = row.get('asset_age_years', 0) or 0
-    wear_rate = row.get('wear_rate', 0) or 0
-    abuse  = row.get('abuse_score', 0) or 0
-    will_fail = row.get('will_fail_30d', 0) or 0
+    wear         = row.get('mechanical_wear_score', 0) or 0
+    neglect      = row.get('neglect_score', 0) or 0
+    days_maint   = row.get('days_since_last_maintenance', 0) or 0
+    overdue      = row.get('maint_overdue', 0) or 0
+    age          = row.get('asset_age_years', 0) or 0
+    will_fail    = row.get('will_fail_30d', 0) or 0
+    maint_burden = row.get('maint_burden', 0) or 0
+    hours        = row.get('total_hours_lifetime', 0) or 0
 
-    # HIGH — calibrated to actual training data ranges
-    if will_fail == 1 and (wear >= 4 or neglect >= 2.5):
-        return "HIGH"
-    if wear >= 4.5:
-        return "HIGH"
-    if neglect >= 3.0 and days_maint > 60:
-        return "HIGH"
-    if wear >= 3.5 and neglect >= 2.5:
-        return "HIGH"
-    if age >= 4.5 and wear >= 3.5:
-        return "HIGH"
+    # HIGH
+    if will_fail == 1 and wear >= 2.0:                return 'HIGH'
+    if wear >= 3.5:                                   return 'HIGH'
+    if neglect >= 3.0 and days_maint > 60:            return 'HIGH'
+    if days_maint > 120 and overdue:                  return 'HIGH'
+    if wear >= 2.5 and neglect >= 2.0 and age >= 3.0: return 'HIGH'
+    if hours > 4000 and wear >= 2.5:                  return 'HIGH'
+    if maint_burden > 3.5 and wear >= 2.0:            return 'HIGH'
 
-    # MEDIUM
-    if will_fail == 1:
-        return "MEDIUM"
-    if wear >= 2.5:
-        return "MEDIUM"
-    if neglect >= 1.5:
-        return "MEDIUM"
-    if days_maint > 45:
-        return "MEDIUM"
-    if age >= 3.0:
-        return "MEDIUM"
-    if abuse >= 3:
-        return "MEDIUM"
-    if overdue:
-        return "MEDIUM"
+    # LOW
+    if age < 1.5 and days_maint < 30 and wear < 1.0:     return 'LOW'
+    if days_maint < 20 and wear < 0.8 and neglect < 0.5: return 'LOW'
+    if hours < 500 and age < 2.0 and neglect < 1.0:      return 'LOW'
+    if wear < 0.5 and neglect < 0.5 and not overdue:     return 'LOW'
 
-    return "LOW"
+    return 'MEDIUM'
 
 
 # ─────────────────────────────────────────────────────────────────────────────

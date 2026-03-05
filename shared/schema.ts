@@ -57,6 +57,10 @@ export const equipment = mysqlTable("equipment", {
   weeklyRate: decimal("weekly_rate", { precision: 10, scale: 2 }),
   monthlyRate: decimal("monthly_rate", { precision: 10, scale: 2 }),
   location: varchar("location", { length: 255 }),
+  yearManufactured: int("year_manufactured"),        
+  purchaseDate: date("purchase_date"),   
+  currentMileage: decimal("current_mileage", { precision: 10, scale: 2 }), 
+  initialMileage: decimal("initial_mileage", { precision: 10, scale: 2 }),     
   createdAt: timestamp("created_at").defaultNow(),
 });
 
