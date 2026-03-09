@@ -15,6 +15,27 @@ export const equipmentRiskScores = mysqlTable("equipment_risk_scores", {
   scoredAt: timestamp("scored_at").defaultNow().notNull(),
 });
 
+export const equipmentFailurePredictions = mysqlTable("equipment_failure_predictions", {
+  id: bigint("id", { mode: 'number', unsigned: true }).primaryKey().autoincrement(),
+  equipmentId: int("equipment_id").notNull(),
+  predictedAt: timestamp("predicted_at").defaultNow().notNull(),
+  modelVersion: varchar("model_version", { length: 50 }).notNull(),
+  riskTrend: mysqlEnum("risk_trend", ["INCREASING", "DECREASING", "STABLE"]).notNull().default("STABLE"),
+  prob10d: decimal("prob_10d", { precision: 5, scale: 4 }).notNull(),
+  riskLevel10d: mysqlEnum("risk_level_10d", ["LOW", "MEDIUM", "HIGH"]).notNull(),
+  prob30d: decimal("prob_30d", { precision: 5, scale: 4 }).notNull(),
+  riskLevel30d: mysqlEnum("risk_level_30d", ["LOW", "MEDIUM", "HIGH"]).notNull(),
+  prob60d: decimal("prob_60d", { precision: 5, scale: 4 }).notNull(),
+  riskLevel60d: mysqlEnum("risk_level_60d", ["LOW", "MEDIUM", "HIGH"]).notNull(),
+  topDrivers10d: text("top_drivers_10d"),
+  topDrivers30d: text("top_drivers_30d"),
+  topDrivers60d: text("top_drivers_60d"),
+  recommendation: text("recommendation"),
+});
+
+export type EquipmentFailurePrediction = typeof equipmentFailurePredictions.$inferSelect;
+
+
 export const users = mysqlTable("users", {
   id: serial("id").primaryKey(),
   username: varchar("username", { length: 255 }).notNull().unique(),
@@ -191,10 +212,17 @@ export const assetFeatureSnapshots = mysqlTable("asset_feature_snapshots", {
   // Context features
   vendorReliabilityScore: decimal("vendor_reliability_score", { precision: 3, scale: 2 }),
   jobSiteRiskScore: decimal("jobsite_risk_score", { precision: 3, scale: 2 }),
+  wearRateVelocity:      decimal("wear_rate_velocity", { precision: 8, scale: 4 }),
+  maintFrequencyTrend:   decimal("maint_frequency_trend", { precision: 8, scale: 4 }),
+  costTrend:             decimal("cost_trend", { precision: 8, scale: 4 }),
+  hoursVelocity:         decimal("hours_velocity", { precision: 8, scale: 4 }),
+  neglectAcceleration:   decimal("neglect_acceleration", { precision: 8, scale: 4 }),
+  sensorDegradationRate: decimal("sensor_degradation_rate", { precision: 8, scale: 4 }),
   
   // Label (computed post-hoc for training)
+  willFail10d: int("will_fail_10d"), // 0, 1, or NULL (unknown)
   willFail30d: int("will_fail_30d"), // 0, 1, or NULL (unknown)
-  
+  willFail60d: int("will_fail_60d"), // 0, 1, or NULL (unknown)
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -363,13 +391,24 @@ export const insertVendorSchema = createInsertSchema(vendors)
     contact: z.string().optional().nullable(),
   });
   
-export const insertEquipmentSchema = createInsertSchema(equipment).omit({ id: true, createdAt: true });
-
+export const insertEquipmentSchema = createInsertSchema(equipment, {
+  purchaseDate: z.string().nullable().optional(),  // override before extend
+})
+  .omit({ id: true, createdAt: true })
+  .extend({
+    yearManufactured: z.number().nullable().optional(),
+    purchaseDate: z.string().nullable().optional(),
+    currentMileage: z.string().nullable().optional(),
+    initialMileage: z.string().nullable().optional(),
+    location: z.string().nullable().optional(),
+  });
+  
 export const insertRentalSchema = createInsertSchema(rentals)
   .omit({ id: true, createdAt: true })
   .extend({
     receiveDate: z.string(),
     returnDate: z.string().nullable().optional(),
+    
   });
 
 export const insertInvoiceSchema = createInsertSchema(invoices).omit({ id: true, createdAt: true });

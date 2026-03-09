@@ -209,7 +209,7 @@ class FeatureEngineeringService {
    * Save snapshot to database
    */
   async saveSnapshot(snapshot: FeatureSnapshot): Promise<void> {
-    await db.insert(assetFeatureSnapshots).values({
+    await db.insert(assetFeatureSnapshots).values([{
       equipmentId: snapshot.equipmentId,
       snapshotTs: snapshot.snapshotTs,
       assetAgeYears: snapshot.assetAgeYears.toString(),
@@ -227,8 +227,16 @@ class FeatureEngineeringService {
       meanTimeBetweenFailures: snapshot.meanTimeBetweenFailures,
       vendorReliabilityScore: snapshot.vendorReliabilityScore.toString(),
       jobSiteRiskScore: snapshot.jobSiteRiskScore.toString(),
-      willFail30d: null, // Labels added later
-    });
+      wearRateVelocity:      (0).toString(),
+      maintFrequencyTrend:   (1.0).toString(),
+      costTrend:             (1.0).toString(),
+      hoursVelocity:         (1.0).toString(),
+      neglectAcceleration:   (1.0).toString(),
+      sensorDegradationRate: (0).toString(),
+      willFail10d: null,
+      willFail30d: null,
+      willFail60d: null,
+    }]);
   }
   
   /**
@@ -237,18 +245,17 @@ class FeatureEngineeringService {
    */
   async labelSnapshots(): Promise<number> {
     const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - 30);
-    
-    // Get unlabeled snapshots older than 30 days
-    const unlabeledSnapshots = await db
-      .select()
-      .from(assetFeatureSnapshots)
-      .where(
-        and(
-          sql`${assetFeatureSnapshots.willFail30d} IS NULL`,
-          lte(assetFeatureSnapshots.snapshotTs, cutoffDate)
-        )
-      );
+      cutoffDate.setDate(cutoffDate.getDate() - 60);
+      // Get unlabeled snapshots older than 60 days (need full window to label all horizons)
+      const unlabeledSnapshots = await db
+        .select()
+        .from(assetFeatureSnapshots)
+        .where(
+          and(
+            sql`${assetFeatureSnapshots.willFail60d} IS NULL`,
+            lte(assetFeatureSnapshots.snapshotTs, cutoffDate)
+          )
+        );
     
     let labeled = 0;
     
@@ -268,14 +275,25 @@ class FeatureEngineeringService {
           )
         );
       
-      const label = (maintenanceInWindow?.count || 0) > 0 ? 1 : 0;
-      
-      await db
-        .update(assetFeatureSnapshots)
-        .set({ willFail30d: label })
-        .where(eq(assetFeatureSnapshots.id, snapshot.id));
-      
-      labeled++;
+      const window10End = new Date(snapshotDate.getTime() + 10 * 24 * 60 * 60 * 1000);
+        const window60End = new Date(snapshotDate.getTime() + 60 * 24 * 60 * 60 * 1000);
+
+        const [maint10] = await db.select({ count: count() }).from(maintenanceEvents).where(
+          and(eq(maintenanceEvents.equipmentId, snapshot.equipmentId), gte(maintenanceEvents.maintenanceDate, snapshotDate), lte(maintenanceEvents.maintenanceDate, window10End))
+        );
+        const [maint60] = await db.select({ count: count() }).from(maintenanceEvents).where(
+          and(eq(maintenanceEvents.equipmentId, snapshot.equipmentId), gte(maintenanceEvents.maintenanceDate, snapshotDate), lte(maintenanceEvents.maintenanceDate, window60End))
+        );
+
+        const label10 = (maint10?.count || 0) > 0 ? 1 : 0;
+        const label30 = (maintenanceInWindow?.count || 0) > 0 ? 1 : 0;
+        const label60 = (maint60?.count || 0) > 0 ? 1 : 0;
+
+        await db
+          .update(assetFeatureSnapshots)
+          .set({ willFail10d: label10, willFail30d: label30, willFail60d: label60 })
+          .where(eq(assetFeatureSnapshots.id, snapshot.id));
+        labeled++;
     }
     
     return labeled;
