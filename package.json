@@ -4,7 +4,7 @@
   "type": "module",
   "license": "MIT",
   "scripts": {
-    "dev": "tsx server/index.ts",
+    "dev": "tsx --max-old-space-size=4096 server/index.ts",
     "build": "tsx script/build.ts",
     "start": "node dist/index.cjs",
     "check": "tsc",

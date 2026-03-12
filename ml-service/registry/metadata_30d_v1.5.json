@@ -1,0 +1,55 @@
+{
+  "version": "v1.5",
+  "horizon_days": 30,
+  "algorithm": "Random Forest (calibrated, isotonic)",
+  "trained_at": "2026-03-08T00:15:58.989241",
+  "accuracy": 0.9873,
+  "train_accuracy": 0.9828,
+  "roc_auc": 0.9563,
+  "pr_auc": 0.9852,
+  "cv_roc_auc": "0.9980 \u00b1 0.0007",
+  "positive_rate": 0.4585,
+  "samples_train": 10096,
+  "samples_test": 2524,
+  "hyperparameters": {
+    "n_estimators": 200,
+    "max_depth": 12,
+    "min_samples_split": 5,
+    "min_samples_leaf": 3,
+    "max_features": "sqrt",
+    "class_weight": "balanced",
+    "calibration": "isotonic"
+  },
+  "confusion_matrix": {
+    "TN": 338,
+    "FP": 32,
+    "FN": 0,
+    "TP": 2154
+  },
+  "per_class": {
+    "no_failure": {
+      "precision": 1.0,
+      "recall": 0.9135,
+      "f1": 0.9548,
+      "support": 370
+    },
+    "failure": {
+      "precision": 0.9854,
+      "recall": 1.0,
+      "f1": 0.9926,
+      "support": 2154
+    }
+  },
+  "top_features": [
+    "asset_age_years",
+    "vendor_reliability_score",
+    "jobsite_risk_score",
+    "usage_trend",
+    "aging_factor",
+    "mechanical_wear_score",
+    "neglect_score",
+    "log_maintenance_cost_180d",
+    "cost_per_event",
+    "maintenance_events_90d"
+  ]
+}

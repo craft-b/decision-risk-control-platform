@@ -1,0 +1,55 @@
+{
+  "version": "v1.9",
+  "horizon_days": 30,
+  "algorithm": "Random Forest (calibrated, isotonic)",
+  "trained_at": "2026-03-11T09:08:57.805988",
+  "accuracy": 0.7311,
+  "train_accuracy": 0.822,
+  "roc_auc": 0.8406,
+  "pr_auc": 0.9589,
+  "cv_roc_auc": "0.8309 \u00b1 0.0404",
+  "positive_rate": 0.5917,
+  "samples_train": 1056,
+  "samples_test": 264,
+  "hyperparameters": {
+    "n_estimators": 200,
+    "max_depth": 12,
+    "min_samples_split": 5,
+    "min_samples_leaf": 3,
+    "max_features": "sqrt",
+    "class_weight": "balanced",
+    "calibration": "isotonic"
+  },
+  "confusion_matrix": {
+    "TN": 47,
+    "FP": 7,
+    "FN": 64,
+    "TP": 146
+  },
+  "per_class": {
+    "no_failure": {
+      "precision": 0.4234,
+      "recall": 0.8704,
+      "f1": 0.5697,
+      "support": 54
+    },
+    "failure": {
+      "precision": 0.9542,
+      "recall": 0.6952,
+      "f1": 0.8044,
+      "support": 210
+    }
+  },
+  "top_features": [
+    "asset_age_years",
+    "log_maintenance_cost_180d",
+    "maintenance_cost_180d",
+    "maintenance_events_90d",
+    "days_since_last_maintenance",
+    "log_mean_time_between_failures",
+    "mean_time_between_failures",
+    "category_encoded",
+    "rental_days_90d",
+    "avg_rental_duration"
+  ]
+}

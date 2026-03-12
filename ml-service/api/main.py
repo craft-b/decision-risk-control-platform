@@ -22,6 +22,7 @@ from api.schemas.prediction import (
 )
 from engine.predictor import EquipmentPredictor
 from engine.genai_advisor import generate_recommendation, is_available, LLM_PROVIDER
+from engine.predictor_multihorizon import MultiHorizonPredictor
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STARTUP / SHUTDOWN
@@ -29,14 +30,17 @@ from engine.genai_advisor import generate_recommendation, is_available, LLM_PROV
 # ─────────────────────────────────────────────────────────────────────────────
 
 predictor: EquipmentPredictor = None  # type: ignore
+mh_predictor: MultiHorizonPredictor = None  # type: ignore
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global predictor
+    global predictor, mh_predictor 
     print("[STARTUP] Loading ML artifacts...")
     try:
         predictor = EquipmentPredictor()
+        mh_predictor = MultiHorizonPredictor()
+        print(f"[STARTUP] Multi-horizon models ready — version {mh_predictor.version}")
         print(f"[STARTUP] Model ready — version {predictor.version}")
     except Exception as e:
         print(f"[STARTUP] FATAL: Could not load model: {e}")
@@ -189,4 +193,57 @@ async def get_features():
         "feature_count": len(predictor.expected_features),
         "features": predictor.expected_features,
         "feature_importance": predictor.feature_importance,
+    }
+
+@app.post("/predict/multi-horizon", tags=["Inference"])
+async def predict_multi_horizon(snapshot: SnapshotInput):
+    """
+    Multi-horizon failure prediction for a single equipment snapshot.
+    Returns separate risk assessments for 10d, 30d, and 60d windows.
+    """
+    if not mh_predictor:
+        raise HTTPException(status_code=503, detail="Multi-horizon model not loaded")
+    try:
+        snapshot_dict = snapshot.model_dump()
+        result = mh_predictor.predict_multi_horizon(snapshot_dict)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Multi-horizon prediction failed: {str(e)}")
+
+
+@app.post("/predict/multi-horizon/batch", tags=["Inference"])
+async def predict_multi_horizon_batch(batch: BatchInput):
+    """
+    Batch multi-horizon predictions for multiple equipment items.
+    """
+    if not mh_predictor:
+        raise HTTPException(status_code=503, detail="Multi-horizon model not loaded")
+    if len(batch.snapshots) > 500:
+        raise HTTPException(status_code=400, detail="Batch size limit is 500 snapshots")
+    try:
+        snapshots = [s.model_dump() for s in batch.snapshots]
+        results = mh_predictor.predict_multi_horizon_batch(snapshots)
+        return {"predictions": results, "total": len(results)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Batch prediction failed: {str(e)}")
+
+
+@app.get("/models/multi-horizon/info", tags=["Model"])
+async def multi_horizon_model_info():
+    """Returns loaded model versions and confidence levels per horizon."""
+    if not mh_predictor:
+        raise HTTPException(status_code=503, detail="Multi-horizon model not loaded")
+    return {
+        "versions":   mh_predictor.versions,
+        "horizons":   [10, 30, 60],
+        "confidence": {
+            "10d": "moderate (ROC-AUC 0.72)",
+            "30d": "high (ROC-AUC 0.96)",
+            "60d": "very high (ROC-AUC 0.997)",
+        },
+        "thresholds": {
+            "10d": {"HIGH": 0.60, "MEDIUM": 0.30},
+            "30d": {"HIGH": 0.65, "MEDIUM": 0.35},
+            "60d": {"HIGH": 0.70, "MEDIUM": 0.40},
+        },
     }

@@ -2,7 +2,6 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, buildUrl } from "@shared/routes";
 import { useToast } from "@/hooks/use-toast";
 
-
 // Central hook for retrieving explainable risk scores used across
 // dashboards, equipment views, and operational decisions
 
@@ -18,10 +17,7 @@ export function useCalculateRiskScore() {
         body: JSON.stringify({ equipmentId }),
         credentials: "include",
       });
-
-      if (!res.ok) {
-        throw new Error("Failed to calculate risk score");
-      }
+      if (!res.ok) throw new Error("Failed to calculate risk score");
       return api.riskScore.calculate.responses[200].parse(await res.json());
     },
     onSuccess: () => {
@@ -46,10 +42,7 @@ export function useBatchRiskScore() {
         body: JSON.stringify({ equipmentIds }),
         credentials: "include",
       });
-
-      if (!res.ok) {
-        throw new Error("Failed to calculate batch risk scores");
-      }
+      if (!res.ok) throw new Error("Failed to calculate batch risk scores");
       return api.riskScore.batch.responses[200].parse(await res.json());
     },
     onSuccess: () => {
@@ -72,5 +65,55 @@ export function useRiskScoreHistory(equipmentId: number) {
       return api.riskScore.history.responses[200].parse(await res.json());
     },
     enabled: !!equipmentId,
+  });
+}
+
+export function useMultiHorizonRiskScores() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  const { data: scores = [] } = useQuery<any[]>({
+    queryKey: ['risk-scores', 'multi-horizon'],
+    queryFn: () => queryClient.getQueryData<any[]>(['risk-scores', 'multi-horizon']) ?? [],
+    staleTime: Infinity,
+    gcTime: 30 * 60 * 1000,
+  });
+
+  const mutation = useMutation({
+    mutationFn: async (equipmentIds: number[]) => {
+      const res = await fetch('/api/risk-score/multi-horizon/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ equipmentIds }),
+      });
+      if (!res.ok) throw new Error('Failed to calculate multi-horizon risk scores');
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData(['risk-scores', 'multi-horizon'], data);
+    },
+    onError: (err: Error) => {
+      toast({
+        title: 'Risk score calculation failed',
+        description: err.message,
+        variant: 'destructive',
+      });
+    },
+  });
+
+  return { scores, mutation };
+}
+
+export function useLatestMultiHorizonPredictions() {
+  return useQuery({
+    queryKey: ['/api/risk-score/multi-horizon/latest'],
+    queryFn: async () => {
+      const res = await fetch('/api/risk-score/multi-horizon/latest', {
+        credentials: 'include',
+      });
+      if (!res.ok) throw new Error('Failed to fetch predictions');
+      return res.json();
+    },
   });
 }

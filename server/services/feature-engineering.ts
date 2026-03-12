@@ -9,6 +9,7 @@ import {
   jobSites
 } from "@shared/schema";
 import { eq, and, sql, gte, lte, count, sum, avg } from "drizzle-orm";
+import { enhancedFeatureService } from './feature-engineering-enhanced';
 
 export interface FeatureSnapshot {
   equipmentId: number;
@@ -40,6 +41,27 @@ export interface FeatureSnapshot {
   // Context
   vendorReliabilityScore: number;
   jobSiteRiskScore: number;
+
+  // Derived scores
+  usageIntensity: number;
+  usageTrend: number;
+  utilizationVsExpected: number;
+  wearRate: number;
+  agingFactor: number;
+  maintOverdue: number;
+  costPerEvent: number;
+  maintBurden: number;
+  mechanicalWearScore: number;
+  abuseScore: number;
+  neglectScore: number;
+
+  // Trend velocity features (v2)
+  wearRateVelocity: number;
+  maintFrequencyTrend: number;
+  costTrend: number;
+  hoursVelocity: number;
+  neglectAcceleration: number;
+  sensorDegradationRate: number;
 }
 
 class FeatureEngineeringService {
@@ -182,6 +204,24 @@ class FeatureEngineeringService {
       meanTimeBetweenFailures,
       vendorReliabilityScore,
       jobSiteRiskScore,
+      usageIntensity: 0,
+      usageTrend: 1,
+      utilizationVsExpected: 1,
+      wearRate: 0,
+      agingFactor: 0,
+      maintOverdue: 0,
+      costPerEvent: 0,
+      maintBurden: 0,
+      mechanicalWearScore: 0,
+      abuseScore: 0,
+      neglectScore: 0,
+      wearRateVelocity: 0,
+      maintFrequencyTrend: 1,
+      costTrend: 1,
+      hoursVelocity: 1,
+      neglectAcceleration: 1,
+      sensorDegradationRate: 0,
+    
     };
   }
   
@@ -195,7 +235,7 @@ class FeatureEngineeringService {
     
     for (const equip of allEquipment) {
       try {
-        const snapshot = await this.generateSnapshot(equip.id, snapshotTs);
+        const snapshot = await enhancedFeatureService.generateSnapshot(equip.id, snapshotTs);
         snapshots.push(snapshot);
       } catch (error) {
         console.error(`Failed to generate snapshot for equipment ${equip.id}:`, error);
@@ -227,12 +267,12 @@ class FeatureEngineeringService {
       meanTimeBetweenFailures: snapshot.meanTimeBetweenFailures,
       vendorReliabilityScore: snapshot.vendorReliabilityScore.toString(),
       jobSiteRiskScore: snapshot.jobSiteRiskScore.toString(),
-      wearRateVelocity:      (0).toString(),
-      maintFrequencyTrend:   (1.0).toString(),
-      costTrend:             (1.0).toString(),
-      hoursVelocity:         (1.0).toString(),
-      neglectAcceleration:   (1.0).toString(),
-      sensorDegradationRate: (0).toString(),
+      wearRateVelocity:      snapshot.wearRateVelocity.toString(),
+      maintFrequencyTrend:   snapshot.maintFrequencyTrend.toString(),
+      costTrend:             snapshot.costTrend.toString(),
+      hoursVelocity:         snapshot.hoursVelocity.toString(),
+      neglectAcceleration:   snapshot.neglectAcceleration.toString(),
+      sensorDegradationRate: snapshot.sensorDegradationRate.toString(),
       willFail10d: null,
       willFail30d: null,
       willFail60d: null,
@@ -244,8 +284,16 @@ class FeatureEngineeringService {
    * CRITICAL: Only labels snapshots where we know the outcome (30 days have passed)
    */
   async labelSnapshots(): Promise<number> {
-    const cutoffDate = new Date();
-      cutoffDate.setDate(cutoffDate.getDate() - 60);
+    // Use simulation cursor as reference, not wall clock
+    const [stateRows] = await db.execute(
+      sql`SELECT cursor_date FROM simulation_state WHERE id = 1`
+    ) as any;
+    const simCursor = stateRows[0]?.cursor_date
+      ? new Date(stateRows[0].cursor_date)
+      : new Date();
+
+    // Only label snapshots where full 60d outcome window has elapsed
+    const cutoffDate = new Date(simCursor.getTime() - 60 * 24 * 60 * 60 * 1000);
       // Get unlabeled snapshots older than 60 days (need full window to label all horizons)
       const unlabeledSnapshots = await db
         .select()
@@ -261,28 +309,38 @@ class FeatureEngineeringService {
     
     for (const snapshot of unlabeledSnapshots) {
       const snapshotDate = new Date(snapshot.snapshotTs);
-      const windowEnd = new Date(snapshotDate.getTime() + 30 * 24 * 60 * 60 * 1000);
-      
-      // Check if ANY maintenance event occurred in next 30 days
-      const [maintenanceInWindow] = await db
-        .select({ count: count() })
-        .from(maintenanceEvents)
-        .where(
-          and(
-            eq(maintenanceEvents.equipmentId, snapshot.equipmentId),
-            gte(maintenanceEvents.maintenanceDate, snapshotDate),
-            lte(maintenanceEvents.maintenanceDate, windowEnd)
-          )
-        );
-      
+      const windowEnd = new Date(snapshotDate.getTime() + 30 * 24 * 60 * 60 * 1000);     
       const window10End = new Date(snapshotDate.getTime() + 10 * 24 * 60 * 60 * 1000);
         const window60End = new Date(snapshotDate.getTime() + 60 * 24 * 60 * 60 * 1000);
 
+        // Only MAJOR_SERVICE counts as a failure event
+        // Minor service and inspections are routine PM — not failure predictions
         const [maint10] = await db.select({ count: count() }).from(maintenanceEvents).where(
-          and(eq(maintenanceEvents.equipmentId, snapshot.equipmentId), gte(maintenanceEvents.maintenanceDate, snapshotDate), lte(maintenanceEvents.maintenanceDate, window10End))
+          and(
+            eq(maintenanceEvents.equipmentId, snapshot.equipmentId),
+            gte(maintenanceEvents.maintenanceDate, snapshotDate),
+            lte(maintenanceEvents.maintenanceDate, window10End),
+            sql`${maintenanceEvents.maintenanceType} = 'MAJOR_SERVICE'`
+          )
         );
+        const [maintenanceInWindow] = await db
+          .select({ count: count() })
+          .from(maintenanceEvents)
+          .where(
+            and(
+              eq(maintenanceEvents.equipmentId, snapshot.equipmentId),
+              gte(maintenanceEvents.maintenanceDate, snapshotDate),
+              lte(maintenanceEvents.maintenanceDate, windowEnd),
+              sql`${maintenanceEvents.maintenanceType} = 'MAJOR_SERVICE'`
+            )
+          );
         const [maint60] = await db.select({ count: count() }).from(maintenanceEvents).where(
-          and(eq(maintenanceEvents.equipmentId, snapshot.equipmentId), gte(maintenanceEvents.maintenanceDate, snapshotDate), lte(maintenanceEvents.maintenanceDate, window60End))
+          and(
+            eq(maintenanceEvents.equipmentId, snapshot.equipmentId),
+            gte(maintenanceEvents.maintenanceDate, snapshotDate),
+            lte(maintenanceEvents.maintenanceDate, window60End),
+            sql`${maintenanceEvents.maintenanceType} = 'MAJOR_SERVICE'`
+          )
         );
 
         const label10 = (maint10?.count || 0) > 0 ? 1 : 0;

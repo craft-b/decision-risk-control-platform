@@ -1,0 +1,19 @@
+{
+  "clip_thresholds": {
+    "asset_age_years": 13.169999999999998,
+    "rental_days_30d": 1.5,
+    "rental_days_90d": 7.5,
+    "maintenance_events_90d": 48.0,
+    "days_since_last_maintenance": 133.5,
+    "vendor_reliability_score": 1.125,
+    "jobsite_risk_score": 0.75,
+    "maint_frequency_trend": 1.5,
+    "cost_trend": 1.5,
+    "hours_velocity": 1.5,
+    "neglect_acceleration": 1.5,
+    "category_encoded": 13.5,
+    "log_maintenance_cost_180d": 17.035540132447117,
+    "log_mean_time_between_failures": 9.324909151627297
+  },
+  "version": "v1.10"
+}

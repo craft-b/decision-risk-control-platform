@@ -96,6 +96,18 @@ export default function MLPerformanceDashboard() {
     { class: "LOW", precision: modelMetrics.precision.LOW, recall: modelMetrics.recall.LOW, f1: modelMetrics.f1Score.LOW },
   ];
 
+  // Dynamic insight values
+  const lowPrecision  = (modelMetrics.precision.LOW   * 100).toFixed(0);
+  const lowRecall     = (modelMetrics.recall.LOW       * 100).toFixed(0);
+  const highRecall    = (modelMetrics.recall.HIGH      * 100).toFixed(0);
+  const mediumRecall  = (modelMetrics.recall.MEDIUM    * 100).toFixed(0);
+  const topFeature    = modelMetrics.featureImportance[0]?.feature ?? 'Equipment Age';
+  const secondFeature = modelMetrics.featureImportance[1]?.feature ?? 'Usage Hours';
+  const topTwo        = (
+    (modelMetrics.featureImportance[0]?.importance ?? 0) +
+    (modelMetrics.featureImportance[1]?.importance ?? 0)
+  ) * 100;
+
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       {/* Header */}
@@ -270,7 +282,6 @@ export default function MLPerformanceDashboard() {
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
-              {/* Matrix Table */}
               <div className="overflow-hidden rounded-lg border">
                 <table className="w-full">
                   <thead className="bg-slate-50">
@@ -291,19 +302,13 @@ export default function MLPerformanceDashboard() {
                         }`}>
                           {row.actual}
                         </td>
-                        <td className={`p-3 text-center text-sm font-bold ${
-                          row.actual === 'HIGH' ? 'bg-red-50' : ''
-                        }`}>
+                        <td className={`p-3 text-center text-sm font-bold ${row.actual === 'HIGH' ? 'bg-red-50' : ''}`}>
                           {row.predictedHIGH}
                         </td>
-                        <td className={`p-3 text-center text-sm font-bold ${
-                          row.actual === 'MEDIUM' ? 'bg-orange-50' : ''
-                        }`}>
+                        <td className={`p-3 text-center text-sm font-bold ${row.actual === 'MEDIUM' ? 'bg-orange-50' : ''}`}>
                           {row.predictedMEDIUM}
                         </td>
-                        <td className={`p-3 text-center text-sm font-bold ${
-                          row.actual === 'LOW' ? 'bg-green-50' : ''
-                        }`}>
+                        <td className={`p-3 text-center text-sm font-bold ${row.actual === 'LOW' ? 'bg-green-50' : ''}`}>
                           {row.predictedLOW}
                         </td>
                       </tr>
@@ -311,20 +316,14 @@ export default function MLPerformanceDashboard() {
                   </tbody>
                 </table>
               </div>
-
-              {/* Insights */}
               <div className="space-y-2 text-xs">
                 <div className="flex items-start gap-2">
                   <CheckCircle2 className="h-4 w-4 text-green-600 mt-0.5" />
-                  <div>
-                    <strong>Diagonal values</strong> (highlighted) represent correct predictions
-                  </div>
+                  <div><strong>Diagonal values</strong> (highlighted) represent correct predictions</div>
                 </div>
                 <div className="flex items-start gap-2">
                   <AlertCircle className="h-4 w-4 text-orange-600 mt-0.5" />
-                  <div>
-                    <strong>Off-diagonal values</strong> show misclassifications - lower is better
-                  </div>
+                  <div><strong>Off-diagonal values</strong> show misclassifications - lower is better</div>
                 </div>
               </div>
             </div>
@@ -397,9 +396,7 @@ export default function MLPerformanceDashboard() {
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-sm text-muted-foreground">Status</span>
-                <Badge className="bg-green-100 text-green-800 border-green-300">
-                  Production
-                </Badge>
+                <Badge className="bg-green-100 text-green-800 border-green-300">Production</Badge>
               </div>
             </div>
           </CardContent>
@@ -448,29 +445,35 @@ export default function MLPerformanceDashboard() {
           <div className="flex items-start gap-2">
             <CheckCircle2 className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
             <div>
-              <strong>Strong LOW risk detection:</strong> 91% precision and 89% recall indicates reliable identification 
-              of equipment in good condition, minimizing unnecessary maintenance.
+              <strong>Strong LOW risk detection:</strong> {lowPrecision}% precision and {lowRecall}% recall
+              indicates reliable identification of equipment in good condition, minimizing unnecessary maintenance.
             </div>
           </div>
           <div className="flex items-start gap-2">
             <CheckCircle2 className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
             <div>
-              <strong>High recall for HIGH risk (88%):</strong> The model successfully catches most critical failure cases, 
-              which is crucial for safety and preventing downtime.
+              <strong>High recall for HIGH risk ({highRecall}%):</strong> The model successfully catches most
+              critical failure cases, which is crucial for safety and preventing downtime.
             </div>
           </div>
           <div className="flex items-start gap-2">
-            <AlertCircle className="h-5 w-5 text-orange-600 mt-0.5 flex-shrink-0" />
+            {parseFloat(mediumRecall) >= 80
+              ? <CheckCircle2 className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
+              : <AlertCircle  className="h-5 w-5 text-orange-600 mt-0.5 flex-shrink-0" />
+            }
             <div>
-              <strong>MEDIUM class challenge:</strong> Lower recall (74%) suggests some MEDIUM risk equipment 
-              may be misclassified. Consider collecting more training data in this range.
+              <strong>MEDIUM class recall ({mediumRecall}%):</strong>{" "}
+              {parseFloat(mediumRecall) >= 80
+                ? "Good coverage of medium-risk equipment across the fleet."
+                : "Some MEDIUM risk equipment may be misclassified. Consider collecting more training data in this range."
+              }
             </div>
           </div>
           <div className="flex items-start gap-2">
             <TrendingUp className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
             <div>
-              <strong>Top predictive features:</strong> Equipment age and usage hours contribute over 50% of prediction power, 
-              validating the importance of these maintenance factors.
+              <strong>Top predictive features:</strong> {topFeature} and {secondFeature} contribute{" "}
+              {topTwo.toFixed(0)}% of prediction power, validating the importance of these maintenance factors.
             </div>
           </div>
         </CardContent>
