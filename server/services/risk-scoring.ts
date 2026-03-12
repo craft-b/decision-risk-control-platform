@@ -219,6 +219,8 @@ export class RiskScoringService {
     return drivers;
   }
 
+  // DEPRECATED: batch route in routes.ts now calls FastAPI directly
+  // This method is no longer called in production
   async batchCalculate(equipmentIds: number[]): Promise<RiskResult[]> {
     const results: RiskResult[] = [];
     

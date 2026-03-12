@@ -1,106 +1,285 @@
+import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Package, DollarSign, MapPin, Calendar, AlertTriangle, CheckCircle, TrendingUp, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+} from "@/components/ui/dialog";
+import {
+  Package, DollarSign, MapPin, Calendar, AlertTriangle,
+  CheckCircle, TrendingUp, Loader2, Wrench,
+} from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { useEquipmentRisk } from "@/hooks/use-predictive-maintenance";
+import { useToast } from "@/hooks/use-toast";
 
 function RiskCard({ equipmentId }: { equipmentId: number }) {
   const { data: risk, isLoading } = useEquipmentRisk(equipmentId);
+  const [isScheduling, setIsScheduling] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [scheduledDate, setScheduledDate] = useState(
+    format(new Date(), 'yyyy-MM-dd')
+  );
+  const [maintenanceType, setMaintenanceType] = useState<
+    "INSPECTION" | "MINOR_SERVICE" | "MAJOR_SERVICE"
+  >("INSPECTION");
+  const [description, setDescription] = useState("");
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const suggestedType = risk?.riskBand === 'HIGH'
+    ? 'MAJOR_SERVICE'
+    : risk?.riskBand === 'MEDIUM'
+    ? 'MINOR_SERVICE'
+    : 'INSPECTION';
+
+  const handleOpenSchedule = () => {
+    setMaintenanceType(suggestedType);
+    setDescription(
+      risk?.recommendation
+        ? risk.recommendation.slice(0, 200)
+        : `Scheduled based on ${risk?.riskBand ?? 'current'} risk assessment`
+    );
+    setIsScheduling(true);
+  };
+
+  const handleSubmit = async () => {
+    setIsSubmitting(true);
+    try {
+      // 1. Create maintenance log entry
+      const maintRes = await fetch('/api/maintenance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          equipmentId,
+          maintenanceDate: scheduledDate,
+          maintenanceType,
+          description,
+          performedBy: 'Scheduled via Risk Assessment',
+        }),
+      });
+      if (!maintRes.ok) throw new Error('Failed to create maintenance entry');
+
+      // 2. Update equipment status to MAINTENANCE
+      const equipRes = await fetch(`/api/equipment/${equipmentId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ status: 'MAINTENANCE' }),
+      });
+      if (!equipRes.ok) throw new Error('Failed to update equipment status');
+
+      await queryClient.invalidateQueries({ queryKey: ['/api/equipment'] });
+      await queryClient.invalidateQueries({ queryKey: ['/api/maintenance'] });
+
+      toast({
+        title: 'Maintenance Scheduled',
+        description: `${maintenanceType.replace('_', ' ')} scheduled for ${format(new Date(scheduledDate), 'MMM d, yyyy')}. Equipment status set to MAINTENANCE.`,
+      });
+      setIsScheduling(false);
+    } catch (err: any) {
+      toast({
+        title: 'Failed to schedule maintenance',
+        description: err.message,
+        variant: 'destructive',
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center gap-2">
-          <TrendingUp className="h-5 w-5 text-muted-foreground" />
-          <CardTitle>Risk Assessment</CardTitle>
-        </div>
-      </CardHeader>
-      <CardContent>
-        {isLoading ? (
-          <div className="flex items-center justify-center py-6">
-            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-          </div>
-        ) : !risk ? (
-          <div className="text-sm text-muted-foreground py-4 text-center">
-            No risk prediction available. Run predictions from the Predictive Maintenance dashboard.
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {/* Risk Score Row */}
-            <div className="flex items-center justify-between p-4 rounded-lg border-2 border-dashed">
-              <div>
-                <div className="text-xs text-muted-foreground mb-1">Failure Probability</div>
-                <div className="text-3xl font-bold">
-                  {(risk.failureProbability * 100).toFixed(1)}%
-                </div>
-                <div className="text-xs text-muted-foreground mt-1">
-                  Model {risk.modelVersion} • {format(new Date(risk.snapshotTs), 'MMM d, yyyy')}
-                </div>
-              </div>
-              <Badge
-                className={cn(
-                  "text-base px-4 py-2",
-                  risk.riskBand === 'HIGH' && "bg-red-100 text-red-800 border-red-300",
-                  risk.riskBand === 'MEDIUM' && "bg-orange-100 text-orange-800 border-orange-300",
-                  risk.riskBand === 'LOW' && "bg-green-100 text-green-800 border-green-300"
-                )}
-              >
-                {risk.riskBand} RISK
-              </Badge>
+    <>
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <TrendingUp className="h-5 w-5 text-muted-foreground" />
+              <CardTitle>Risk Assessment</CardTitle>
             </div>
+            {risk && (
+              <Button
+                size="sm"
+                variant={risk.riskBand === 'HIGH' ? 'destructive' : 'outline'}
+                onClick={handleOpenSchedule}
+              >
+                <Wrench className="h-4 w-4 mr-2" />
+                Schedule Maintenance
+              </Button>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent>
+          {isLoading ? (
+            <div className="flex items-center justify-center py-6">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : !risk ? (
+            <div className="text-sm text-muted-foreground py-4 text-center">
+              No risk prediction available. Run predictions from the Predictive Maintenance dashboard.
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between p-4 rounded-lg border-2 border-dashed">
+                <div>
+                  <div className="text-xs text-muted-foreground mb-1">Failure Probability</div>
+                  <div className="text-3xl font-bold">
+                    {(risk.failureProbability * 100).toFixed(1)}%
+                  </div>
+                  <div className="text-xs text-muted-foreground mt-1">
+                    Model {risk.modelVersion} • {format(new Date(risk.snapshotTs), 'MMM d, yyyy')}
+                  </div>
+                </div>
+                <Badge
+                  className={cn(
+                    "text-base px-4 py-2",
+                    risk.riskBand === 'HIGH' && "bg-red-100 text-red-800 border-red-300",
+                    risk.riskBand === 'MEDIUM' && "bg-orange-100 text-orange-800 border-orange-300",
+                    risk.riskBand === 'LOW' && "bg-green-100 text-green-800 border-green-300"
+                  )}
+                >
+                  {risk.riskBand} RISK
+                </Badge>
+              </div>
 
-            {/* Recommendation */}
-            {risk.recommendation && (
+              {risk.recommendation && (
+                <Alert className={cn(
+                  risk.riskBand === 'HIGH' && "border-red-200 bg-red-50",
+                  risk.riskBand === 'MEDIUM' && "border-orange-200 bg-orange-50",
+                  risk.riskBand === 'LOW' && "border-green-200 bg-green-50",
+                )}>
+                  {risk.riskBand === 'HIGH' ? (
+                    <AlertTriangle className="h-4 w-4 text-red-600" />
+                  ) : risk.riskBand === 'MEDIUM' ? (
+                    <AlertTriangle className="h-4 w-4 text-orange-600" />
+                  ) : (
+                    <CheckCircle className="h-4 w-4 text-green-600" />
+                  )}
+                  <AlertDescription className="text-sm">
+                    {risk.recommendation}
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              {risk.topDrivers && risk.topDrivers.length > 0 && (
+                <div>
+                  <div className="text-sm font-medium mb-2">Top Risk Drivers</div>
+                  <div className="space-y-2">
+                    {risk.topDrivers.map((driver: any, idx: number) => (
+                      <div key={idx} className="space-y-1">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-muted-foreground">{driver.description}</span>
+                          <span className="font-medium">{(driver.impact * 100).toFixed(1)}%</span>
+                        </div>
+                        <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                          <div
+                            className={cn(
+                              "h-full rounded-full",
+                              risk.riskBand === 'HIGH' ? "bg-red-500" :
+                              risk.riskBand === 'MEDIUM' ? "bg-orange-500" : "bg-green-500"
+                            )}
+                            style={{ width: `${Math.min(driver.impact * 500, 100)}%` }}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Schedule Maintenance Dialog */}
+      <Dialog open={isScheduling} onOpenChange={setIsScheduling}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Wrench className="h-5 w-5" />
+              Schedule Maintenance
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            {risk && (
               <Alert className={cn(
                 risk.riskBand === 'HIGH' && "border-red-200 bg-red-50",
                 risk.riskBand === 'MEDIUM' && "border-orange-200 bg-orange-50",
                 risk.riskBand === 'LOW' && "border-green-200 bg-green-50",
               )}>
-                {risk.riskBand === 'HIGH' ? (
-                  <AlertTriangle className="h-4 w-4 text-red-600" />
-                ) : risk.riskBand === 'MEDIUM' ? (
-                  <AlertTriangle className="h-4 w-4 text-orange-600" />
-                ) : (
-                  <CheckCircle className="h-4 w-4 text-green-600" />
-                )}
+                <AlertTriangle className={cn(
+                  "h-4 w-4",
+                  risk.riskBand === 'HIGH' ? "text-red-600" :
+                  risk.riskBand === 'MEDIUM' ? "text-orange-600" : "text-green-600"
+                )} />
                 <AlertDescription className="text-sm">
-                  {risk.recommendation}
+                  <strong>{risk.riskBand} RISK</strong> — {(risk.failureProbability * 100).toFixed(1)}% failure probability.
+                  Suggested: <strong>{suggestedType.replace(/_/g, ' ')}</strong>
                 </AlertDescription>
               </Alert>
             )}
 
-            {/* Top Drivers */}
-            {risk.topDrivers && risk.topDrivers.length > 0 && (
-              <div>
-                <div className="text-sm font-medium mb-2">Top Risk Drivers</div>
-                <div className="space-y-2">
-                  {risk.topDrivers.map((driver: any, idx: number) => (
-                    <div key={idx} className="space-y-1">
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="text-muted-foreground">{driver.description}</span>
-                        <span className="font-medium">{(driver.impact * 100).toFixed(1)}%</span>
-                      </div>
-                      <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                        <div
-                          className={cn(
-                            "h-full rounded-full",
-                            risk.riskBand === 'HIGH' ? "bg-red-500" :
-                            risk.riskBand === 'MEDIUM' ? "bg-orange-500" : "bg-green-500"
-                          )}
-                          style={{ width: `${Math.min(driver.impact * 500, 100)}%` }}
-                        />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Maintenance Type</label>
+              <Select
+                value={maintenanceType}
+                onValueChange={(v) => setMaintenanceType(v as typeof maintenanceType)}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="INSPECTION">Inspection</SelectItem>
+                  <SelectItem value="MINOR_SERVICE">Minor Service</SelectItem>
+                  <SelectItem value="MAJOR_SERVICE">Major Service</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Scheduled Date</label>
+              <Input
+                type="date"
+                value={scheduledDate}
+                onChange={(e) => setScheduledDate(e.target.value)}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Description</label>
+              <Input
+                placeholder="Maintenance notes..."
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+              />
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+              Submitting will create a maintenance log entry and set equipment status to <strong>MAINTENANCE</strong>.
+            </p>
           </div>
-        )}
-      </CardContent>
-    </Card>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsScheduling(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleSubmit} disabled={isSubmitting}>
+              {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Confirm Schedule
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
@@ -119,7 +298,6 @@ export function EquipmentDetailView({ equipment }: EquipmentDetailViewProps) {
 
   return (
     <div className="space-y-6">
-      {/* Header with Status */}
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-2xl font-bold">{equipment.name}</h3>
@@ -138,7 +316,6 @@ export function EquipmentDetailView({ equipment }: EquipmentDetailViewProps) {
         </Badge>
       </div>
 
-      {/* Basic Information */}
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
@@ -168,7 +345,6 @@ export function EquipmentDetailView({ equipment }: EquipmentDetailViewProps) {
         </CardContent>
       </Card>
 
-      {/* Pricing */}
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
@@ -180,31 +356,24 @@ export function EquipmentDetailView({ equipment }: EquipmentDetailViewProps) {
           <div className="grid grid-cols-3 gap-4">
             <div className="text-center p-4 border rounded-lg">
               <div className="text-sm text-muted-foreground mb-1">Daily</div>
-              <div className="text-2xl font-bold text-green-600">
-                ${equipment.dailyRate}
-              </div>
+              <div className="text-2xl font-bold text-green-600">${equipment.dailyRate}</div>
             </div>
             {equipment.weeklyRate && (
               <div className="text-center p-4 border rounded-lg">
                 <div className="text-sm text-muted-foreground mb-1">Weekly</div>
-                <div className="text-2xl font-bold text-green-600">
-                  ${equipment.weeklyRate}
-                </div>
+                <div className="text-2xl font-bold text-green-600">${equipment.weeklyRate}</div>
               </div>
             )}
             {equipment.monthlyRate && (
               <div className="text-center p-4 border rounded-lg">
                 <div className="text-sm text-muted-foreground mb-1">Monthly</div>
-                <div className="text-2xl font-bold text-green-600">
-                  ${equipment.monthlyRate}
-                </div>
+                <div className="text-2xl font-bold text-green-600">${equipment.monthlyRate}</div>
               </div>
             )}
           </div>
         </CardContent>
       </Card>
 
-      {/* Location */}
       {equipment.location && (
         <Card>
           <CardHeader>
@@ -219,7 +388,6 @@ export function EquipmentDetailView({ equipment }: EquipmentDetailViewProps) {
         </Card>
       )}
 
-      {/* Metadata */}
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
@@ -247,7 +415,6 @@ export function EquipmentDetailView({ equipment }: EquipmentDetailViewProps) {
         </CardContent>
       </Card>
 
-      {/* Risk Assessment */}
       <RiskCard equipmentId={equipment.id} />
     </div>
   );

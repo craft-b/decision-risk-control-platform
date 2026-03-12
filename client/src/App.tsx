@@ -72,7 +72,7 @@ function Router() {
       <Route path="/predictive-maintenance">
         <ProtectedRoute component={PredictiveMaintenanceDashboard} />
       </Route>
-      <Route path="ml-performance">
+      <Route path="/ml-performance">
         <ProtectedRoute component={MLPerformanceDashboard} />
       </Route>
       <Route component={NotFound} />

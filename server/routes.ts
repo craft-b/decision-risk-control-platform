@@ -7,11 +7,13 @@ import { api } from "@shared/routes";
 import session from "express-session";
 import bcrypt from "bcryptjs";
 import { riskScoringService } from './services/risk-scoring';
-import { maintenanceEvents, equipment, rentals } from "@shared/schema";
-import { eq, desc, count, sql } from "drizzle-orm";
+import { maintenanceEvents, equipment, equipmentRiskScores, rentals, equipmentFailurePredictions } from "@shared/schema";
+import { eq, desc, gte, and, count, sql } from "drizzle-orm";
 import { db } from "./db";
 import { predictiveMaintenanceService } from './services/predictive-maintenance-fixed';
 import { featureEngineeringService } from './services/feature-engineering';
+import { assetRiskPredictions } from "@shared/schema";
+import { enhancedFeatureService } from "./services/feature-engineering-enhanced";
 
 declare module "express-session" {
   interface SessionData {
@@ -145,6 +147,14 @@ export async function registerRoutes(
       },
     };
   }
+
+  // ── SIMULATION CURSOR HELPER ─────────────────────────────────────────────────
+  async function getSimulationDate(): Promise<Date> {
+    const [stateRows] = await db.execute(sql`SELECT cursor_date, total_days_run FROM simulation_state WHERE id = 1`) as any;
+    return stateRows[0]?.cursor_date
+      ? new Date(stateRows[0].cursor_date)
+      : new Date();
+  }
   
   // ── SIMULATION ───────────────────────────────────────────────────────────────
   app.get("/api/simulate/state", requireAuth, async (req, res) => {
@@ -161,8 +171,9 @@ export async function registerRoutes(
       const days = Math.min(Math.max(parseInt(req.body.days) || 1, 1), 30);
 
       // Get all equipment
-      const equipmentList = await db.select({ 
-        id: equipment.id, 
+      const equipmentList = await db.select({
+        id: equipment.id,
+        name: equipment.name,
         category: equipment.category,
         currentMileage: equipment.currentMileage,
         purchaseDate: equipment.purchaseDate,
@@ -170,9 +181,8 @@ export async function registerRoutes(
 
       // Get current cursor
       const [stateRows] = await db.execute(sql`SELECT cursor_date, total_days_run FROM simulation_state WHERE id = 1`) as any;
-      let cursorDate = stateRows[0]?.cursor_date
-        ? new Date(stateRows[0].cursor_date)
-        : new Date(Date.now() - 2 * 365.25 * 24 * 3600 * 1000);
+      let cursorDate = stateRows[0]?.cursor_date ? new Date(stateRows[0].cursor_date) : new Date();
+      
 
       let totalInserted = 0;
       let maintenanceInserted = 0;
@@ -219,27 +229,170 @@ export async function registerRoutes(
           `);
           totalInserted++;
 
-          // ~15% chance of generating a maintenance event on this day
-          if (Math.random() < 0.15) {
-            const types = ["MINOR_SERVICE", "MINOR_SERVICE", "MINOR_SERVICE", "MAJOR_SERVICE", "INSPECTION"];
-            const type  = types[Math.floor(Math.random() * types.length)];
-            const cost  = type === "MAJOR_SERVICE"
-              ? parseFloat((800 + Math.random() * 1200).toFixed(2))
-              : type === "MINOR_SERVICE"
-              ? parseFloat((150 + Math.random() * 350).toFixed(2))
-              : parseFloat((80 + Math.random() * 120).toFixed(2));
+          // ─── Equipment state for realistic failure probability ─────────────────
+          // Calculate age and hours from equipment record
+          const purchaseDate   = equip.purchaseDate ? new Date(equip.purchaseDate) : new Date('2020-01-01');
+          const ageYears       = (cursorDate.getTime() - purchaseDate.getTime()) / (365.25 * 24 * 3600 * 1000);
 
-            const nextDue = new Date(cursorDate.getTime() + 90 * 24 * 3600 * 1000)
+          // Accumulate hours: pull total from sensor_data_logs up to cursorDate
+          const [hoursRow] = await db.execute(sql`
+            SELECT COALESCE(SUM(operating_hours), 0) as total_hours
+            FROM sensor_data_logs
+            WHERE equipment_id = ${equip.id}
+              AND timestamp <= ${dateStr}
+          `) as any;
+          const totalHours = parseFloat(hoursRow[0]?.total_hours ?? 0);
+
+          // Pull days since last maintenance
+          const [maintRow] = await db.execute(sql`
+            SELECT MAX(maintenance_date) as last_maint
+            FROM maintenance_events
+            WHERE equipment_id = ${equip.id}
+              AND maintenance_date <= ${dateStr}
+          `) as any;
+          const lastMaint       = maintRow[0]?.last_maint ? new Date(maintRow[0].last_maint) : purchaseDate;
+          const daysSinceMaint  = (cursorDate.getTime() - lastMaint.getTime()) / (24 * 3600 * 1000);
+
+          // ─── Realistic failure probability curve ──────────────────────────────
+          // Modeled as a Weibull-inspired hazard function:
+          //   - New equipment (year 1): ~1-2% daily failure probability
+          //   - Middle life (year 2-3): gradual ramp to 5-10%
+          //   - Aged fleet (year 4+):   15-25% reflecting real wear-out phase
+          //
+          // Three independent risk drivers — any can trigger a maintenance event:
+
+          // 1. Age-based hazard: exponential ramp after year 2
+          const ageHazard = Math.min(
+            0.01 * Math.exp(0.55 * Math.max(0, ageYears - 1.5)),
+            0.25
+          );
+
+          // 2. Hours-based hazard: increases after 3,000 hours (typical first overhaul threshold)
+          const hoursHazard = Math.min(
+            0.005 * Math.exp(0.0004 * Math.max(0, totalHours - 3000)),
+            0.20
+          );
+
+          // 3. Neglect hazard: probability increases if maintenance is overdue
+          //    PM interval assumed 90 days — risk climbs steeply after 120 days
+          const neglectHazard = daysSinceMaint > 120
+            ? Math.min(0.002 * Math.pow(daysSinceMaint - 90, 1.4), 0.15)
+            : 0;
+
+          // Combined daily failure probability — capped at 30% per day
+          // (even the worst equipment doesn't fail every day)
+          const dailyFailureProb = Math.min(ageHazard + hoursHazard + neglectHazard, 0.30);
+
+          // Jobsite stress multiplier — harsh environments accelerate wear
+          const jobsiteMultiplier = isStressed ? 1.8 : 1.0;
+          const finalFailureProb  = Math.min(dailyFailureProb * jobsiteMultiplier, 0.35);
+
+          if (Math.random() < finalFailureProb) {
+            // Determine event type based on failure probability magnitude
+            // High probability → more likely to be a serious failure requiring major service
+            // Event type distribution reflects real fleet maintenance patterns:
+            // ~15% major failures (unscheduled, what we're predicting)
+            // ~55% minor service (oil changes, filter replacements, routine)
+            // ~30% inspections (scheduled checks, rarely result in major work)
+            const rand = Math.random();
+            const type = rand < 0.15 ? "MAJOR_SERVICE"
+                      : rand < 0.70 ? "MINOR_SERVICE"
+                      : "INSPECTION";
+            const cost = type === "MAJOR_SERVICE"
+              ? parseFloat((800  + Math.random() * 1200).toFixed(2))
+              : type === "MINOR_SERVICE"
+              ? parseFloat((150  + Math.random() * 350).toFixed(2))
+              : parseFloat((80   + Math.random() * 120).toFixed(2));
+
+            // Next due date scales with service type
+            const nextDueDays = type === "MAJOR_SERVICE" ? 180 : type === "MINOR_SERVICE" ? 90 : 60;
+            const nextDue     = new Date(cursorDate.getTime() + nextDueDays * 24 * 3600 * 1000)
               .toISOString().split("T")[0];
 
             await db.execute(sql`
               INSERT INTO maintenance_events
                 (equipment_id, maintenance_date, maintenance_type, cost, description, next_due_date)
-              VALUES (${equip.id}, ${dateStr}, ${type}, ${cost}, ${`Simulated ${type.toLowerCase().replace("_", " ")}`}, ${nextDue})
+              VALUES (
+                ${equip.id}, ${dateStr}, ${type}, ${cost},
+                ${`Simulated ${type.toLowerCase().replace(/_/g, " ")} — age ${ageYears.toFixed(1)}y / ${Math.round(totalHours)}h`},
+                ${nextDue}
+              )
             `);
             maintenanceInserted++;
+
+          }
+
+          // ─── Fleet Renewal ──────────────────────────────────────────────
+          // Retire equipment that has exceeded its economic life threshold.
+          // Threshold: age > 10 years AND totalHours > 12,000
+          // OR age > 12 years (regardless of hours)
+          // Retired units are replaced with a new equivalent unit so the
+          // fleet size stays constant and age distribution stays realistic.
+          const retirementAgeYears  = 10;   // hard retirement at 10 years
+          const retirementAgeYearsEarly = 8; // early retirement at 8 years if high hours
+          const retirementHoursThreshold = 8000;
+          const shouldRetire =
+            ageYears > retirementAgeYears ||
+            (ageYears > retirementAgeYearsEarly && totalHours > retirementHoursThreshold);
+
+        
+          if (shouldRetire) {
+            // Generate a new equipment ID based on cursor date + equip id
+            const newEquipId = `EQ-R${equip.id}-${cursorDate.getFullYear()}`;
+
+            // Check if we already replaced this unit (idempotent)
+            const existingReplacementResult = await db.execute(sql`
+              SELECT id FROM equipment WHERE equipment_id = ${newEquipId}
+            `) as any;
+            const existingReplacement = existingReplacementResult[0];
+
+            if (!existingReplacement || existingReplacement.length === 0) {
+              // New unit purchases date is the current cursor date
+              const newPurchaseDateStr = dateStr;
+              const newYearManufactured = cursorDate.getFullYear();
+
+              // Inherit category, rates, and location from retired unit
+              // but reset age, hours, and serial number
+              await db.execute(sql`
+                INSERT INTO equipment
+                  (equipment_id, name, category, make, model, serial_number,
+                   status, daily_rate, weekly_rate, monthly_rate, location,
+                   year_manufactured, purchase_date, current_mileage, initial_mileage)
+                SELECT
+                  ${newEquipId},
+                  CONCAT('Replacement ', name),
+                  category, make, model,
+                  CONCAT('SIM-', ${newEquipId}),
+                  'AVAILABLE',
+                  daily_rate, weekly_rate, monthly_rate, location,
+                  ${newYearManufactured},
+                  ${newPurchaseDateStr},
+                  0, 0
+                FROM equipment WHERE id = ${equip.id}
+              `);
+
+              // Seed an initial minor service event so the new unit
+              // doesn't start with zero maintenance history
+              await db.execute(sql`
+                INSERT INTO maintenance_events
+                  (equipment_id, maintenance_date, maintenance_type, cost,
+                   description, next_due_date)
+                SELECT
+                  (SELECT id FROM equipment WHERE equipment_id = ${newEquipId}),
+                  ${dateStr},
+                  'MINOR_SERVICE',
+                  250.00,
+                  'Pre-delivery inspection — new unit',
+                  DATE_ADD(${dateStr}, INTERVAL 90 DAY)
+              `);
+
+              console.log(`[FLEET RENEWAL] Retired equip id=${equip.id} (age=${ageYears.toFixed(1)}y / ${Math.round(totalHours)})`);
+
+            }
+
           }
         }
+
       }
 
       // Update cursor
@@ -667,7 +820,9 @@ export async function registerRoutes(
         equipmentId: result.equipmentId,
         riskScore: result.riskScore,
         riskLevel: result.riskLevel,
-        drivers: JSON.stringify(result.drivers),
+        drivers: Array.isArray(result.drivers) 
+          ? JSON.stringify(result.drivers) 
+          : result.drivers,
         modelVersion: result.modelVersion,
       });
       
@@ -684,14 +839,140 @@ export async function registerRoutes(
   app.post(api.riskScore.batch.path, requireAuth, async (req, res) => {
     try {
       const { equipmentIds } = api.riskScore.batch.input.parse(req.body);
+
+      const snapshotDate = await getSimulationDate();
+        console.log(`[BATCH] Using snapshot date: ${snapshotDate.toISOString().split('T')[0]}`);
+
+        const snapshots = await Promise.all(equipmentIds.map(async (id: number) => {
+          try {
+            const snapshot = await enhancedFeatureService.generateSnapshot(id, snapshotDate);
+            return { equipmentId: id, snapshot };
+          } catch (err) {
+            console.error(`[BATCH] Failed to generate snapshot for EQ-${id}:`, err);
+            return null;
+          }
+        }));
+
+      const validSnapshots = snapshots.filter(Boolean) as { equipmentId: number; snapshot: any }[];
+
+      // Short-circuit brand new equipment before sending to FastAPI
+      const manualResults: any[] = [];
+      const snapshotsToScore: any[] = [];
+      const indicesToScore: number[] = [];
+
+      for (let i = 0; i < validSnapshots.length; i++) {
+        const { equipmentId: eqId, snapshot } = validSnapshots[i];
+        
+        if (snapshot.assetAgeYears < 1 && snapshot.totalHoursLifetime < 500 && 
+            (snapshot.daysSinceLastMaintenance === null || snapshot.daysSinceLastMaintenance < 90)) {
+          manualResults.push({
+            equipmentId: eqId,
+            riskScore: Math.max(5, Math.round(snapshot.assetAgeYears * 10 + snapshot.totalHoursLifetime / 50)),
+            riskLevel: 'LOW',
+            drivers: ['New unit — minimal hours', 'Recent inspection completed', 'Low operational age'],
+            modelVersion: 'v1.4',
+          });
+        } else {
+          // Use buildSnapshotPayload from predictive-maintenance service
+          const payload = {
+            equipment_id:                eqId,
+            asset_age_years:             snapshot.assetAgeYears,
+            category:                    snapshot.category,
+            total_hours_lifetime:        snapshot.totalHoursLifetime,
+            hours_used_30d:              snapshot.hoursUsed30d,
+            hours_used_90d:              snapshot.hoursUsed90d,
+            rental_days_30d:             Math.round(snapshot.rentalDays30d),
+            rental_days_90d:             Math.round(snapshot.rentalDays90d),
+            avg_rental_duration:         snapshot.avgRentalDuration,
+            maintenance_events_90d:      snapshot.maintenanceEvents90d,
+            maintenance_cost_180d:       snapshot.maintenanceCost180d,
+            avg_downtime_per_event:      snapshot.avgDowntimePerEvent,
+            days_since_last_maintenance: Math.max(0, snapshot.daysSinceLastMaintenance ?? 999),
+            vendor_reliability_score:    snapshot.vendorReliabilityScore,
+            jobsite_risk_score:          snapshot.jobSiteRiskScore,
+            usage_intensity:             Math.min(snapshot.usageIntensity, 12),
+            usage_trend:                 Math.min(Math.max(snapshot.usageTrend, 0.5), 3.0),
+            utilization_vs_expected:     snapshot.utilizationVsExpected,
+            wear_rate:                   snapshot.wearRate,
+            aging_factor:                Math.min(snapshot.agingFactor, 1.0),
+            maint_overdue:               snapshot.maintOverdue,
+            cost_per_event:              snapshot.costPerEvent,
+            maint_burden:                snapshot.maintBurden,
+            mechanical_wear_score:       Math.min(snapshot.mechanicalWearScore, 10),
+            abuse_score:                 Math.min(snapshot.abuseScore, 10),
+            neglect_score:               Math.min(Math.max(0, snapshot.neglectScore), 10),
+            mean_time_between_failures:  snapshot.meanTimeBetweenFailures ?? 999,
+          };
+          snapshotsToScore.push(payload);
+          indicesToScore.push(i);
+        }
+      }
       
-      const results = await riskScoringService.batchCalculate(equipmentIds);
-      
+
+      const fastapiRes = await fetch('http://localhost:8000/predict/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ snapshots: snapshotsToScore }),
+      });
+
+      if (!fastapiRes.ok) {
+        const err = await fastapiRes.text();
+        throw new Error(`FastAPI error: ${err}`);
+      }
+
+      const batchOutput = await fastapiRes.json();
+
+      const fastapiResults = batchOutput.predictions.map((pred: any, idx: number) => ({
+        equipmentId: validSnapshots[indicesToScore[idx]].equipmentId,
+        riskScore: Math.round(pred.failure_probability * 100),
+        riskLevel: pred.risk_level,
+        drivers: Array.isArray(pred.top_risk_drivers)
+          ? pred.top_risk_drivers.map(String)
+          : Object.keys(pred.top_risk_drivers || {}),
+        modelVersion: 'v1.4',
+      }));
+
+      const results = [...fastapiResults, ...manualResults];
+
+      // Persist to both tables
+      for (const result of results) {
+        await db.insert(equipmentRiskScores).values({
+          equipmentId: result.equipmentId,
+          riskScore: result.riskScore,
+          riskLevel: result.riskLevel,
+          drivers: JSON.stringify(result.drivers),
+          modelVersion: result.modelVersion,
+        }).onDuplicateKeyUpdate({
+          set: {
+            riskScore: result.riskScore,
+            riskLevel: result.riskLevel,
+            drivers: JSON.stringify(result.drivers),
+            modelVersion: result.modelVersion,
+          }
+        });
+
+        await db.insert(assetRiskPredictions).values({
+          equipmentId: result.equipmentId,
+          snapshotTs: new Date(),
+          failureProbability: (result.riskScore / 100).toFixed(4),
+          riskBand: result.riskLevel,
+          topDriver1: result.drivers[0] ?? null,
+          topDriver1Impact: result.drivers[0] ? '0.1000' : null,
+          topDriver2: result.drivers[1] ?? null,
+          topDriver2Impact: result.drivers[1] ? '0.0800' : null,
+          topDriver3: result.drivers[2] ?? null,
+          topDriver3Impact: result.drivers[2] ? '0.0600' : null,
+          modelVersion: result.modelVersion,
+          recommendation: null,
+        });
+      }
+
       res.json(results);
     } catch (error) {
       console.error('Batch risk score error:', error);
       res.status(500).json({ message: 'Failed to calculate batch risk scores' });
     }
+  
   });
 
   app.get(api.riskScore.history.path, requireAuth, async (req, res) => {
@@ -705,6 +986,162 @@ export async function registerRoutes(
       res.status(500).json({ message: 'Failed to fetch risk score history' });
     }
   });
+
+  app.post('/api/risk-score/multi-horizon/batch', requireAuth, async (req, res) => {
+    try {
+      const { equipmentIds } = api.riskScore.batch.input.parse(req.body);
+
+      // Use simulation cursor date so features reflect the current simulated state
+      const [stateRows] = await db.execute(
+      sql`SELECT cursor_date FROM simulation_state WHERE id = 1`
+    ) as any;
+      const snapshotDate = stateRows[0]?.cursor_date
+        ? new Date(stateRows[0].cursor_date)
+        : new Date();
+      console.log(`[MH-BATCH] Using snapshot date: ${snapshotDate.toISOString().split('T')[0]}`);
+
+      // Build snapshots using enhanced feature engineering
+      const snapshots = await Promise.all(equipmentIds.map(async (id: number) => {
+        try {
+          const snapshot = await enhancedFeatureService.generateSnapshot(id, snapshotDate);
+          return { equipmentId: id, snapshot };
+        } catch (err) {
+          console.error(`[MH-BATCH] Failed snapshot for EQ-${id}:`, err);
+          return null;
+        }
+      }));
+
+      const validSnapshots = snapshots.filter(Boolean) as { equipmentId: number; snapshot: any }[];
+
+      // Short-circuit brand new equipment
+      const manualResults: any[] = [];
+      const snapshotsToScore: any[] = [];
+      const indicesToScore: number[] = [];
+
+      for (let i = 0; i < validSnapshots.length; i++) {
+        const { equipmentId: eqId, snapshot } = validSnapshots[i];
+
+        if (snapshot.assetAgeYears < 1 && snapshot.totalHoursLifetime < 500) {
+          manualResults.push({
+            equipmentId: eqId,
+            modelVersion: 'v1.5',
+            riskTrend: 'STABLE',
+            predictions: {
+              '10d': { failure_probability: 0.05, risk_level: 'LOW', risk_score: 5, model_confidence: 'high', top_risk_drivers: { 'New unit — minimal hours': 0.01 } },
+              '30d': { failure_probability: 0.05, risk_level: 'LOW', risk_score: 5, model_confidence: 'high', top_risk_drivers: { 'Recent inspection completed': 0.01 } },
+              '60d': { failure_probability: 0.05, risk_level: 'LOW', risk_score: 5, model_confidence: 'high', top_risk_drivers: { 'Low operational age': 0.01 } },
+            },
+            recommendation: 'New unit within safe operating parameters. Continue standard inspection schedule.',
+          });
+        } else {
+          const payload = {
+            equipment_id:                eqId,
+            asset_age_years:             snapshot.assetAgeYears,
+            category:                    snapshot.category,
+            total_hours_lifetime:        snapshot.totalHoursLifetime,
+            hours_used_30d:              snapshot.hoursUsed30d,
+            hours_used_90d:              snapshot.hoursUsed90d,
+            rental_days_30d:             Math.round(snapshot.rentalDays30d),
+            rental_days_90d:             Math.round(snapshot.rentalDays90d),
+            avg_rental_duration:         snapshot.avgRentalDuration,
+            maintenance_events_90d:      snapshot.maintenanceEvents90d,
+            maintenance_cost_180d:       snapshot.maintenanceCost180d,
+            avg_downtime_per_event:      snapshot.avgDowntimePerEvent,
+            days_since_last_maintenance: Math.max(0, snapshot.daysSinceLastMaintenance ?? 999),
+            mean_time_between_failures:  snapshot.meanTimeBetweenFailures ?? 999,
+            vendor_reliability_score:    snapshot.vendorReliabilityScore,
+            jobsite_risk_score:          snapshot.jobSiteRiskScore,
+            usage_intensity:             Math.min(snapshot.usageIntensity, 12),
+            usage_trend:                 Math.min(Math.max(snapshot.usageTrend, 0.5), 3.0),
+            utilization_vs_expected:     snapshot.utilizationVsExpected,
+            wear_rate:                   snapshot.wearRate,
+            aging_factor:                Math.min(snapshot.agingFactor, 1.0),
+            maint_overdue:               snapshot.maintOverdue,
+            cost_per_event:              snapshot.costPerEvent,
+            maint_burden:                snapshot.maintBurden,
+            mechanical_wear_score:       Math.min(snapshot.mechanicalWearScore, 10),
+            abuse_score:                 Math.min(snapshot.abuseScore, 10),
+            neglect_score:               Math.min(Math.max(0, snapshot.neglectScore), 10),
+            wear_rate_velocity:          snapshot.wearRateVelocity ?? 0,
+            maint_frequency_trend:       snapshot.maintFrequencyTrend ?? 1.0,
+            cost_trend:                  snapshot.costTrend ?? 1.0,
+            hours_velocity:              snapshot.hoursVelocity ?? 1.0,
+            neglect_acceleration:        snapshot.neglectAcceleration ?? 1.0,
+            sensor_degradation_rate:     snapshot.sensorDegradationRate ?? 0,
+          };
+          snapshotsToScore.push(payload);
+          indicesToScore.push(i);
+        }
+      }
+
+      // Call FastAPI multi-horizon endpoint
+      const fastapiRes = await fetch('http://localhost:8000/predict/multi-horizon/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ snapshots: snapshotsToScore }),
+      });
+
+      if (!fastapiRes.ok) {
+        const err = await fastapiRes.text();
+        throw new Error(`FastAPI multi-horizon error: ${err}`);
+      }
+
+      const batchOutput = await fastapiRes.json();
+
+      const fastapiResults = batchOutput.predictions.map((pred: any, idx: number) => ({
+        equipmentId: validSnapshots[indicesToScore[idx]].equipmentId,
+        modelVersion: pred.model_version,
+        riskTrend: pred.risk_trend,
+        predictions: pred.predictions,
+        recommendation: pred.recommendation,
+      }));
+
+      const results = [...fastapiResults, ...manualResults];
+
+      // Persist to equipment_failure_predictions
+      for (const result of results) {
+        const p = result.predictions;
+        await db.insert(equipmentFailurePredictions).values({
+          equipmentId:   result.equipmentId,
+          modelVersion:  result.modelVersion,
+          riskTrend:     result.riskTrend,
+          prob10d:       p['10d'].failure_probability.toString(),
+          riskLevel10d:  p['10d'].risk_level,
+          prob30d:       p['30d'].failure_probability.toString(),
+          riskLevel30d:  p['30d'].risk_level,
+          prob60d:       p['60d'].failure_probability.toString(),
+          riskLevel60d:  p['60d'].risk_level,
+          topDrivers10d: JSON.stringify(Object.keys(p['10d'].top_risk_drivers || {})),
+          topDrivers30d: JSON.stringify(Object.keys(p['30d'].top_risk_drivers || {})),
+          topDrivers60d: JSON.stringify(Object.keys(p['60d'].top_risk_drivers || {})),
+          recommendation: result.recommendation,
+        });
+      }
+
+      res.json(results);
+    } catch (error) {
+      console.error('Multi-horizon batch error:', error);
+      res.status(500).json({ message: 'Failed to calculate multi-horizon predictions' });
+    }
+  });
+
+  app.get('/api/risk-score/multi-horizon/latest', requireAuth, async (req, res) => {
+  try {
+    const latest = await db.execute(sql`
+      SELECT efp.*, e.name, e.equipment_id as equipment_code, e.category, e.status
+      FROM equipment_failure_predictions efp
+      JOIN equipment e ON e.id = efp.equipment_id
+      WHERE efp.id IN (
+        SELECT MAX(id) FROM equipment_failure_predictions GROUP BY equipment_id
+      )
+      ORDER BY efp.prob_30d DESC
+    `);
+    res.json((latest as any)[0] || []);
+  } catch (error) {
+    console.error('Multi-horizon latest error:', error);
+    res.status(500).json({ message: 'Failed to fetch latest predictions' });
+  }
+});
 
   // ============================================
   // PREDICTIVE MAINTENANCE ROUTES
@@ -754,20 +1191,105 @@ export async function registerRoutes(
 
   app.post('/api/predictive-maintenance/generate-snapshots', requireAdmin, async (req, res) => {
     try {
-      const snapshotDate = req.body.snapshotDate 
-        ? new Date(req.body.snapshotDate)
-        : new Date();
-      
-      const snapshots = await featureEngineeringService.generateSnapshotsForAllEquipment(snapshotDate);
-      
-      for (const snapshot of snapshots) {
-        await featureEngineeringService.saveSnapshot(snapshot);
+      // ── Determine date range ────────────────────────────────────────────
+      // If snapshotDate provided, generate single point-in-time (legacy behaviour)
+      // Otherwise backfill the full simulation timeline at 14-day intervals
+      if (req.body.snapshotDate) {
+        const snapshotDate = new Date(req.body.snapshotDate);
+        const snapshots = await featureEngineeringService.generateSnapshotsForAllEquipment(snapshotDate);
+        for (const snapshot of snapshots) {
+          await featureEngineeringService.saveSnapshot(snapshot);
+        }
+        return res.json({
+          message: `Generated ${snapshots.length} feature snapshots`,
+          count: snapshots.length,
+          snapshotDate: snapshotDate.toISOString(),
+        });
       }
-      
+
+      // ── Historical backfill ─────────────────────────────────────────────
+      // Walk the simulation timeline from earliest sensor data to cursor date
+      // Sample every SNAPSHOT_INTERVAL_DAYS to build a dense training dataset
+      // Skips dates where snapshots already exist (idempotent)
+      const SNAPSHOT_INTERVAL_DAYS = 7;
+
+      const [rangeRow] = await db.execute(sql`
+        SELECT 
+          MIN(DATE(timestamp)) as earliest,
+          MAX(DATE(timestamp)) as latest
+        FROM sensor_data_logs
+      `) as any;
+
+      const earliest = rangeRow[0]?.earliest
+        ? new Date(rangeRow[0].earliest)
+        : new Date('2024-01-01');
+      const latest = await getSimulationDate();
+
+      // Get already-snapshotted dates to avoid duplicates
+      const [existingRows] = await db.execute(sql`
+        SELECT DISTINCT DATE(snapshot_ts) as snap_date
+        FROM asset_feature_snapshots
+      `) as any;
+      const existingDates = new Set(
+        (existingRows as any[]).map((r: any) =>
+          new Date(r.snap_date).toISOString().split('T')[0]
+        )
+      );
+
+      // Build list of dates to snapshot
+      const datesToProcess: Date[] = [];
+      const cursor = new Date(earliest);
+      // Start 180 days in — need historical window for feature engineering
+      cursor.setDate(cursor.getDate() + 180);
+
+      while (cursor <= latest) {
+        const dateStr = cursor.toISOString().split('T')[0];
+        if (!existingDates.has(dateStr)) {
+          datesToProcess.push(new Date(cursor));
+        }
+        cursor.setDate(cursor.getDate() + SNAPSHOT_INTERVAL_DAYS);
+      }
+
+      console.log(`[BACKFILL] ${datesToProcess.length} dates to process (${earliest.toISOString().split('T')[0]} → ${latest.toISOString().split('T')[0]})`);
+
+      // Process in batches to avoid memory pressure
+      const BATCH_SIZE = 10;
+      let totalGenerated = 0;
+      let totalFailed = 0;
+
+      for (let i = 0; i < datesToProcess.length; i += BATCH_SIZE) {
+        const batch = datesToProcess.slice(i, i + BATCH_SIZE);
+
+        await Promise.all(batch.map(async (snapshotDate) => {
+          try {
+            const snapshots = await featureEngineeringService.generateSnapshotsForAllEquipment(snapshotDate);
+            for (const snapshot of snapshots) {
+              await featureEngineeringService.saveSnapshot(snapshot);
+            }
+            totalGenerated += snapshots.length;
+          } catch (err) {
+            console.error(`[BACKFILL] Failed for date ${snapshotDate.toISOString().split('T')[0]}:`, err);
+            totalFailed++;
+          }
+        }));
+
+        // Progress log every 50 dates
+        if ((i / BATCH_SIZE) % 5 === 0) {
+          console.log(`[BACKFILL] Progress: ${Math.min(i + BATCH_SIZE, datesToProcess.length)}/${datesToProcess.length} dates — ${totalGenerated} snapshots generated`);
+        }
+      }
+
+      console.log(`[BACKFILL] Complete — ${totalGenerated} snapshots generated, ${totalFailed} batches failed`);
+
       res.json({
-        message: `Generated ${snapshots.length} feature snapshots`,
-        count: snapshots.length,
-        snapshotDate: snapshotDate.toISOString(),
+        message: `Historical backfill complete`,
+        count: totalGenerated,
+        datesProcessed: datesToProcess.length,
+        failed: totalFailed,
+        range: {
+          from: earliest.toISOString().split('T')[0],
+          to: latest.toISOString().split('T')[0],
+        },
       });
     } catch (error) {
       console.error('Generate snapshots error:', error);
@@ -834,7 +1356,6 @@ export async function registerRoutes(
       }
 
       // Get prediction history (last 3 months)
-      // Get prediction history (last 3 months)
       const predictionHistory = await db.execute(sql`
         SELECT 
           DATE_FORMAT(snapshot_ts, '%Y-%m') as month,
@@ -875,6 +1396,16 @@ export async function registerRoutes(
             abuse_score: 'Operational Stress Score',
             log_total_hours_lifetime: 'Lifetime Hours (log)',
             total_hours_lifetime: 'Total Lifetime Hours',
+            vendor_reliability_score:   'Vendor Reliability Score',
+            jobsite_risk_score:         'Job Site Risk Score',
+            usage_trend:                'Usage Trend',
+            usage_intensity:            'Usage Intensity',
+            wear_rate_velocity:         'Wear Rate Velocity',
+            maint_frequency_trend:      'Maintenance Frequency Trend',
+            cost_trend:                 'Cost Trend',
+            hours_velocity:             'Hours Velocity',
+            neglect_acceleration:       'Neglect Acceleration',
+            sensor_degradation_rate:    'Sensor Degradation Rate',
           };
           const featureDescriptions: Record<string, string> = {
             mechanical_wear_score: 'Composite wear indicator (0-10)',
@@ -887,6 +1418,16 @@ export async function registerRoutes(
             maintenance_events_90d: 'Service events in last 90 days',
             abuse_score: 'Operational stress composite (0-10)',
             total_hours_lifetime: 'Total operational hours',
+            vendor_reliability_score:   'Vendor failure frequency score (0-1)',
+          jobsite_risk_score:         'Site utilization intensity risk (0-1)',
+          usage_trend:                'Usage trajectory vs historical baseline',
+          usage_intensity:            'Daily hours relative to equipment class',
+          wear_rate_velocity:         'Rate of change in wear accumulation',
+          maint_frequency_trend:      'Trending maintenance frequency (1.0 = stable)',
+          cost_trend:                 'Trending maintenance cost (1.0 = stable)',
+          hours_velocity:             'Rate of change in operating hours',
+          neglect_acceleration:       'Accelerating neglect signal (1.0 = stable)',
+          sensor_degradation_rate:    'Sensor signal quality degradation rate',
           };
           featureImportance = Object.entries(raw)
             .filter(([, v]) => (v as number) > 0.005)
@@ -928,49 +1469,76 @@ export async function registerRoutes(
         },
       };
 
+      // Hyperparameters — load from latest 30d metadata file
+      let hyperparameters = {
+        algorithm:       'Random Forest',
+        nEstimators:     200,
+        maxDepth:        12,
+        minSamplesSplit: 5,
+        classWeight:     'balanced',
+      };
+      try {
+        const fs = await import('fs');
+        const path = await import('path');
+        const registryPath = path.join(process.cwd(), 'ml-service', 'registry');
+        const metaFiles = fs.readdirSync(registryPath)
+          .filter((f: string) => f.startsWith('metadata_30d_') && f.endsWith('.json'));
+        if (metaFiles.length > 0) {
+          const latestMeta = metaFiles.sort().reverse()[0];
+          const meta = JSON.parse(fs.readFileSync(path.join(registryPath, latestMeta), 'utf-8'));
+          if (meta.hyperparameters) {
+            hyperparameters = {
+              algorithm:       meta.hyperparameters.algorithm        ?? 'Random Forest (calibrated)',
+              nEstimators:     meta.hyperparameters.n_estimators     ?? 200,
+              maxDepth:        meta.hyperparameters.max_depth        ?? 12,
+              minSamplesSplit: meta.hyperparameters.min_samples_split ?? 5,
+              classWeight:     meta.hyperparameters.class_weight     ?? 'balanced',
+            };
+          }
+        }
+      } catch (e) {
+        // fallback defaults already set above — silent fail is fine here
+
+      }
+
       res.json({
-        version: latestMetrics.modelVersion,
-        trainedAt: latestMetrics.trainedAt.toISOString(),
-        datasetSize: latestMetrics.datasetSize,
-        accuracy: Number(latestMetrics.accuracy),
+        version:      latestMetrics.modelVersion,
+        trainedAt:    latestMetrics.trainedAt.toISOString(),
+        datasetSize:  latestMetrics.datasetSize,
+        accuracy:     Number(latestMetrics.accuracy),
         precision: {
-          HIGH: Number(latestMetrics.precisionHigh),
+          HIGH:   Number(latestMetrics.precisionHigh),
           MEDIUM: Number(latestMetrics.precisionMedium),
-          LOW: Number(latestMetrics.precisionLow),
+          LOW:    Number(latestMetrics.precisionLow),
         },
         recall: {
-          HIGH: Number(latestMetrics.recallHigh),
+          HIGH:   Number(latestMetrics.recallHigh),
           MEDIUM: Number(latestMetrics.recallMedium),
-          LOW: Number(latestMetrics.recallLow),
+          LOW:    Number(latestMetrics.recallLow),
         },
         f1Score: {
-          HIGH: Number(latestMetrics.f1High),
+          HIGH:   Number(latestMetrics.f1High),
           MEDIUM: Number(latestMetrics.f1Medium),
-          LOW: Number(latestMetrics.f1Low),
+          LOW:    Number(latestMetrics.f1Low),
         },
         confusionMatrix,
         featureImportance,
         predictionHistory: ((predictionHistory as any)[0] as any[]).map(row => ({
-          date: row.month,
-          total: Number(row.total),
-          high: Number(row.high),
+          date:   row.month,
+          total:  Number(row.total),
+          high:   Number(row.high),
           medium: Number(row.medium),
-          low: Number(row.low),
+          low:    Number(row.low),
         })),
-        hyperparameters: {
-          algorithm: 'Random Forest',
-          nEstimators: 200,
-          maxDepth: 15,
-          minSamplesSplit: 10,
-          classWeight: 'balanced',
-        },
+        hyperparameters,
       });
+    
     } catch (error) {
-      console.error('Error fetching model metrics:', error);
-      res.status(500).json({ error: 'Failed to fetch model metrics' });
-    }
+      console.error('Model metrics error:', error);
+      res.status(500).json({ message: 'Failed to fetch model metrics' });
+    } 
   });
-
+  
   app.get('/api/ml/feature-importance', requireAuth, async (req, res) => {
     try {
       const featureImportance = [
@@ -1036,7 +1604,22 @@ export async function registerRoutes(
         newestDate: predictionDates?.newest,
       },
       readyForTraining: (Number(snapshotStats?.labeled) || 0) > 100, // Need 100+ labeled samples
-      modelStatus: 'rule-based', // Will be 'ml' after training
+      modelStatus: await (async () => {
+        try {
+          const fs = await import('fs');
+          const path = await import('path');
+          const registryPath = path.join(process.cwd(), 'ml-service', 'registry');
+          const files = fs.readdirSync(registryPath)
+            .filter((f: string) => f.startsWith('rf_30d_') && f.endsWith('.pkl'));
+          if (files.length === 0) return 'rule-based';
+          // Extract version from filename e.g. "rf_30d_v1.6.pkl" → "ml-v1.6"
+          const latest = files.sort().reverse()[0];
+          const match = latest.match(/rf_30d_(v[\d.]+)\.pkl/);
+          return match ? `ml-${match[1]}` : 'ml';
+        } catch {
+          return 'rule-based';
+        }
+      })(),
     });
   } catch (error) {
     console.error('Pipeline status error:', error);
@@ -1044,6 +1627,151 @@ export async function registerRoutes(
   }
 });
 
+// ===========================================
+// FINANCIAL TRACKING ROUTES
+// ===========================================
+app.get('/api/dashboard/revenue-summary', requireAuth, async (req, res) => {
+  try {
+    const [rows] = await db.execute(sql`
+      SELECT
+        -- 30-day completed revenue
+        SUM(CASE
+          WHEN r.status = 'COMPLETED'
+            AND r.receive_date IS NOT NULL
+            AND r.return_date IS NOT NULL
+            AND r.return_date >= r.receive_date
+          THEN (DATEDIFF(r.return_date, r.receive_date) + 1) * CAST(e.daily_rate AS DECIMAL(10,2))
+          ELSE 0
+        END) AS revenue_30d,
+
+        -- WTD revenue (active rentals only, from Monday)
+        SUM(CASE
+          WHEN r.status = 'COMPLETED'
+            AND r.receive_date IS NOT NULL
+            AND r.return_date IS NOT NULL
+            AND r.return_date >= r.receive_date
+            AND r.return_date >= DATE_SUB((SELECT MAX(return_date) FROM rentals WHERE status = 'COMPLETED'), INTERVAL 7 DAY)
+          THEN (DATEDIFF(r.return_date, r.receive_date) + 1) * CAST(e.daily_rate AS DECIMAL(10,2))
+          ELSE 0
+        END) AS revenue_wtd,
+
+        -- Outstanding A/R: completed rentals with no invoice
+        SUM(CASE
+          WHEN r.status = 'COMPLETED'
+            AND r.receive_date IS NOT NULL
+            AND r.return_date IS NOT NULL
+            AND r.return_date >= r.receive_date
+            AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.rental_id = r.id)
+          THEN (DATEDIFF(r.return_date, r.receive_date) + 1) * CAST(e.daily_rate AS DECIMAL(10,2))
+          ELSE 0
+        END) AS outstanding_ar,
+
+        -- Fleet utilization
+        COUNT(DISTINCT e.id) AS total_equipment,
+        SUM(CASE WHEN e.status = 'RENTED' THEN 1 ELSE 0 END) AS rented_equipment
+
+      FROM equipment e
+      LEFT JOIN rentals r ON r.equipment_id = e.id
+    `) as any;
+
+    const data = (rows as any[])[0];
+
+    res.json({
+      revenue30d:       Number(data.revenue_30d   || 0),
+      revenueWtd:       Number(data.revenue_wtd   || 0),
+      outstandingAr:    Number(data.outstanding_ar || 0),
+      totalEquipment:   Number(data.total_equipment || 0),
+      rentedEquipment:  Number(data.rented_equipment || 0),
+      utilizationRate:  data.total_equipment > 0
+                          ? (data.rented_equipment / data.total_equipment) * 100
+                          : 0,
+    });
+  } catch (e: any) {
+    console.error('[REVENUE SUMMARY]', e);
+    res.status(500).json({ message: 'Failed to fetch revenue summary', error: e.message });
+  }
+});
+
+app.get('/api/dashboard/monthly-trend', requireAuth, async (req, res) => {
+  try {
+      const result = await db.execute(sql`
+      SELECT
+        DATE_FORMAT(r.return_date, '%Y-%m') AS month,
+        SUM((DATEDIFF(r.return_date, r.receive_date) + 1) * CAST(e.daily_rate AS DECIMAL(10,2))) AS revenue
+      FROM rentals r
+      JOIN equipment e ON e.id = r.equipment_id
+      WHERE r.status = 'COMPLETED'
+        AND r.receive_date IS NOT NULL
+        AND r.return_date IS NOT NULL
+        AND r.return_date >= r.receive_date
+        AND r.return_date >= DATE_SUB(
+          (SELECT MAX(return_date) FROM rentals WHERE status = 'COMPLETED'),
+          INTERVAL 12 MONTH
+        )
+      GROUP BY DATE_FORMAT(r.return_date, '%Y-%m')
+      ORDER BY month ASC
+    `);
+
+    const data = (result as unknown as any[][])[0].map((row: any) => ({
+      month: row.month,
+      revenue: Number(row.revenue || 0),
+    }));
+
+    res.json(data);
+  } catch (e: any) {
+    console.error('[MONTHLY TREND]', e);
+    res.status(500).json({ message: 'Failed to fetch monthly trend', error: e.message });
+  }
+});
+
+app.post('/api/predictive-maintenance/backfill-snapshots', requireAdmin, async (req, res) => {
+  try {
+    const startDate = new Date('2027-01-01');
+    const endDate = new Date('2028-04-23');
+    const current = new Date(startDate);
+    let totalGenerated = 0;
+    let totalSaved = 0;
+
+    while (current <= endDate) {
+      const snapshots = await featureEngineeringService.generateSnapshotsForAllEquipment(new Date(current));
+      
+      for (const snapshot of snapshots) {
+        // Skip if snapshot already exists for this equipment/date
+        const existing = await db.execute(sql`
+          SELECT COUNT(*) as cnt FROM asset_feature_snapshots 
+          WHERE equipment_id = ${snapshot.equipmentId}
+          AND DATE(snapshot_ts) = DATE(${snapshot.snapshotTs.toISOString()})
+        `);
+
+        const cnt = Number((existing as any)[0]?.[0]?.cnt || 0);
+        if (cnt === 0) {
+          await featureEngineeringService.saveSnapshot(snapshot);
+          totalSaved++;
+        }
+        
+        totalGenerated++;
+      }
+
+      // Advance by 1 day
+      current.setDate(current.getDate() + 1);
+      
+      // Log progress every 30 days
+      if (current.getDate() === 1) {
+        console.log(`[BACKFILL] Progress: ${current.toISOString().split('T')[0]}, saved: ${totalSaved}`);
+      }
+    }
+
+    res.json({ 
+      message: `Backfill complete`, 
+      totalGenerated, 
+      totalSaved,
+      dateRange: `2027-01-01 to 2028-04-23`
+    });
+  } catch (error) {
+    console.error('Backfill error:', error);
+    res.status(500).json({ message: 'Backfill failed', error: String(error) });
+  }
+});
 
   return httpServer;
 }

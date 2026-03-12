@@ -8,7 +8,7 @@
 //   routes.ts → predictiveMaintenanceService → FastAPI /predict → DB
 
 import { db } from "../db";
-import { assetRiskPredictions, equipment } from "@shared/schema";
+import { assetRiskPredictions, equipmentRiskScores, equipment } from "@shared/schema";
 import { eq, desc } from "drizzle-orm";
 import { enhancedFeatureService as featureEngineeringService } from "./feature-engineering-enhanced";
 const ML_SERVICE_URL = process.env.ML_SERVICE_URL || "http://localhost:8000";
@@ -181,38 +181,56 @@ class PredictiveMaintenanceService {
    */
   async predictRisk(equipmentId: number): Promise<RiskPrediction> {
     const healthy = await checkMLServiceHealth();
-    console.log(`[PM] Health check result: ${healthy}`);
-    if (!healthy) {
-      throw new Error(
-        `ML service unavailable at ${ML_SERVICE_URL}. ` +
-        `Ensure the FastAPI service is running: cd ml-service && python run.py`
-      );
-    }
+        if (!healthy) {
+          throw new Error(
+            `ML service unavailable at ${ML_SERVICE_URL}. ` +
+            `Ensure the FastAPI service is running: cd ml-service && python run.py`
+          );
+        }
 
-    const snapshot = await featureEngineeringService.generateSnapshot(equipmentId, new Date());
-    const payload  = buildSnapshotPayload(equipmentId, snapshot as unknown as Record<string, unknown>);
-    console.log(`[PM] RAW PAYLOAD:`, JSON.stringify(payload));
-    // ── Debug: catch NaNs and log full payload before sending ──
-    const invalidFields = Object.entries(payload).filter(([, v]) =>
-      typeof v === 'number' && isNaN(v as number)
-    );
-    if (invalidFields.length > 0) {
-      console.error(`[PM] NaN fields in payload for EQ-${equipmentId}:`, invalidFields.map(([k]) => k));
-    }
-    console.log(`[PM] Payload for EQ-${equipmentId}:`, JSON.stringify(payload, null, 2));
+        const snapshot = await featureEngineeringService.generateSnapshot(equipmentId, new Date());
 
-    const result     = await callMLService(payload);
-    const prediction = convertMLResponse(result, snapshot.snapshotTs);
+        // Short-circuit brand new equipment — model not trained on near-zero hour assets
+        if (snapshot.assetAgeYears < 1 && snapshot.totalHoursLifetime < 500) {
+          const prediction: RiskPrediction = {
+            equipmentId,
+            failureProbability: 0.05,
+            riskBand: 'LOW',
+            riskScore: 5,
+            confidence: 0.95,
+            topDrivers: [
+              { feature: 'asset_age_years', impact: 0.01, description: 'New unit — minimal hours' },
+              { feature: 'total_hours_lifetime', impact: 0.01, description: 'Recent inspection completed' },
+              { feature: 'days_since_last_maintenance', impact: 0.01, description: 'Low operational age' },
+            ],
+            snapshotTs: snapshot.snapshotTs,
+            modelVersion: 'v1.4',
+            recommendation: 'Equipment is new and within safe operating parameters. Continue standard inspection schedule.',
+          };
+          await savePrediction(prediction);
+          return prediction;
+        }
 
-    await savePrediction(prediction, result.top_risk_drivers);
+        const payload = buildSnapshotPayload(equipmentId, snapshot as unknown as Record<string, unknown>);
 
-    console.log(
-      `[PM] EQ-${equipmentId} → ${prediction.riskBand} ` +
-      `(${(prediction.failureProbability * 100).toFixed(1)}%)`
-    );
+        const invalidFields = Object.entries(payload).filter(([, v]) =>
+          typeof v === 'number' && isNaN(v as number)
+        );
+        if (invalidFields.length > 0) {
+          console.error(`[PM] NaN fields in payload for EQ-${equipmentId}:`, invalidFields.map(([k]) => k));
+        }
 
-    return prediction;
+        const result = await callMLService(payload);
+        const prediction = convertMLResponse(result, snapshot.snapshotTs);
+        await savePrediction(prediction, result.top_risk_drivers);
+
+        console.log(
+          `[PM] EQ-${equipmentId} → ${prediction.riskBand} ` +
+          `(${(prediction.failureProbability * 100).toFixed(1)}%)`
+        );
+        return prediction;
   }
+  
 
   /**
    * Returns the latest stored prediction for an equipment item.
@@ -251,25 +269,42 @@ class PredictiveMaintenanceService {
    * Runs predictions for all equipment. Skips individual failures gracefully.
    */
   async predictAllEquipment(): Promise<RiskPrediction[]> {
-    const healthy = await checkMLServiceHealth();
-    if (!healthy) {
-      console.warn(`[PM] ML service unavailable — skipping batch predictions`);
-      return [];
-    }
-
-    const allEquipment = await db.select({ id: equipment.id }).from(equipment);
-    const predictions: RiskPrediction[] = [];
-
-    for (const equip of allEquipment) {
-      try {
-        predictions.push(await this.predictRisk(equip.id));
-      } catch (err) {
-        console.error(`[PM] Failed prediction for equipment ${equip.id}:`, err);
+      const healthy = await checkMLServiceHealth();
+      if (!healthy) {
+        console.warn(`[PM] ML service unavailable — skipping batch predictions`);
+        return [];
       }
-    }
+      const allEquipment = await db.select({ id: equipment.id }).from(equipment);
+      const predictions: RiskPrediction[] = [];
 
-    console.log(`[PM] Batch complete — ${predictions.length}/${allEquipment.length} succeeded`);
-    return predictions;
+      for (const equip of allEquipment) {
+        try {
+          const prediction = await this.predictRisk(equip.id);
+          predictions.push(prediction);
+
+          // Sync to equipment_risk_scores so Risk Analytics stays aligned
+          await db.insert(equipmentRiskScores).values({
+            equipmentId: prediction.equipmentId,
+            riskScore: prediction.riskScore,
+            riskLevel: prediction.riskBand,
+            drivers: JSON.stringify(prediction.topDrivers.map(d => d.description)),
+            modelVersion: prediction.modelVersion,
+          }).onDuplicateKeyUpdate({
+            set: {
+              riskScore: prediction.riskScore,
+              riskLevel: prediction.riskBand,
+              drivers: JSON.stringify(prediction.topDrivers.map(d => d.description)),
+              modelVersion: prediction.modelVersion,
+            }
+          });
+        } catch (err) {
+          console.error(`[PM] Failed prediction for equipment ${equip.id}:`, err);
+        }
+      }
+
+      console.log(`[PM] Batch complete — ${predictions.length}/${allEquipment.length} succeeded`);
+      return predictions;
+    
   }
 
   /**

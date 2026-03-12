@@ -280,6 +280,11 @@ export function usePipelineStatus() {
 export function useSimulationState() {
   return useQuery({
     queryKey: ["/api/simulate/state"],
+    queryFn: async () => {
+      const res = await fetch("/api/simulate/state", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch simulation state");
+      return res.json();
+    },
     refetchInterval: false,
   });
 }

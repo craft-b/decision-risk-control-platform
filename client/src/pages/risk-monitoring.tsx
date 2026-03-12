@@ -27,6 +27,7 @@ import {
   Pie,
   Cell,
 } from "recharts";
+import { useQueryClient } from "@tanstack/react-query";
 
 interface RiskScore {
   equipmentId: number;
@@ -39,14 +40,16 @@ interface RiskScore {
 export default function RiskAnalytics() {
   const { data: equipment, isLoading } = useEquipment();
   const batchScoreMutation = useBatchRiskScore();
-  const [riskScores, setRiskScores] = useState<RiskScore[]>([]);
+  const queryClient = useQueryClient();
+  const cachedScores = queryClient.getQueryData<RiskScore[]>(['risk-scores', 'batch']) ?? [];
+  const [riskScores, setRiskScores] = useState<RiskScore[]>(cachedScores);
 
   const handleCalculateAll = async () => {
     if (!equipment) return;
-    
     const equipmentIds = equipment.map(e => e.id);
     const results = await batchScoreMutation.mutateAsync(equipmentIds);
     setRiskScores(results);
+    queryClient.setQueryData(['risk-scores', 'batch'], results);
   };
 
   // Calculate risk distribution
@@ -105,8 +108,11 @@ export default function RiskAnalytics() {
       <Alert>
         <Activity className="h-4 w-4" />
         <AlertDescription>
-          Risk scores (0-100) assess operational disruption likelihood based on utilization, age, maintenance status, and rental patterns.
-          Model version: v1.0
+          Risk scores (0-100) assess failure probability based on equipment age, usage hours, maintenance history, and operational patterns.
+          {riskScores.length > 0 && (
+            <span className="ml-1 font-medium">Model: {riskScores[0]?.modelVersion ?? 'v1.4'}</span>
+          )}
+          {riskScores.length === 0 && <span className="ml-1 font-medium">Model: v1.4</span>}
         </AlertDescription>
       </Alert>
 
