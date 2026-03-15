@@ -1,7 +1,7 @@
 # Enterprise Asset Inventory Management — Architecture
 
 > A full-stack predictive maintenance platform for rental fleet operations.  
-> Combines a React/Node.js application with a Python ML service to predict equipment failure across 10, 30, and 60-day horizons.
+> Combines a React/Node.js application with a Python ML service to predict equipment failure across 10, 30, and 60-day horizons — with forward trajectory projection, cost-optimized intervention recommendations, and a rental dispatch risk guard.
 
 ---
 
@@ -13,8 +13,9 @@
 4. [Feature Engineering](#feature-engineering)
 5. [Model Design Decisions](#model-design-decisions)
 6. [Model Performance](#model-performance)
-7. [Known Limitations & Roadmap](#known-limitations--roadmap)
-8. [Tech Stack](#tech-stack)
+7. [Completed Feature Tracks](#completed-feature-tracks)
+8. [Known Limitations](#known-limitations)
+9. [Tech Stack](#tech-stack)
 
 ---
 
@@ -23,9 +24,9 @@
 Rental fleet operators face two compounding problems:
 
 - **Reactive maintenance** — equipment fails in the field during a rental, damaging the customer relationship and incurring emergency repair costs significantly higher than scheduled maintenance
-- **Suboptimal utilization** — without failure probability signals, dispatchers assign equipment based on availability alone, routing borderline units into long-term rentals where a field failure is most costly
+- **Suboptimal dispatch** — without failure probability signals, dispatchers assign equipment based on availability alone, routing borderline units into long-term rentals where a field failure is most costly
 
-Pure preventive maintenance (PM) schedules address the first problem partially but can't inform the second at all. A unit can be within its PM interval and still have a 45% probability of failure in the next 10 days based on its actual wear trajectory.
+Pure preventive maintenance schedules address the first problem partially but cannot inform the second at all. A unit can be within its PM interval and still have a 45% probability of failure in the next 10 days based on its actual wear trajectory.
 
 This system builds toward the optimal intervention point: the moment when expected failure cost exceeds preventive maintenance cost. That calculation requires forward-projected failure probabilities, not just current risk state.
 
@@ -45,34 +46,38 @@ graph TB
     subgraph Client ["Client — React/TypeScript"]
         UI[Predictive Maintenance Dashboard]
         ML[ML Performance Dashboard]
-        EQ[Equipment Views]
+        RF[Rental Form — Risk Guard]
     end
 
     subgraph Server ["Server — Node.js/Express"]
         API[REST API]
-        FE[Feature Engineering Service]
+        FE[Enhanced Feature Engineering Service]
         SIM[Simulation Engine]
         DB[(MySQL — Drizzle ORM)]
     end
 
     subgraph MLService ["ML Service — FastAPI/Python"]
         PRED[Multi-Horizon Predictor]
+        PROJ[Projection Engine]
         REG[Model Registry]
         TRAIN[Training Pipeline]
     end
 
     UI -->|Run Predictions| API
+    RF -->|Check risk on dispatch| DB
     API -->|Generate snapshots| FE
     FE -->|Read operational data| DB
     FE -->|Write feature snapshots| DB
-    API -->|Batch inference request| PRED
+    API -->|Batch inference| PRED
+    API -->|Forward projection| PROJ
     PRED -->|Load models| REG
+    PROJ -->|Age features analytically| PRED
     PRED -->|Return 10d/30d/60d scores| API
     API -->|Store predictions| DB
     API -->|Return results| UI
     TRAIN -->|Read labeled snapshots| DB
     TRAIN -->|Write models + metadata| REG
-    SIM -->|Generate sensor data| DB
+    SIM -->|Generate sensor data + maintenance events| DB
 ```
 
 ### Data Flow — Inference
@@ -80,19 +85,22 @@ graph TB
 ```
 Operational Data (sensor logs, maintenance events, rentals)
     ↓
-Feature Engineering Service (Node.js)
-    → 31 features extracted per equipment per snapshot
+Enhanced Feature Engineering Service (Node.js)
+    → 31 features extracted per equipment per snapshot date
+    → Derived features recomputed fresh at inference (not stored)
     → Saved to asset_feature_snapshots
     ↓
-FastAPI Predictor
-    → Loads v1.x models from registry
+FastAPI Multi-Horizon Predictor
+    → Loads latest v1.x models from registry (glob-based, no hardcoded versions)
     → Clips features to training distribution bounds
     → Returns calibrated probabilities for 10d / 30d / 60d
     ↓
 Dashboard
-    → Risk level classification (LOW / MEDIUM / HIGH)
+    → Risk level classification (HIGH ≥ 0.60, MEDIUM ≥ 0.30, LOW < 0.30)
     → Trend direction (INCREASING / DECREASING / STABLE)
     → Top risk drivers per horizon
+    → 60-day trajectory curve (projection engine)
+    → Optimal PM intervention day (cost model)
 ```
 
 ### Data Flow — Training
@@ -101,9 +109,10 @@ Dashboard
 asset_feature_snapshots (labeled with 10d/30d/60d outcomes)
     ↓
 train_model_multihorizon.py
-    → TimeSeriesSplit cross-validation (5 folds)
+    → TimeSeriesSplit CV (5 folds, gap = horizon days)
     → Separate Random Forest per horizon
     → CalibratedClassifierCV (sigmoid for 10d, isotonic for 30d/60d)
+    → Log-transform 7 skewed features, drop raw versions (38 → 31 features)
     ↓
 Model Registry
     → rf_{horizon}d_v{version}.pkl
@@ -111,6 +120,7 @@ Model Registry
     → clip_thresholds_v{version}.json
     → feature_cols_v{version}.json
     → metadata_{horizon}d_v{version}.json
+    → label_encoder_category_v{version}.pkl
 ```
 
 ---
@@ -121,12 +131,12 @@ Model Registry
 
 Real-world equipment failure data is rare, imbalanced, and expensive to collect. This project uses a discrete-event simulation engine to generate realistic operational data:
 
-- 15 original equipment items across four age cohorts (purchased 2018-2023), simulated across 2,800+ days (2024-2031)
-- Fleet renewal: equipment exceeding 10 years age or 8 years + 8,000 hours is automatically retired and replaced with a new equivalent unit, keeping fleet size and age distribution realistic indefinitely
-- Daily sensor readings: vibration, temperature, oil pressure, hydraulic pressure, fuel efficiency
-- Maintenance events driven by a Weibull-inspired hazard function — failure probability is a function of age, cumulative hours, and days since last maintenance, not a flat random rate
-- Only MAJOR_SERVICE events count as positive labels — routine MINOR_SERVICE and INSPECTION events are excluded from failure prediction targets
+- 15 original equipment items across four age cohorts (purchased 2018–2023), simulated across 2,900+ days (2024–2032)
+- **Fleet renewal** — equipment exceeding 10 years age, or 8 years + 8,000 hours, is automatically retired and replaced with a new equivalent unit (`EQ-R{id}-{year}` naming), keeping fleet size and age distribution realistic indefinitely
+- Daily sensor readings generated per unit: vibration XYZ, engine temp, oil pressure, hydraulic pressure, fuel consumption, RPM
+- Maintenance events fired probabilistically via a **Weibull-inspired hazard function** — failure probability is a function of age, cumulative hours, and days since last maintenance, not a flat random rate
 - Event type distribution: ~15% MAJOR_SERVICE, ~55% MINOR_SERVICE, ~30% INSPECTION
+- Only MAJOR_SERVICE events count as positive labels — routine minor service and inspections are excluded from failure prediction targets
 
 Fleet renewal produces a cyclical failure rate pattern rather than monotonic saturation: the 2018 cohort peaks at ~35% positive rate in 2027, drops back to ~28% in 2028 when replacements arrive, then ramps gradually again. This gives the model training data across the full equipment lifecycle — infant, mid-life, wear-out, and post-renewal — rather than just the wear-out phase.
 
@@ -134,38 +144,65 @@ Fleet renewal produces a cyclical failure rate pattern rather than monotonic sat
 
 Each feature snapshot is labeled with three binary outcomes:
 
-- `will_fail_10d` — did this equipment have a failure event within 10 days of snapshot?
+- `will_fail_10d` — did this equipment have a MAJOR_SERVICE event within 10 days of snapshot?
 - `will_fail_30d` — within 30 days?
 - `will_fail_60d` — within 60 days?
 
-Labels are assigned retrospectively from the maintenance event log. A "failure" is defined as an unscheduled MAJOR_SERVICE event — routine minor service and inspections are explicitly excluded. This distinction is critical: including all maintenance events as positive labels produces positive rates of 60-100% everywhere in the timeline, making the classification problem trivial and the model useless for real prediction.
+Labels are assigned retrospectively from the maintenance event log. A "failure" is defined as an unscheduled MAJOR_SERVICE event — routine minor service and inspections are explicitly excluded. This distinction is critical: including all maintenance events as positive labels produces positive rates of 60–100% everywhere in the timeline, making the classification problem trivial and the model useless for real prediction.
 
 ### Training
 
-Three separate Random Forest classifiers are trained, one per horizon. The key evaluation methodology is **temporal cross-validation** — described in detail in the design decisions section below.
+Three separate Random Forest classifiers are trained, one per horizon, using temporal cross-validation. The training script (`train_model_multihorizon.py`) is triggerable from the admin UI — it runs as a background subprocess, streams output to a live log drawer, and hot-swaps the loaded models in FastAPI on completion.
+
+Version is auto-incremented from the last DB record. No version string appears in inference code.
 
 ### Inference
 
-The FastAPI predictor loads all three models at startup from the model registry (via glob pattern — no hardcoded version strings). At inference time:
+The FastAPI predictor loads all three models at startup from the model registry via glob pattern. At inference time:
 
 1. Features are clipped to training distribution bounds (prevents extrapolation artifacts)
 2. Each model returns a calibrated failure probability
-3. Risk level is classified: HIGH ≥ 0.55, MEDIUM ≥ 0.30, LOW < 0.30
-4. Risk trend is computed by comparing 10d → 30d → 60d probabilities
-5. Top risk drivers are extracted from feature importances
+3. Risk level classified: HIGH ≥ 0.60, MEDIUM ≥ 0.30, LOW < 0.30
+4. Risk trend computed by comparing 10d → 30d → 60d probabilities
+5. Top risk drivers extracted from feature importances
+
+### Forward Projection
+
+The projection engine (`projector.py`) ages features analytically in 7-day steps over a 60-day window, running `predict_multi_horizon` at each step:
+
+- `days_since_last_maintenance` increments by step size
+- `asset_age_years` and `total_hours_lifetime` age proportionally
+- `neglect_score` and `neglect_acceleration` compound over time
+- All other features held constant (conservative — assumes no maintenance occurs)
+
+Returns a `curve` of `{day, 10d, 30d, 60d}` points, `threshold_crossings` (first day each horizon crosses HIGH), and `days_until_high` (earliest crossing across all horizons).
+
+### Cost Model
+
+The cost model (`client/src/lib/cost-model.ts`) identifies the optimal PM intervention day:
+
+```
+failure_cost = daily_rate × FAILURE_DOWNTIME_DAYS (7)
+pm_cost      = category-specific estimate ($400–$1,200)
+
+optimal_day  = first projection curve day where P(60d) × failure_cost > pm_cost
+savings      = failure_cost_at_optimal_day - pm_cost
+```
+
+`daily_rate` is read from the equipment schema. PM cost is estimated by category from industry averages. The result is surfaced per-asset in the prediction modal as a plain-English callout.
 
 ---
 
 ## Feature Engineering
 
-38 features extracted per equipment per snapshot, organized into five groups:
+31 features after log-transform and raw-drop, organized into five groups:
 
 ### Usage & Lifecycle
 | Feature | Description |
 |---------|-------------|
 | `asset_age_years` | Calendar age of equipment |
-| `total_hours_lifetime` | Cumulative operating hours |
-| `hours_used_30d` / `hours_used_90d` | Recent usage intensity |
+| `log_total_hours_lifetime` | Log cumulative operating hours |
+| `log_hours_used_30d` / `log_hours_used_90d` | Log recent usage intensity |
 | `rental_days_30d` / `rental_days_90d` | Recent rental activity |
 | `avg_rental_duration` | Average rental length |
 | `utilization_vs_expected` | Actual vs. expected utilization rate |
@@ -174,12 +211,12 @@ The FastAPI predictor loads all three models at startup from the model registry 
 | Feature | Description |
 |---------|-------------|
 | `maintenance_events_90d` | Event frequency |
-| `maintenance_cost_180d` | Cost trajectory |
+| `log_maintenance_cost_180d` | Log cost trajectory |
 | `days_since_last_maintenance` | Recency of last service |
-| `mean_time_between_failures` | Historical MTBF |
+| `log_mean_time_between_failures` | Log historical MTBF |
 | `maint_overdue` | Binary flag: past PM interval |
-| `cost_per_event` | Average cost per maintenance event |
-| `maint_burden` | Maintenance cost as % of asset value |
+| `log_cost_per_event` | Log average cost per maintenance event |
+| `log_maint_burden` | Log maintenance cost as % of asset value |
 
 ### Composite Wear Scores
 | Feature | Description |
@@ -197,8 +234,9 @@ The FastAPI predictor loads all three models at startup from the model registry 
 | `jobsite_risk_score` | Operating environment severity |
 | `usage_intensity` | Intensity relative to equipment class norm |
 | `usage_trend` | Trend in usage over recent periods |
+| `category_encoded` | Label-encoded equipment category |
 
-### Velocity Features (v1.6+)
+### Velocity Features
 Rate-of-change features that capture deterioration trajectory — critical for distinguishing equipment that looks borderline today but is deteriorating rapidly from equipment that has plateaued.
 
 | Feature | Description |
@@ -210,6 +248,8 @@ Rate-of-change features that capture deterioration trajectory — critical for d
 | `neglect_acceleration` | Worsening of deferred maintenance |
 | `sensor_degradation_rate` | Rate of sensor reading deterioration |
 
+**Implementation note:** Derived columns (aging_factor, wear_rate, mechanical_wear_score, etc.) are NOT stored in `asset_feature_snapshots` — they are recomputed fresh at inference time by `enhancedFeatureService.generateSnapshot()`. This prevents staleness from schema drift and keeps the feature pipeline as the single source of truth.
+
 ---
 
 ## Model Design Decisions
@@ -220,8 +260,6 @@ Rate-of-change features that capture deterioration trajectory — critical for d
 
 **What we do:** `sklearn.model_selection.TimeSeriesSplit` with 5 folds and a gap equal to the horizon length. Each fold trains on past data only and validates on the immediately following window. The gap prevents label leakage across the horizon boundary.
 
-**Why it matters for this dataset specifically:** The simulation produces a temporal distribution shift — positive rates increase from ~26% in early data to ~70% in recent data as equipment ages. A single 80/20 temporal holdout exposes the model to this worst-case shift in evaluation. TimeSeriesSplit averages performance across five different time windows, giving a more representative estimate of how the model will perform in deployment.
-
 ```
 Fold 1: [──train──]                    [val]
 Fold 2: [────train────]           [val]
@@ -231,134 +269,111 @@ Fold 5: [──────────train──────────][val]
          ← gap = horizon_days →
 ```
 
-**Alternative considered:** Oversampling the training set to match test distribution. Rejected because it works backwards — tuning training to match test set is a form of test set leakage and signals poor evaluation methodology to a technical reviewer.
-
 ### Decision 2 — Three separate models, not one multi-output model
 
-**Problem:** A single multi-output classifier trained to predict 10d/30d/60d simultaneously must learn one feature representation that serves all three tasks. But the features most predictive of imminent failure (10d) differ meaningfully from those predictive of long-horizon failure (60d).
+**Problem:** A single multi-output classifier must learn one feature representation that serves all three tasks. But features most predictive of imminent failure (10d) differ meaningfully from those predictive of long-horizon failure (60d).
 
-**What we do:** Train three independent Random Forest classifiers. Each learns its own feature importance ranking and its own decision boundaries.
-
-**Evidence from feature importances:** The 30d and 60d models weight composite wear scores and lifecycle features heavily. The 10d model weights recent sensor readings and velocity features more heavily — exactly what you'd expect from domain knowledge about failure precursors.
+**Evidence from feature importances:** The 10d model weights `wear_rate_velocity` as the #2 feature (16%). The 60d model weights `log_maintenance_cost_180d` as #2 (17%) — a slower-moving signal. Separate models allow each horizon to learn its own optimal weighting.
 
 ### Decision 3 — Sigmoid calibration for 10d, isotonic for 30d/60d
 
-**Problem:** Random Forests output well-ranked probabilities but poorly calibrated ones — the scores are good for ordering risk but not for interpreting as true probabilities. Calibration corrects this. Two methods are available: sigmoid (Platt scaling) and isotonic regression.
+Random Forests output well-ranked but poorly calibrated probabilities. `CalibratedClassifierCV` corrects this.
 
-**What we do:** 10d uses sigmoid calibration, 30d and 60d use isotonic.
-
-**Rationale:** Isotonic calibration is a non-parametric monotonic function fit — it's more flexible but requires more data and can overfit when the calibration set has a skewed or unrepresentative class distribution. The 10d model's training data has significant positive rate variation across folds (26% early → 70% late), making the calibration set systematically different from the training distribution. Sigmoid calibration is more constrained and generalizes better under this condition. The 30d and 60d models have more stable distributions and larger effective calibration sets, making isotonic appropriate.
+**Rationale:** Isotonic calibration is flexible but can overfit when the calibration set has a skewed class distribution. The 10d model's training data has significant positive rate variation across folds (10–28%), making the calibration set systematically different from training. Sigmoid is more constrained and generalizes better under this condition. The 30d/60d models have more stable distributions and larger effective calibration sets, making isotonic appropriate.
 
 ### Decision 4 — Velocity features as first-class inputs
 
-**Problem:** Static feature snapshots capture current state but not trajectory. Two units with identical wear scores may have very different failure probabilities if one is deteriorating rapidly and the other has plateaued.
+Static feature snapshots capture current state but not trajectory. Two units with identical wear scores may have very different failure probabilities if one is deteriorating rapidly and the other has plateaued.
 
-**What we do:** Six velocity features computed from rolling windows of historical snapshots. These are rate-of-change signals, not levels.
+**Impact:** `wear_rate_velocity` is the #2 feature in the 10d model (16%) and #3–4 in 30d/60d (~11–14%). The 60d holdout ROC-AUC improved significantly when velocity features started contributing correctly — longer-horizon prediction benefits most from trajectory information because current state is less predictive of failure 60 days out than whether wear is accelerating.
 
-**Impact (v1.12):** `wear_rate_velocity` is now the 2nd most important feature in the 10d model (16.3%) and 4th in 30d/60d (~13-14%). The 60d holdout ROC-AUC jumped from 0.879 to 0.922 when velocity features started contributing — longer-horizon prediction benefits most from trajectory information because a unit's current state is less predictive of failure 60 days out than whether its wear is accelerating.
+**Bug fixed in v1.12 cycle:** Velocity features were being hardcoded to defaults (0 and 1.0) in the snapshot save function due to a missing call to `enhancedFeatureService.generateSnapshot()` in `generateSnapshotsForAllEquipment`. Fixed — the save function now reads computed values from the enhanced service.
 
-**Implementation note:** The velocity features were computed correctly from v1.6 onward but were hardcoded to default values (0 and 1.0) in the snapshot save function due to a bug in `feature-engineering.ts`. Fixed in the v1.12 cycle — the save function now reads computed values from the enhanced feature service.
+### Decision 5 — Log-transform skewed features and drop raw versions
 
-### Decision 5 — Model registry with glob-based version resolution
+Maintenance cost and hours features are heavily right-skewed. Including both raw and log-transformed versions causes double-counting — the model allocates importance to two representations of the same signal, crowding out other features.
 
-**Problem:** Hardcoded model version strings in inference code create deployment friction and make version rollback error-prone.
+**What we do:** Log-transform 7 skewed features using `np.log1p` (handles zeros cleanly), then drop the raw versions. 38 features → 31 features. This allowed `log_maintenance_cost_180d` to emerge clearly as the 2nd most important feature across 30d/60d horizons.
 
-**What we do:** The predictor loads models at startup by globbing the registry directory for the latest version matching `rf_{horizon}d_*.pkl`. No version string appears in inference code. Rollback is handled by removing a file, not by changing code.
+### Decision 6 — Glob-based version resolution, no hardcoded version strings
 
-### Decision 6 — Log-transform skewed features and drop raw versions
-
-**Problem:** Maintenance cost and hours features are heavily right-skewed — a small number of major repair events produce extreme values that distort tree split decisions. Including both raw and log-transformed versions of the same feature causes double-counting: the model allocates importance to two representations of the same signal, crowding out other features.
-
-**What we do:** Log-transform seven skewed features using `np.log1p` (handles zeros cleanly), then drop the raw versions. Only the log-transformed columns enter the model.
-
-**Impact:** Removing the raw versions in v1.10 reduced the feature count from 38 to 31 and allowed `log_maintenance_cost_180d` to emerge clearly as the second most important feature across all three horizons.
+The predictor loads models at startup by globbing the registry for the latest version matching `rf_{horizon}d_*.pkl`. Numeric version sorting is applied (`v1.9 < v1.12`, not string sort). No version string appears in inference code — rollback is handled by removing a file, not by changing code.
 
 ---
 
 ## Model Performance
 
-### v1.12 Results — Current Production Models
+### v1.14 — Current Production Models
 
-| Horizon | CV ROC-AUC (mean ± std) | Holdout ROC-AUC | Holdout PR-AUC | FNR | Calibration |
-|---------|------------------------|-----------------|----------------|-----|-------------|
-| 10d | 0.9866 ± 0.0076 | 0.9743 | 0.9552 | 7.6% | Sigmoid |
-| 30d | 0.9842 ± 0.0103 | 0.9472 | 0.9356 | 18.6% | Isotonic |
-| 60d | 0.9853 ± 0.0082 | 0.9223 | 0.9164 | 29.0% | Isotonic |
+**Training data:** 22,025 labeled snapshots · 31 features · 2024–2032 simulation timeline  
+**Positive rates:** 10d=19.8%, 30d=24.0%, 60d=27.6%
 
-**Training data:** 20,900 labeled snapshots · 31 features · 2024-2031 simulation period  
-**Positive rates:** 10d=19.7%, 30d=23.9%, 60d=27.3%
+| Horizon | CV ROC-AUC | Holdout ROC-AUC | PR-AUC | Recall (failure) | FNR | Calibration |
+|---------|-----------|----------------|--------|-----------------|-----|-------------|
+| 10d | 0.9871 ± 0.0050 | 0.9672 | 0.9383 | 92.5% | 7.5% | Sigmoid |
+| 30d | 0.9853 ± 0.0090 | 0.9297 | 0.9210 | 81.7% | 18.3% | Isotonic |
+| 60d | 0.9815 ± 0.0147 | 0.8821 | 0.8826 | 71.0% | 29.0% | Isotonic |
 
-### CV Fold Stability — v1.12
+**Why holdout AUC drops across horizons:** The 60d holdout set has a 37% positive rate vs 25% in dev — the aging fleet distribution shifts significantly over time. CV ROC-AUC is the more representative performance estimate for deployment.
 
-```
-10d Folds:  0.9743 → 0.9833 → 0.9870 → 0.9965 → 0.9918  (std: 0.0076 ✅)
-30d Folds:  0.9685 → 0.9772 → 0.9906 → 0.9979 → 0.9867  (std: 0.0103 ✅)
-60d Folds:  0.9759 → 0.9841 → 0.9973 → 0.9915 → 0.9774  (std: 0.0082 ✅)
-```
+**FNR increases with horizon** — expected and correct. The 10d model misses 7.5% of failures. In the rental routing use case this is most operationally critical — a 7.5% miss rate means roughly 1 in 13 genuine near-term failure warnings goes undetected.
 
-### Top Feature Importances — v1.12
+### Top Feature Importances — v1.14
 
 | Rank | 10d Model | 30d Model | 60d Model |
 |------|-----------|-----------|-----------|
-| 1 | asset_age_years (22%) | asset_age_years (20%) | asset_age_years (20%) |
-| 2 | wear_rate_velocity (16%) | log_total_hours_lifetime (15%) | log_maintenance_cost_180d (16%) |
-| 3 | log_total_hours_lifetime (16%) | log_maintenance_cost_180d (14%) | log_total_hours_lifetime (15%) |
-| 4 | log_maintenance_cost_180d (15%) | wear_rate_velocity (14%) | wear_rate_velocity (13%) |
-| 5 | maint_frequency_trend (10%) | log_mean_time_between_failures (14%) | log_mean_time_between_failures (11%) |
-
-`wear_rate_velocity` appearing in the top 5 across all three horizons is the key improvement in v1.12 — the model now distinguishes between equipment at the same current state but on different deterioration trajectories.
+| 1 | asset_age_years (21%) | asset_age_years (21%) | asset_age_years (23%) |
+| 2 | log_mean_time_between_failures (16%) | log_maintenance_cost_180d (16%) | log_maintenance_cost_180d (17%) |
+| 3 | wear_rate_velocity (15%) | wear_rate_velocity (14%) | log_total_hours_lifetime (15%) |
+| 4 | log_total_hours_lifetime (14%) | log_total_hours_lifetime (12%) | vendor_reliability_score (12%) |
+| 5 | log_maintenance_cost_180d (13%) | log_mean_time_between_failures (12%) | wear_rate_velocity (11%) |
 
 ### Version Progression
 
-| Version | Key Change | 10d CV AUC | 30d CV AUC | 60d CV AUC | Max Fold Std | Samples |
-|---------|-----------|-----------|-----------|-----------|-------------|---------|
-| v1.8 | TimeSeriesSplit introduced | 0.709 | 0.704 | 0.591 | 0.318 ⚠️ | 12,620 |
-| v1.9 | Fixed labeling + hazard curve | 0.873 | 0.831 | 0.786 | 0.056 ✅ | 1,320 |
-| v1.10 | Removed feature double-counting | 0.877 | 0.824 | 0.780 | 0.047 ✅ | 1,395 |
-| v1.11 | Fleet renewal + 12x data | 0.986 | 0.984 | 0.979 | 0.016 ✅ | 17,235 |
-| **v1.12** | **Velocity features live** | **0.987** | **0.984** | **0.985** | **0.010 ✅** | **20,900** |
-
-† v1.6 holdout metrics were inflated by a simulation cliff artifact — not comparable to CV metrics
-
-### Interpreting the Results
-
-**Distribution shift is resolved.** Dev and holdout positive rates are now within 6-14 points of each other (was 27+ points in v1.10) because fleet renewal keeps the failure rate stable across the full simulation timeline. The holdout no longer represents an extreme aged-fleet scenario.
-
-**FNR increases with horizon**, which is expected and correct: the 10d model misses 7.6% of failures (high precision short-horizon prediction), while the 60d model misses 29% (harder to predict 2 months out). In the rental routing use case the 10d model is most operationally critical — a 7.6% miss rate means 1 in 13 genuine failure warnings goes undetected.
+| Version | Key Change | 10d CV AUC | 30d CV AUC | 60d CV AUC | Samples |
+|---------|-----------|-----------|-----------|-----------|---------|
+| v1.8 | TimeSeriesSplit introduced | 0.709 | 0.704 | 0.591 | 12,620 |
+| v1.9 | Fixed labeling + hazard curve | 0.873 | 0.831 | 0.786 | 1,320 |
+| v1.10 | Removed feature double-counting | 0.877 | 0.824 | 0.780 | 1,395 |
+| v1.11 | Fleet renewal + 12× data | 0.986 | 0.984 | 0.979 | 17,235 |
+| v1.12 | Velocity features live | 0.987 | 0.984 | 0.985 | 20,900 |
+| v1.13 | 2032 data + UI retrain pipeline | 0.987 | 0.985 | 0.982 | 22,025 |
+| **v1.14** | **Production (UI retrain verified)** | **0.987** | **0.985** | **0.982** | **22,025** |
 
 ---
 
-## Known Limitations & Roadmap
-
-### Current Limitations
-
-**1. Risk stratification, not remaining useful life**
-The system currently outputs current-state failure probability. It does not project the probability trajectory forward or estimate when a unit will cross a risk threshold. This limits the actionability of the output — a dispatcher seeing "HIGH risk" doesn't know whether that means "fail tomorrow" or "fail in 8 days."
-
-**2. No cost model**
-The optimal intervention point requires estimating expected failure cost vs. PM cost. The formula is implemented conceptually but no cost inputs exist in the schema. `daily_rate` is available as a proxy for downtime cost.
-
-**3. Rental workflow integration**
-Risk scores are generated on demand but are not surfaced at the point of rental creation. A dispatcher assigning equipment to a 3-week rental receives no warning if the unit has elevated 10d failure probability. The signal exists but is disconnected from the workflow where it creates value.
-
-**4. Simulated data**
-All training data is generated by a discrete-event simulation. The model has never seen real sensor readings, real maintenance patterns, or real failure modes. Feature distributions, failure rates, and wear trajectories are plausible but synthetic.
-
-**5. 60d FNR**
-The 60d model misses 29% of failures — roughly 1 in 3 genuine long-horizon warnings goes undetected. This is inherent to the prediction difficulty at 60 days and will improve incrementally with more training data and potentially additional features.
-
-### Roadmap
+## Completed Feature Tracks
 
 | Track | Description | Status |
 |-------|-------------|--------|
-| Track A | Snapshot date bug fix | ✅ Complete |
-| Track B | Velocity feature engineering | ✅ Complete |
-| Track C | Pipeline status, feature importance, query cache | ✅ Complete |
-| Track D | Fleet renewal simulation + v1.11/v1.12 training | ✅ Complete |
-| Track E | Forward projection — trajectory endpoint, probability curves per unit | 📋 Next |
-| Track F | Cost model — optimal intervention point calculation | 📋 Planned |
-| Track G | Rental assignment guard — risk warning at dispatch | 📋 Planned |
-| Track H | RUL display — estimated days to HIGH threshold | 📋 Planned |
+| A | Snapshot date bug fix | ✅ Complete |
+| B | Velocity feature engineering (6 features) | ✅ Complete |
+| C | Pipeline status, feature importance, query cache | ✅ Complete |
+| D | Fleet renewal simulation + v1.12 training | ✅ Complete |
+| E | Forward projection — 60-day trajectory curve, threshold crossing detection | ✅ Complete |
+| F | Cost model — optimal PM intervention day, expected savings callout | ✅ Complete |
+| G | Rental dispatch guard — HIGH risk blocks dispatch, MEDIUM advisory | ✅ Complete |
+| H | RUL display — days to HIGH threshold in prediction modal | ✅ Complete (via sparkline pill) |
+| — | Admin retrain pipeline — UI-triggered training with live log stream | ✅ Complete |
+
+---
+
+## Known Limitations
+
+**1. Simulated data only**
+All training data is generated by a discrete-event simulation. The model has never seen real sensor readings, real maintenance patterns, or real failure modes. Feature distributions, failure rates, and wear trajectories are plausible but synthetic. Real-world deployment would require retraining on actual fleet data.
+
+**2. 60d FNR**
+The 60d model misses 29% of failures — roughly 1 in 3 genuine long-horizon warnings goes undetected. This is inherent to prediction difficulty at 60 days and will improve with more training data and additional leading indicator features.
+
+**3. Projection assumes no maintenance**
+The forward projection engine holds maintenance constant — it does not model scheduled PM events in the projection window. This makes projections conservative (pessimistic) for well-maintained equipment, which is correct for worst-case dispatch planning but may overstate risk for equipment with known upcoming service.
+
+**4. simulate/day cap**
+The `days` parameter in `POST /api/simulate/day` is capped at 30 regardless of the slider value. Cosmetic bug — does not affect data quality, only throughput of the simulation step.
+
+**5. Model version display**
+The `modelStatus` field in `/api/ml/pipeline-status` uses alphabetic sort on registry filenames (`v1.9 > v1.12` alphabetically). Cosmetic — the predictor itself uses correct numeric version sorting. Fixed in the next maintenance cycle.
 
 ---
 
@@ -366,16 +381,17 @@ The 60d model misses 29% of failures — roughly 1 in 3 genuine long-horizon war
 
 | Layer | Technology | Notes |
 |-------|-----------|-------|
-| Frontend | React 18, TypeScript, TanStack Query, Tailwind CSS, shadcn/ui | |
+| Frontend | React 18, TypeScript, TanStack Query, Tailwind CSS, shadcn/ui, Recharts | Vite dev server, port 5173 |
 | Backend | Node.js, Express, Drizzle ORM | Port 5000 |
-| ML Service | Python, FastAPI, scikit-learn, pandas, SQLAlchemy | Port 8000 |
+| ML Service | Python 3.12, FastAPI, scikit-learn, pandas, SQLAlchemy | Port 8000 |
 | Database | MySQL 8.0 | |
-| Models | Random Forest (scikit-learn), CalibratedClassifierCV | 3 models × version |
-| Simulation | Custom discrete-event engine with Weibull hazard function + fleet renewal | 2,800+ simulated days |
-| Model Registry | File system (pkl + json) | Glob-based version resolution |
+| Models | Random Forest (scikit-learn), CalibratedClassifierCV | 3 models × version in registry |
+| Simulation | Custom discrete-event engine, Weibull hazard function, fleet renewal | 2,900+ simulated days (2024–2032) |
+| Model Registry | Filesystem (pkl + json), glob-based version resolution | `ml-service/registry/` |
+| LLM | Groq (llama3-8b-8192) | Maintenance recommendations |
 
 ---
 
-*Last updated: v1.12 — current production models*
+*Last updated: v1.14 — current production models*  
+*Training script: `ml-service/training/train_model_multihorizon.py`*  
 *Model registry: `ml-service/registry/`*
-*Training script: `ml-service/training/train_model_multihorizon.py`*

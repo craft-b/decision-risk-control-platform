@@ -1,0 +1,23 @@
+{
+  "clip_thresholds": {
+    "asset_age_years": 18.491399999999977,
+    "rental_days_30d": 1.5,
+    "rental_days_90d": 1.5,
+    "avg_rental_duration": 0.135,
+    "maintenance_events_90d": 9.0,
+    "days_since_last_maintenance": 19.5,
+    "vendor_reliability_score": 1.4249999999999998,
+    "jobsite_risk_score": 0.9299999999999999,
+    "maint_frequency_trend": 4.438356041908264,
+    "cost_trend": 5.290629515647854,
+    "hours_velocity": 4.5,
+    "neglect_acceleration": 0.21666667610406876,
+    "category_encoded": 13.5,
+    "log_total_hours_lifetime": 13.049522101484271,
+    "log_hours_used_30d": 3.295836866004329,
+    "log_hours_used_90d": 3.295836866004329,
+    "log_maintenance_cost_180d": 14.363271433454438,
+    "log_mean_time_between_failures": 9.324909151627297
+  },
+  "version": "v1.14"
+}

@@ -88,6 +88,41 @@ export interface EquipmentWithRisk {
   } | null;
 }
 
+export interface ProjectionPoint {
+  day: number;
+  "10d": number;
+  "30d": number;
+  "60d": number;
+}
+
+export interface ProjectionResult {
+  equipment_id: number;
+  step_days: number;
+  max_days: number;
+  curve: ProjectionPoint[];
+  threshold_crossings: {
+    "10d": number | null;
+    "30d": number | null;
+    "60d": number | null;
+  };
+  days_until_high: number | null;
+}
+
+export function useEquipmentProjection(equipmentId: number | null) {
+  return useQuery<ProjectionResult>({
+    queryKey: ["/api/equipment/:id/projection", equipmentId],
+    queryFn: async () => {
+      const res = await fetch(`/api/equipment/${equipmentId}/projection`, {
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Failed to fetch projection");
+      return res.json();
+    },
+    enabled: !!equipmentId,
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
 // Get risk prediction for single equipment
 export function useEquipmentRisk(equipmentId: number) {
   return useQuery<RiskPrediction>({
@@ -314,5 +349,42 @@ export function useSimulateDay() {
     onError: (e: any) => {
       toast({ title: "Simulation failed", description: e.message, variant: "destructive" });
     },
+  });
+}
+
+// ── Model retraining ──────────────────────────────────────────────────────────
+
+export function useTrainModel() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/ml/train", {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    onSuccess: () => {
+      // Invalidate pipeline status so snapshot counts refresh
+      queryClient.invalidateQueries({ queryKey: ["/api/ml/pipeline-status"] });
+    },
+  });
+}
+
+export function useTrainingStatus(enabled: boolean) {
+  return useQuery({
+    queryKey: ["/api/ml/train/status"],
+    queryFn: async () => {
+      const res = await fetch("/api/ml/train/status", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch training status");
+      return res.json() as Promise<{
+        running: boolean;
+        log: string[];
+        last_result: { success: boolean; version?: string; return_code?: number } | null;
+      }>;
+    },
+    enabled,
+    refetchInterval: enabled ? 3000 : false, // poll every 3s while training
   });
 }

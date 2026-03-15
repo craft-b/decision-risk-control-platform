@@ -43,7 +43,12 @@ class MultiHorizonPredictor:
         self.versions = {}
 
         for h in HORIZONS:
-            model_files = sorted(REGISTRY.glob(f"rf_{h}d_*.pkl"), reverse=True)
+            def _version_key(p):
+                import re
+                m = re.search(r'v(\d+)\.(\d+)', p.stem)
+                return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+
+            model_files = sorted(REGISTRY.glob(f"rf_{h}d_*.pkl"), key=_version_key, reverse=True)
             if not model_files:
                 raise FileNotFoundError(f"No {h}d model found in {REGISTRY}. Run train_model_multihorizon.py first.")
             model_data = joblib.load(model_files[0])
@@ -52,7 +57,7 @@ class MultiHorizonPredictor:
             print(f"[MH-PREDICTOR] Loaded {h}d model {model_data['version']} ({len(model_data['feature_names'])} features)")
 
         # Use 30d model's feature names as canonical (all horizons share same features)
-        model_data_30 = joblib.load(sorted(REGISTRY.glob("rf_30d_*.pkl"), reverse=True)[0])
+        model_data_30 = joblib.load(sorted(REGISTRY.glob("rf_30d_*.pkl"), key=_version_key, reverse=True)[0])
         self.feature_names: list = model_data_30["feature_names"]
         self.version: str = model_data_30["version"]
 
@@ -63,7 +68,7 @@ class MultiHorizonPredictor:
         self.label_encoder = joblib.load(encoder_path)
 
         # Feature columns (shared)
-        feature_cols_files = sorted(REGISTRY.glob("feature_cols_*.json"), reverse=True)
+        feature_cols_files = sorted(REGISTRY.glob("feature_cols_*.json"), key=_version_key, reverse=True)
         if feature_cols_files:
             with open(feature_cols_files[0]) as f:
                 self.expected_features: list = json.load(f)["feature_cols"]
@@ -71,7 +76,7 @@ class MultiHorizonPredictor:
             self.expected_features = self.feature_names
 
         # Clip thresholds (shared)
-        clip_files = sorted(REGISTRY.glob("clip_thresholds_*.json"), reverse=True)
+        clip_files = sorted(REGISTRY.glob("clip_thresholds_*.json"), key=_version_key, reverse=True)
         if clip_files:
             with open(clip_files[0]) as f:
                 self.clip_thresholds: Optional[dict] = json.load(f)["clip_thresholds"]
@@ -83,7 +88,7 @@ class MultiHorizonPredictor:
         # Feature importance per horizon
         self.feature_importance = {}
         for h in HORIZONS:
-            fi_files = sorted(REGISTRY.glob(f"feature_importance_{h}d_*.json"), reverse=True)
+            fi_files = sorted(REGISTRY.glob(f"feature_importance_{h}d_*.json"), key=_version_key, reverse=True)
             if fi_files:
                 with open(fi_files[0]) as f:
                     self.feature_importance[h] = json.load(f)

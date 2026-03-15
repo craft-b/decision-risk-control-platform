@@ -49,14 +49,22 @@ export function useCreateMaintenance() {
       }
       return api.maintenance.create.responses[201].parse(await res.json());
     },
-    onSuccess: () => {
+    onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['maintenance'] });
       queryClient.invalidateQueries({ queryKey: ['risk-scores'] });
       queryClient.invalidateQueries({ queryKey: [api.equipment.list.path] });
-      toast({ title: "Maintenance event logged successfully" });
-    },
-    onError: (err) => {
-      toast({ title: "Error logging maintenance", description: err.message, variant: "destructive" });
-    },
+      // Invalidate multi-horizon predictions so dashboard reflects new maintenance
+      queryClient.invalidateQueries({ 
+        queryKey: ["/api/risk-score/multi-horizon/latest"] 
+      });
+      // Invalidate projection cache for this specific unit
+      queryClient.invalidateQueries({ 
+        queryKey: ["/api/equipment/:id/projection", variables.equipmentId] 
+      });
+      toast({ 
+        title: "Maintenance logged", 
+        description: "Risk scores will update shortly." 
+      });
+    }
   });
 }

@@ -4,44 +4,41 @@
 # Auto-generated Swagger UI available at http://localhost:8000/docs
 
 import os
-import json
-from contextlib import asynccontextmanager
+import sys
+import subprocess
+import asyncio
 from pathlib import Path
+from contextlib import asynccontextmanager
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.schemas.prediction import (
     SnapshotInput,
-    PredictionOutput,
     BatchInput,
-    BatchOutput,
     HealthResponse,
-    ModelInfoResponse,
     RiskLevel,
 )
-from engine.predictor import EquipmentPredictor
+
 from engine.genai_advisor import generate_recommendation, is_available, LLM_PROVIDER
 from engine.predictor_multihorizon import MultiHorizonPredictor
+from engine.projector import project as project_trajectory
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STARTUP / SHUTDOWN
-# Model loads once here — not on every request
 # ─────────────────────────────────────────────────────────────────────────────
 
-predictor: EquipmentPredictor = None  # type: ignore
 mh_predictor: MultiHorizonPredictor = None  # type: ignore
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global predictor, mh_predictor 
+    global mh_predictor
     print("[STARTUP] Loading ML artifacts...")
     try:
-        predictor = EquipmentPredictor()
         mh_predictor = MultiHorizonPredictor()
         print(f"[STARTUP] Multi-horizon models ready — version {mh_predictor.version}")
-        print(f"[STARTUP] Model ready — version {predictor.version}")
     except Exception as e:
         print(f"[STARTUP] FATAL: Could not load model: {e}")
         raise
@@ -57,20 +54,21 @@ app = FastAPI(
     title="Enterprise Asset Intelligence — ML Service",
     description=(
         "Predictive maintenance API for construction equipment rental. "
-        "Serves failure probability predictions from a calibrated Random Forest model, "
-        "with LLM-generated maintenance recommendations via Groq/Ollama."
+        "Serves multi-horizon failure probability predictions from calibrated "
+        "Random Forest models (10d, 30d, 60d), with forward trajectory projection "
+        "and LLM-generated maintenance recommendations via Groq."
     ),
-    version="1.0.0",
+    version="2.0.0",
     lifespan=lifespan,
-    docs_url="/docs",        # Swagger UI
-    redoc_url="/redoc",      # ReDoc alternative
+    docs_url="/docs",
+    redoc_url="/redoc",
 )
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         os.getenv("CLIENT_URL", "http://localhost:5173"),
-        "http://localhost:3000",   # Node server
+        "http://localhost:3000",
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST"],
@@ -84,122 +82,21 @@ app.add_middleware(
 
 @app.get("/health", response_model=HealthResponse, tags=["System"])
 async def health():
-    """Service health check. Called by docker-compose healthcheck and Node server."""
+    """Service health check."""
     return HealthResponse(
         status="healthy",
-        model_version=predictor.version if predictor else "not loaded",
-        model_loaded=predictor is not None,
+        model_version=mh_predictor.version if mh_predictor else "not loaded",
+        model_loaded=mh_predictor is not None,
         llm_provider=LLM_PROVIDER,
         llm_available=is_available(),
     )
 
 
-@app.get("/model/info", response_model=ModelInfoResponse, tags=["Model"])
-async def model_info():
-    """
-    Returns model metadata — accuracy, ROC-AUC, top features, training date.
-    Displayed on the ML dashboard in the React frontend.
-    """
-    if not predictor:
-        raise HTTPException(status_code=503, detail="Model not loaded")
-
-    meta = predictor.metadata
-    return ModelInfoResponse(
-        version=predictor.version,
-        algorithm=meta.get("algorithm", "Random Forest (calibrated, isotonic)"),
-        trained_at=meta.get("trained_at", predictor.trained_at),
-        dataset_size=meta.get("dataset_size", 0),
-        accuracy=meta.get("accuracy", 0.0),
-        roc_auc=meta.get("roc_auc", 0.0),
-        feature_count=len(predictor.expected_features),
-        top_features=meta.get("top_features", list(predictor.feature_importance.keys())[:10]),
-    )
-
-
-@app.post("/predict", response_model=PredictionOutput, tags=["Inference"])
-async def predict(snapshot: SnapshotInput):
-    """
-    Run failure prediction for a single equipment snapshot.
-
-    Returns:
-    - failure_probability: calibrated P(failure within 30 days)
-    - risk_level: LOW / MEDIUM / HIGH
-    - top_risk_drivers: human-readable explanation
-    - recommendation: LLM-generated maintenance action (if LLM available)
-    """
-    if not predictor:
-        raise HTTPException(status_code=503, detail="Model not loaded")
-
-    try:
-        snapshot_dict = snapshot.model_dump()
-        result = predictor.predict(snapshot_dict)
-
-        # Enrich with LLM recommendation
-        # generate_recommendation handles all failures gracefully — never raises
-        result["recommendation"] = generate_recommendation(snapshot_dict, result)
-
-        return PredictionOutput(**result)
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
-
-
-@app.post("/predict/batch", response_model=BatchOutput, tags=["Inference"])
-async def predict_batch(batch: BatchInput):
-    """
-    Run failure prediction for multiple equipment snapshots.
-    Used by the Node.js ml-pipeline-orchestrator for scheduled batch scoring.
-    """
-    if not predictor:
-        raise HTTPException(status_code=503, detail="Model not loaded")
-
-    if len(batch.snapshots) > 500:
-        raise HTTPException(status_code=400, detail="Batch size limit is 500 snapshots")
-
-    try:
-        predictions = []
-        for snapshot in batch.snapshots:
-            snapshot_dict = snapshot.model_dump()
-            result = predictor.predict(snapshot_dict)
-
-            # Only generate LLM recommendations for HIGH risk in batch mode
-            # to stay within Groq free tier rate limits
-            if result["risk_level"] == "HIGH":
-                result["recommendation"] = generate_recommendation(snapshot_dict, result)
-            else:
-                result["recommendation"] = None
-
-            predictions.append(PredictionOutput(**result))
-
-        return BatchOutput(
-            predictions=predictions,
-            total=len(predictions),
-            high_risk_count=sum(1 for p in predictions if p.risk_level == RiskLevel.HIGH),
-            medium_risk_count=sum(1 for p in predictions if p.risk_level == RiskLevel.MEDIUM),
-            low_risk_count=sum(1 for p in predictions if p.risk_level == RiskLevel.LOW),
-        )
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Batch prediction failed: {str(e)}")
-
-
-@app.get("/model/features", tags=["Model"])
-async def get_features():
-    """Returns the exact feature list the model expects — useful for debugging mismatches."""
-    if not predictor:
-        raise HTTPException(status_code=503, detail="Model not loaded")
-
-    return {
-        "feature_count": len(predictor.expected_features),
-        "features": predictor.expected_features,
-        "feature_importance": predictor.feature_importance,
-    }
-
 @app.post("/predict/multi-horizon", tags=["Inference"])
 async def predict_multi_horizon(snapshot: SnapshotInput):
     """
     Multi-horizon failure prediction for a single equipment snapshot.
-    Returns separate risk assessments for 10d, 30d, and 60d windows.
+    Returns separate calibrated risk assessments for 10d, 30d, and 60d windows.
     """
     if not mh_predictor:
         raise HTTPException(status_code=503, detail="Multi-horizon model not loaded")
@@ -228,22 +125,155 @@ async def predict_multi_horizon_batch(batch: BatchInput):
         raise HTTPException(status_code=500, detail=f"Batch prediction failed: {str(e)}")
 
 
+@app.post("/predict/project", tags=["Inference"])
+async def project_failure_trajectory(snapshot: SnapshotInput):
+    """
+    Forward projection — ages features analytically and returns a 60-day
+    failure probability curve plus threshold crossing estimates.
+
+    Assumes no maintenance occurs during the projection window (conservative).
+
+    Returns:
+    - curve: list of {day, 10d, 30d, 60d} probability points at 7-day intervals
+    - threshold_crossings: first day each horizon crosses HIGH threshold (null if never)
+    - days_until_high: earliest crossing across all horizons
+    """
+    if not mh_predictor:
+        raise HTTPException(status_code=503, detail="Multi-horizon model not loaded")
+    try:
+        snapshot_dict = snapshot.model_dump()
+        result = project_trajectory(snapshot_dict, mh_predictor)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Projection failed: {str(e)}")
+
+
 @app.get("/models/multi-horizon/info", tags=["Model"])
 async def multi_horizon_model_info():
-    """Returns loaded model versions and confidence levels per horizon."""
+    """Returns loaded model versions and performance metrics per horizon."""
     if not mh_predictor:
         raise HTTPException(status_code=503, detail="Multi-horizon model not loaded")
     return {
         "versions":   mh_predictor.versions,
         "horizons":   [10, 30, 60],
         "confidence": {
-            "10d": "moderate (ROC-AUC 0.72)",
-            "30d": "high (ROC-AUC 0.96)",
-            "60d": "very high (ROC-AUC 0.997)",
+            "10d": "high (CV ROC-AUC 0.987)",
+            "30d": "high (CV ROC-AUC 0.985)",
+            "60d": "high (CV ROC-AUC 0.982)",
         },
         "thresholds": {
             "10d": {"HIGH": 0.60, "MEDIUM": 0.30},
-            "30d": {"HIGH": 0.65, "MEDIUM": 0.35},
-            "60d": {"HIGH": 0.70, "MEDIUM": 0.40},
+            "30d": {"HIGH": 0.60, "MEDIUM": 0.30},
+            "60d": {"HIGH": 0.60, "MEDIUM": 0.30},
         },
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TRAINING
+# ─────────────────────────────────────────────────────────────────────────────
+
+_training_status: dict = {"running": False, "log": [], "last_result": None}
+
+
+@app.post("/train", tags=["Training"])
+async def trigger_training(background_tasks: BackgroundTasks):
+    """
+    Triggers a full model retrain using train_model_multihorizon.py.
+    Runs in a thread executor (required on Windows).
+    Poll GET /train/status for progress and results.
+    """
+    if _training_status["running"]:
+        raise HTTPException(status_code=409, detail="Training already in progress")
+
+    async def run_training():
+        global _training_status, mh_predictor
+
+        _training_status["running"] = True
+        _training_status["log"] = ["[JOB] Starting training pipeline..."]
+        _training_status["last_result"] = None
+
+        script_path = (
+            Path(__file__).parent.parent / "training" / "train_model_multihorizon.py"
+        )
+
+        # Prefer venv Python so all ml dependencies are available
+        venv_python = (
+            Path(__file__).parent.parent.parent / "venv" / "Scripts" / "python.exe"
+        )
+        python_exe = str(venv_python) if venv_python.exists() else sys.executable
+
+        _training_status["log"].append(f"[JOB] Python  : {python_exe}")
+        _training_status["log"].append(f"[JOB] Script  : {script_path}")
+        _training_status["log"].append(f"[JOB] Exists  : {script_path.exists()}")
+
+        def run_sync():
+            env = os.environ.copy()
+            env["PYTHONIOENCODING"] = "utf-8"
+            return subprocess.run(
+                [python_exe, str(script_path)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env,
+                cwd=str(script_path.parent.parent),
+            )
+
+        try:
+            loop = asyncio.get_event_loop()
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                result = await loop.run_in_executor(pool, run_sync)
+
+            for line in result.stdout.splitlines():
+                _training_status["log"].append(line)
+            for line in result.stderr.splitlines():
+                _training_status["log"].append(f"[ERR] {line}")
+
+            if len(_training_status["log"]) > 300:
+                _training_status["log"] = _training_status["log"][-300:]
+
+            success = result.returncode == 0
+
+            if success:
+                try:
+                    mh_predictor = MultiHorizonPredictor()
+                    _training_status["log"].append(
+                        f"[JOB] Models reloaded — version {mh_predictor.version}"
+                    )
+                except Exception as reload_err:
+                    _training_status["log"].append(
+                        f"[JOB] Warning: model reload failed: {reload_err}"
+                    )
+
+            _training_status["last_result"] = {
+                "success": success,
+                "return_code": result.returncode,
+                "version": mh_predictor.version if success and mh_predictor else None,
+            }
+            _training_status["log"].append(
+                f"[JOB] {'Complete' if success else 'FAILED'} "
+                f"— exit code {result.returncode}"
+            )
+
+        except Exception as e:
+            import traceback as tb_mod
+            _training_status["log"].append(f"[JOB] FATAL: {str(e)}")
+            _training_status["log"].append(f"[JOB] TRACEBACK: {tb_mod.format_exc()}")
+            _training_status["last_result"] = {"success": False, "error": str(e)}
+
+        finally:
+            _training_status["running"] = False
+
+    background_tasks.add_task(run_training)
+    return {"message": "Training job started", "poll": "/train/status"}
+
+
+@app.get("/train/status", tags=["Training"])
+async def training_status():
+    """Poll for training progress. Returns log lines and running state."""
+    return {
+        "running":     _training_status["running"],
+        "log":         _training_status["log"],
+        "last_result": _training_status["last_result"],
     }

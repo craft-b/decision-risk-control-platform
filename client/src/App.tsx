@@ -11,7 +11,6 @@ import Dashboard from "@/pages/dashboard";
 import EquipmentList from "@/pages/equipment-list";
 import RentalsList from "@/pages/rentals-list";
 import NotFound from "@/pages/not-found";
-import RiskAnalytics from "@/pages/risk-monitoring";
 import MaintenanceLog from "./pages/maintenance-log";
 import JobSitesList from '@/pages/job-sites-list';
 import VendorsList from '@/pages/vendors-list';
@@ -56,9 +55,6 @@ function Router() {
       </Route>
       <Route path="/rentals">
         <ProtectedRoute component={RentalsList} />
-      </Route>
-      <Route path="/risk-analytics">
-        <ProtectedRoute component={RiskAnalytics} />
       </Route>
       <Route path="/maintenance">
         <ProtectedRoute component={MaintenanceLog} />
