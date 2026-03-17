@@ -75,12 +75,14 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
       returnDocument: "",
       buyRent: "RENT",
       status: "ACTIVE",
-      notes: ""
+      operatorName: "",
+      deliveryMethod: "CUSTOMER_PICKUP",
+      notes: "",
     },
   });
 
-  const receiveDate  = form.watch("receiveDate");
-  const returnDate   = form.watch("returnDate");
+  const receiveDate       = form.watch("receiveDate");
+  const returnDate        = form.watch("returnDate");
   const watchedEquipmentId = form.watch("equipmentId");
 
   // ── Derive risk level for selected equipment ───────────────────────────────
@@ -116,7 +118,7 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
     if (receiveDate && returnDate && returnDate < receiveDate) {
       form.setError("returnDate", {
         type: "manual",
-        message: "Return date must be after receive date"
+        message: "Return date must be after receive date",
       });
     } else {
       form.clearErrors("returnDate");
@@ -136,8 +138,10 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
 
     const payload = {
       ...data,
+      buyRent: "RENT",
       receiveDate: formatDate(data.receiveDate) || getTodayDate(),
       returnDate: formatDate(data.returnDate),
+      operatorName: data.operatorName || null,
     };
 
     if (isEditing && initialData?.id) {
@@ -150,7 +154,7 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
         onSuccess: () => {
           form.reset();
           onSuccess();
-        }
+        },
       });
     }
   };
@@ -354,47 +358,24 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
           )}
         />
 
-        {/* ── PO + Type ────────────────────────────────────────────────────── */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <FormField
-            control={form.control as any}
-            name="poNumber"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>PO Number (Optional)</FormLabel>
-                <FormControl>
-                  <Input
-                    placeholder="PO-12345"
-                    {...field}
-                    value={field.value ?? ""}
-                  />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-          <FormField
-            control={form.control as any}
-            name="buyRent"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Type</FormLabel>
-                <FormControl>
-                  <Select onValueChange={field.onChange} value={field.value}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select type" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="RENT">Rent</SelectItem>
-                      <SelectItem value="BUY">Buy</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-        </div>
+        {/* ── PO Number ────────────────────────────────────────────────────── */}
+        <FormField
+          control={form.control as any}
+          name="poNumber"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>PO Number (Optional)</FormLabel>
+              <FormControl>
+                <Input
+                  placeholder="PO-12345"
+                  {...field}
+                  value={field.value ?? ""}
+                />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
 
         {/* ── Dates ────────────────────────────────────────────────────────── */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -446,12 +427,12 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
             name="returnDate"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Return Date (Optional)</FormLabel>
+                <FormLabel>Return Date</FormLabel>
                 <FormControl>
                   <Input
                     type="date"
                     value={field.value || ""}
-                    onChange={(e) => field.onChange(e.target.value || null)}
+                    onChange={(e) => field.onChange(e.target.value)}
                   />
                 </FormControl>
                 <FormMessage />
@@ -483,29 +464,73 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
           />
         </div>
 
-        {/* ── Status ───────────────────────────────────────────────────────── */}
-        <FormField
-          control={form.control as any}
-          name="status"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Status</FormLabel>
-              <FormControl>
-                <Select onValueChange={field.onChange} value={field.value}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select status" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="ACTIVE">Active</SelectItem>
-                    <SelectItem value="COMPLETED">Completed</SelectItem>
-                    <SelectItem value="CANCELLED">Cancelled</SelectItem>
-                  </SelectContent>
-                </Select>
-              </FormControl>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
+        {/* ── Operator + Delivery Method ───────────────────────────────────── */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <FormField
+            control={form.control as any}
+            name="operatorName"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Operator / Driver (Optional)</FormLabel>
+                <FormControl>
+                  <Input
+                    placeholder="Name of equipment operator"
+                    {...field}
+                    value={field.value ?? ""}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control as any}
+            name="deliveryMethod"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Delivery Method</FormLabel>
+                <FormControl>
+                  <Select onValueChange={field.onChange} value={field.value || "CUSTOMER_PICKUP"}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select delivery method" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="CUSTOMER_PICKUP">Customer Pickup</SelectItem>
+                      <SelectItem value="COMPANY_DELIVERY">Company Delivery</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        </div>
+
+        {/* ── Status (edit only) ───────────────────────────────────────────── */}
+        {isEditing && (
+          <FormField
+            control={form.control as any}
+            name="status"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Status</FormLabel>
+                <FormControl>
+                  <Select onValueChange={field.onChange} value={field.value}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ACTIVE">Active</SelectItem>
+                      <SelectItem value="COMPLETED">Completed</SelectItem>
+                      <SelectItem value="CANCELLED">Cancelled</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        )}
 
         {/* ── Notes ────────────────────────────────────────────────────────── */}
         <FormField

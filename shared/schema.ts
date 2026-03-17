@@ -99,8 +99,25 @@ export const rentals = mysqlTable("rentals", {
   buyRent: varchar("buy_rent", { length: 10, enum: ["BUY", "RENT"] }).default("RENT").notNull(),
   status: varchar("status", { length: 50, enum: ["ACTIVE", "COMPLETED", "CANCELLED"] }).default("ACTIVE").notNull(),
   notes: text("notes"),
+  operatorName: varchar("operator_name", { length: 255 }),
+  deliveryMethod: varchar("delivery_method", { length: 30, enum: ["CUSTOMER_PICKUP", "COMPANY_DELIVERY"] }).default("CUSTOMER_PICKUP").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
 });
+
+export const equipmentSwaps = mysqlTable("equipment_swaps", {
+  id: serial("id").primaryKey(),
+  rentalId: int("rental_id").notNull(),
+  originalEquipmentId: int("original_equipment_id").notNull(),
+  replacementEquipmentId: int("replacement_equipment_id").notNull(),
+  swapDate: date("swap_date").notNull(),
+  reason: text("reason"),
+  swappedBy: varchar("swapped_by", { length: 255 }),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export type EquipmentSwap = typeof equipmentSwaps.$inferSelect;
+export type InsertEquipmentSwap = typeof equipmentSwaps.$inferInsert;
 
 export const invoices = mysqlTable("invoices", {
   id: serial("id").primaryKey(),
@@ -174,6 +191,7 @@ export const rentalsRelations = relations(rentals, ({ one, many }) => ({
   jobSite: one(jobSites, { fields: [rentals.jobSiteId], references: [jobSites.id] }),
   vendor: one(vendors, { fields: [rentals.vendorId], references: [vendors.id] }),
   invoices: many(invoices),
+  swaps: many(equipmentSwaps),
 }));
 
 export const equipmentRelations = relations(equipment, ({ many }) => ({
@@ -191,6 +209,12 @@ export const vendorsRelations = relations(vendors, ({ many }) => ({
 
 export const invoicesRelations = relations(invoices, ({ one }) => ({
   rental: one(rentals, { fields: [invoices.rentalId], references: [rentals.id] }),
+}));
+
+export const equipmentSwapsRelations = relations(equipmentSwaps, ({ one }) => ({
+  rental: one(rentals, { fields: [equipmentSwaps.rentalId], references: [rentals.id] }),
+  originalEquipment: one(equipment, { fields: [equipmentSwaps.originalEquipmentId], references: [equipment.id] }),
+  replacementEquipment: one(equipment, { fields: [equipmentSwaps.replacementEquipmentId], references: [equipment.id] }),
 }));
 
 export const maintenanceEventsRelations = relations(maintenanceEvents, ({ one }) => ({
@@ -378,7 +402,9 @@ export const insertRentalSchema = createInsertSchema(rentals)
   .omit({ id: true, createdAt: true })
   .extend({
     receiveDate: z.string(),
-    returnDate: z.string().nullable().optional(),
+    returnDate: z.string(),
+    operatorName: z.string().nullable().optional(),
+    deliveryMethod: z.enum(["CUSTOMER_PICKUP", "COMPANY_DELIVERY"]).default("CUSTOMER_PICKUP"),
   });
 
 export const insertInvoiceSchema = createInsertSchema(invoices).omit({ id: true, createdAt: true });

@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { useRentals, useCompleteRental } from "@/hooks/use-rentals";
+import { useRentals, useCompleteRental, useDeleteRental, useGenerateInvoice } from "@/hooks/use-rentals";
 import { useAuth } from "@/hooks/use-auth";
+import { SwapEquipmentDialog } from "@/components/swap-equipment-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -27,7 +28,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
-import { Plus, CheckSquare, CalendarDays, Edit, Eye } from "lucide-react";
+import { Plus, CheckSquare, CalendarDays, Edit, Eye, Trash2, ArrowRightLeft, FileText } from "lucide-react";
 import { format } from "date-fns";
 import { RentalForm } from "@/components/rental-form";
 import { RentalDetailView } from "@/components/rental-detail-view";
@@ -37,12 +38,37 @@ export default function RentalsList() {
   const { user } = useAuth();
   const { data: rentals, isLoading } = useRentals();
   const completeMutation = useCompleteRental();
+  const deleteMutation = useDeleteRental();
   const [isNewRentalOpen, setIsNewRentalOpen] = useState(false);
   const [completeId, setCompleteId] = useState<number | null>(null);
   const [editingRental, setEditingRental] = useState<any>(null);
   const [viewingRentalId, setViewingRentalId] = useState<number | null>(null);
+  const [deletingRental, setDeletingRental] = useState<any>(null);
+  const [swappingRental, setSwappingRental] = useState<any>(null);
 
   const isAdmin = user?.role === 'ADMINISTRATOR';
+  const invoiceMutation = useGenerateInvoice();
+
+  const handleGenerateInvoice = (rental: any, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const receiveDate = rental.receiveDate instanceof Date
+      ? rental.receiveDate.toISOString().split('T')[0]
+      : String(rental.receiveDate).split('T')[0];
+    const returnDate = rental.returnDate instanceof Date
+      ? rental.returnDate.toISOString().split('T')[0]
+      : String(rental.returnDate).split('T')[0];
+    const days = Math.max(1, Math.round((new Date(returnDate).getTime() - new Date(receiveDate).getTime()) / 86400000) + 1);
+    const dailyRate = Number(rental.equipment?.dailyRate || 0);
+    const amount = days * dailyRate;
+    invoiceMutation.mutate({
+      rentalId: rental.id,
+      invoiceDate: new Date().toISOString().split('T')[0],
+      periodFrom: receiveDate,
+      periodTo: returnDate,
+      amount,
+      invoiceNumber: `INV-${rental.id}-${Date.now()}`,
+    });
+  };
 
   const handleComplete = () => {
     if (completeId) {
@@ -196,27 +222,68 @@ export default function RentalsList() {
                       </Button>
                       {isAdmin && (
                         <>
-                          <Button 
-                            size="sm" 
-                            variant="outline" 
-                            className="h-8 gap-2 hover:bg-blue-50 hover:text-blue-700 hover:border-blue-200"
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-8 w-8 p-0 hover:bg-blue-50 hover:text-blue-700"
+                            title="Edit"
                             onClick={(e) => handleEdit(rental, e)}
                           >
                             <Edit className="h-4 w-4" />
-                            Edit
                           </Button>
                           {rental.status === 'ACTIVE' && (
-                            <Button 
-                              size="sm" 
-                              variant="outline" 
-                              className="h-8 gap-2 hover:bg-green-50 hover:text-green-700 hover:border-green-200"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setCompleteId(rental.id);
-                              }}
+                            <>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-8 gap-2 hover:bg-green-50 hover:text-green-700 hover:border-green-200"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setCompleteId(rental.id);
+                                }}
+                              >
+                                <CheckSquare className="h-4 w-4" />
+                                Complete
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-8 gap-1 hover:bg-purple-50 hover:text-purple-700 hover:border-purple-200"
+                                onClick={(e) => { e.stopPropagation(); setSwappingRental(rental); }}
+                              >
+                                <ArrowRightLeft className="h-4 w-4" />
+                                Swap
+                              </Button>
+                            </>
+                          )}
+                          {rental.status === 'COMPLETED' && (
+                            rental.invoices?.length > 0 ? (
+                              <Badge className="h-8 px-2 bg-green-50 text-green-700 border border-green-200 font-normal">
+                                <FileText className="h-3 w-3 mr-1" />
+                                Invoiced
+                              </Badge>
+                            ) : (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-8 gap-1 hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-200"
+                                disabled={invoiceMutation.isPending}
+                                onClick={(e) => handleGenerateInvoice(rental, e)}
+                              >
+                                <FileText className="h-4 w-4" />
+                                Invoice
+                              </Button>
+                            )
+                          )}
+                          {rental.status !== 'ACTIVE' && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-8 w-8 p-0 hover:bg-red-50 hover:text-red-700"
+                              title="Delete"
+                              onClick={(e) => { e.stopPropagation(); setDeletingRental(rental); }}
                             >
-                              <CheckSquare className="h-4 w-4" />
-                              Complete
+                              <Trash2 className="h-4 w-4" />
                             </Button>
                           )}
                         </>
@@ -272,6 +339,34 @@ export default function RentalsList() {
         </DialogContent>
       </Dialog>
 
+      {/* Delete Rental Dialog */}
+      <Dialog open={!!deletingRental} onOpenChange={(open) => !open && setDeletingRental(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Rental</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete this rental for <strong>{deletingRental?.equipment?.name}</strong>? This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeletingRental(null)}>Cancel</Button>
+            <Button
+              variant="destructive"
+              disabled={deleteMutation.isPending}
+              onClick={() => {
+                if (deletingRental) {
+                  deleteMutation.mutate(deletingRental.id, {
+                    onSuccess: () => setDeletingRental(null),
+                  });
+                }
+              }}
+            >
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Edit Rental Dialog */}
       <Dialog open={!!editingRental} onOpenChange={(open) => !open && closeEditDialog()}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -282,13 +377,22 @@ export default function RentalsList() {
             </DialogDescription>
           </DialogHeader>
           {editingRental && (
-            <RentalForm 
+            <RentalForm
               initialData={editingRental}
-              onSuccess={closeEditDialog} 
+              onSuccess={closeEditDialog}
             />
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Swap Equipment Dialog */}
+      {swappingRental && (
+        <SwapEquipmentDialog
+          open={!!swappingRental}
+          onOpenChange={(open) => !open && setSwappingRental(null)}
+          rental={swappingRental}
+        />
+      )}
     </div>
   );
 }

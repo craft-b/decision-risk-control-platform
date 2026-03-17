@@ -9,7 +9,7 @@
   /* Primary: Bold Construction Orange/Yellow */
   --primary: 36 100% 50%;
   --primary-foreground: 222 47% 11%;
-  
+
   /* Secondary: Industrial Steel Blue/Grey */
   --secondary: 215 16% 47%;
   --secondary-foreground: 210 40% 98%;
@@ -17,22 +17,28 @@
   /* Backgrounds: Clean, high contrast */
   --background: 210 20% 98%;
   --foreground: 222 47% 11%;
-  
+
+  /* Cards and popovers — explicit white so dropdowns/selects are never transparent */
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 47% 11%;
+
   --muted: 210 40% 96%;
   --muted-foreground: 215 16% 47%;
-  
+
   --accent: 210 40% 96%;
   --accent-foreground: 222 47% 11%;
-  
+
   --destructive: 0 84% 60%;
   --destructive-foreground: 210 40% 98%;
 
   --border: 214 32% 91%;
   --input: 214 32% 91%;
   --ring: 36 100% 50%;
-  
+
   --radius: 0.5rem;
-  
+
   --font-sans: 'Inter', sans-serif;
   --font-display: 'Oswald', sans-serif;
 }
@@ -40,16 +46,21 @@
 .dark {
   --background: 222 47% 11%;
   --foreground: 210 40% 98%;
-  
+
   --primary: 36 100% 50%;
   --primary-foreground: 222 47% 11%;
-  
+
+  --card: 217 33% 15%;
+  --card-foreground: 210 40% 98%;
+  --popover: 217 33% 15%;
+  --popover-foreground: 210 40% 98%;
+
   --muted: 217 33% 17%;
   --muted-foreground: 215 20% 65%;
-  
+
   --accent: 217 33% 17%;
   --accent-foreground: 210 40% 98%;
-  
+
   --border: 217 33% 17%;
   --input: 217 33% 17%;
 }

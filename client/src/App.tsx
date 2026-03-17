@@ -16,6 +16,7 @@ import JobSitesList from '@/pages/job-sites-list';
 import VendorsList from '@/pages/vendors-list';
 import PredictiveMaintenanceDashboard from '@/pages/predictive-maintenance-dashboard';
 import MLPerformanceDashboard from "./pages/ml-dashboard";
+import MaintenanceCostReport from "@/pages/maintenance-cost-report";
 
 
 // Protected Route Wrapper
@@ -70,6 +71,9 @@ function Router() {
       </Route>
       <Route path="/ml-performance">
         <ProtectedRoute component={MLPerformanceDashboard} />
+      </Route>
+      <Route path="/maintenance-costs">
+        <ProtectedRoute component={MaintenanceCostReport} />
       </Route>
       <Route component={NotFound} />
     </Switch>

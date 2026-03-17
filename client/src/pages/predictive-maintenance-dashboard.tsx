@@ -409,12 +409,14 @@ export default function PredictiveMaintenanceDashboard() {
             Multi-horizon failure probability — 10, 30, and 60 day windows
           </p>
         </div>
-        <div className="flex gap-2">
-          <Button onClick={handleRunMultiHorizon} disabled={mhMutation.isPending} className="gap-2">
-            {mhMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-            Run Predictions
-          </Button>
-        </div>
+        {isAdmin && (
+          <div className="flex gap-2">
+            <Button onClick={handleRunMultiHorizon} disabled={mhMutation.isPending} className="gap-2">
+              {mhMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+              Run Predictions
+            </Button>
+          </div>
+        )}
       </div>
 
       {highRiskCount > 0 && (
@@ -430,7 +432,8 @@ export default function PredictiveMaintenanceDashboard() {
       <Alert className="border-blue-100 bg-blue-50">
         <Info className="h-4 w-4 text-blue-600" />
         <AlertDescription className="text-blue-800 text-sm">
-          Predictions use three separate Random Forest models trained on 22,025 labeled snapshots.
+          Predictions use three separate Random Forest models trained on{" "}
+          {pipelineStatus?.snapshots?.labeled?.toLocaleString() ?? "22,025"} labeled snapshots.
           <span className="ml-1 font-medium">
             10d: high confidence · 30d: high · 60d: high
             {pipelineStatus?.modelStatus && (
@@ -811,61 +814,63 @@ export default function PredictiveMaintenanceDashboard() {
               </div>
 
               {/* ── Schedule PM button + inline form ──────────────────────── */}
-              <div className="pt-2 border-t">
-                {!showSchedulePM ? (
-                  <Button
-                    onClick={() => setShowSchedulePM(true)}
-                    className={cn(
-                      "w-full gap-2",
-                      selectedRiskLevel === "HIGH" && "bg-red-600 hover:bg-red-700 text-white",
-                      selectedRiskLevel === "MEDIUM" && "bg-orange-500 hover:bg-orange-600 text-white",
-                      selectedRiskLevel === "LOW" && "variant-outline",
-                    )}
-                    variant={selectedRiskLevel === "LOW" ? "outline" : "default"}
-                  >
-                    <Wrench className="h-4 w-4" />
-                    {selectedRiskLevel === "HIGH"
-                      ? "Schedule Immediate PM"
-                      : selectedRiskLevel === "MEDIUM"
-                      ? "Schedule Preventive PM"
-                      : "Log Maintenance Event"}
-                  </Button>
-                ) : (
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <h4 className="text-sm font-semibold flex items-center gap-2">
-                        <Wrench className="h-4 w-4" />
-                        Log Maintenance Event
-                      </h4>
-                      <button
-                        type="button"
-                        onClick={() => setShowSchedulePM(false)}
-                        className="text-xs text-muted-foreground hover:text-foreground underline"
-                      >
-                        Cancel
-                      </button>
+              {isAdmin && (
+                <div className="pt-2 border-t">
+                  {!showSchedulePM ? (
+                    <Button
+                      onClick={() => setShowSchedulePM(true)}
+                      className={cn(
+                        "w-full gap-2",
+                        selectedRiskLevel === "HIGH" && "bg-red-600 hover:bg-red-700 text-white",
+                        selectedRiskLevel === "MEDIUM" && "bg-orange-500 hover:bg-orange-600 text-white",
+                        selectedRiskLevel === "LOW" && "variant-outline",
+                      )}
+                      variant={selectedRiskLevel === "LOW" ? "outline" : "default"}
+                    >
+                      <Wrench className="h-4 w-4" />
+                      {selectedRiskLevel === "HIGH"
+                        ? "Schedule Immediate PM"
+                        : selectedRiskLevel === "MEDIUM"
+                        ? "Schedule Preventive PM"
+                        : "Log Maintenance Event"}
+                    </Button>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-sm font-semibold flex items-center gap-2">
+                          <Wrench className="h-4 w-4" />
+                          Log Maintenance Event
+                        </h4>
+                        <button
+                          type="button"
+                          onClick={() => setShowSchedulePM(false)}
+                          className="text-xs text-muted-foreground hover:text-foreground underline"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                      <MaintenanceForm
+                        equipmentId={selectedResult.equipmentId}
+                        equipmentName={selectedResult.name}
+                        // Pre-select PREDICTIVE_INTERVENTION since this is opened
+                        // from a model risk flag — closes the ML feedback loop
+                        defaultEventSource="PREDICTIVE_INTERVENTION"
+                        onSuccess={() => {
+                          setShowSchedulePM(false);
+                          setSelectedResult(null);
+                          // Invalidate predictions so dashboard reflects the new maintenance
+                          queryClient.invalidateQueries({
+                            queryKey: ["/api/risk-score/multi-horizon/latest"],
+                          });
+                          queryClient.invalidateQueries({
+                            queryKey: ["/api/equipment/:id/projection", selectedResult.equipmentId],
+                          });
+                        }}
+                      />
                     </div>
-                    <MaintenanceForm
-                      equipmentId={selectedResult.equipmentId}
-                      equipmentName={selectedResult.name}
-                      // Pre-select PREDICTIVE_INTERVENTION since this is opened
-                      // from a model risk flag — closes the ML feedback loop
-                      defaultEventSource="PREDICTIVE_INTERVENTION"
-                      onSuccess={() => {
-                        setShowSchedulePM(false);
-                        setSelectedResult(null);
-                        // Invalidate predictions so dashboard reflects the new maintenance
-                        queryClient.invalidateQueries({
-                          queryKey: ["/api/risk-score/multi-horizon/latest"],
-                        });
-                        queryClient.invalidateQueries({
-                          queryKey: ["/api/equipment/:id/projection", selectedResult.equipmentId],
-                        });
-                      }}
-                    />
-                  </div>
-                )}
-              </div>
+                  )}
+                </div>
+              )}
 
               <div className="pt-2 border-t text-xs text-muted-foreground">
                 Model version: {selectedResult.modelVersion} · Multi-horizon Random Forest (calibrated)
