@@ -71,6 +71,33 @@ export function useCreateEquipment() {
   });
 }
 
+export function useDeleteEquipment() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: async (id: number) => {
+      const url = buildUrl(api.equipment.delete.path, { id });
+      const res = await fetch(url, {
+        method: api.equipment.delete.method,
+        credentials: "include",
+      });
+      if (res.status === 409) {
+        const err = await res.json();
+        throw new Error(err.message);
+      }
+      if (!res.ok) throw new Error("Failed to delete equipment");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [api.equipment.list.path] });
+      toast({ title: "Equipment deleted" });
+    },
+    onError: (err) => {
+      toast({ title: "Cannot delete equipment", description: err.message, variant: "destructive" });
+    },
+  });
+}
+
 export function useUpdateEquipment() {
   const queryClient = useQueryClient();
   const { toast } = useToast();

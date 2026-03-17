@@ -152,23 +152,23 @@ export default function JobSitesList() {
                   {isAdmin && (
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
-                        <Button 
-                          size="sm" 
-                          variant="outline" 
-                          className="h-8 gap-2 hover:bg-blue-50 hover:text-blue-700 hover:border-blue-200"
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-8 w-8 p-0 hover:bg-blue-50 hover:text-blue-700"
+                          title="Edit"
                           onClick={() => handleEdit(site)}
                         >
                           <Edit className="h-4 w-4" />
-                          Edit
                         </Button>
-                        <Button 
-                          size="sm" 
-                          variant="outline" 
-                          className="h-8 gap-2 hover:bg-red-50 hover:text-red-700 hover:border-red-200"
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-8 w-8 p-0 hover:bg-red-50 hover:text-red-700"
+                          title="Delete"
                           onClick={() => setDeleteId(site.id)}
                         >
                           <Trash2 className="h-4 w-4" />
-                          Delete
                         </Button>
                       </div>
                     </TableCell>

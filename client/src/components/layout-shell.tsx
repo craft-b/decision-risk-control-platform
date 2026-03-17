@@ -1,18 +1,18 @@
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
-import { 
-  LayoutDashboard, 
-  Truck, 
-  CalendarRange, 
-  LogOut, 
+import {
+  LayoutDashboard,
+  Truck,
+  CalendarRange,
+  LogOut,
   Menu,
   ShieldAlert,
-  Activity,
   MapPin,
   Building2,
   Wrench,
   Brain,
-  TrendingUp
+  TrendingUp,
+  FileBarChart
 } from "lucide-react";
 import { FaTruckMonster } from "react-icons/fa";
 import { Button } from "@/components/ui/button";
@@ -35,10 +35,10 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
     { name: 'Rentals', href: '/rentals', icon: CalendarRange },
     { name: 'Job Sites', href: '/job-sites', icon: MapPin },
     { name: 'Vendors', href: '/vendors', icon: Building2 },
-    { name: 'Maintenance', href: '/maintenance', icon: Wrench }, 
-    { name: 'Risk Analytics', href: '/risk-analytics', icon: Activity }, 
-    { name: 'Predictive Maintenance', href: '/predictive-maintenance', icon: Brain }, 
+    { name: 'Maintenance', href: '/maintenance', icon: Wrench },
+    { name: 'Predictive Maintenance', href: '/predictive-maintenance', icon: Brain },
     { name: 'ML Performance', href: '/ml-performance', icon: TrendingUp },
+    { name: 'Maint. Costs', href: '/maintenance-costs', icon: FileBarChart },
   ];
 
   const NavContent = () => (

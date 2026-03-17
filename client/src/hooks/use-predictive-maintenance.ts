@@ -344,7 +344,7 @@ export function useSimulateDay() {
         description: `${data.daysSimulated} days simulated — ${data.sensorReadings} sensor readings, ${data.maintenanceEvents} maintenance events generated.`,
       });
       queryClient.invalidateQueries({ queryKey: ["/api/simulate/state"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/predictive-maintenance/pipeline-status"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ml/pipeline-status"] });
     },
     onError: (e: any) => {
       toast({ title: "Simulation failed", description: e.message, variant: "destructive" });
@@ -366,8 +366,9 @@ export function useTrainModel() {
       return res.json();
     },
     onSuccess: () => {
-      // Invalidate pipeline status so snapshot counts refresh
       queryClient.invalidateQueries({ queryKey: ["/api/ml/pipeline-status"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ml/model-metrics"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/risk-score/multi-horizon/latest"] });
     },
   });
 }

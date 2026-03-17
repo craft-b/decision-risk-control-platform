@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -13,20 +13,28 @@ import {
 } from "@/components/ui/dialog";
 import {
   Package, DollarSign, MapPin, Calendar, AlertTriangle,
-  CheckCircle, TrendingUp, Loader2, Wrench,
+  CheckCircle, TrendingUp, Wrench, Loader2,
 } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
-import { useEquipmentRisk } from "@/hooks/use-predictive-maintenance";
 import { useToast } from "@/hooks/use-toast";
 
-function RiskCard({ equipmentId }: { equipmentId: number }) {
-  const { data: risk, isLoading } = useEquipmentRisk(equipmentId);
+// prediction is a raw row from /api/risk-score/multi-horizon/latest
+function RiskCard({ equipmentId, prediction }: { equipmentId: number; prediction: any }) {
   const [isScheduling, setIsScheduling] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [scheduledDate, setScheduledDate] = useState(
-    format(new Date(), 'yyyy-MM-dd')
-  );
+  const [scheduledDate, setScheduledDate] = useState('');
+
+  // Use simulation cursor as default date, not wall clock
+  useEffect(() => {
+    fetch('/api/simulate/state', { credentials: 'include' })
+      .then(r => r.ok ? r.json() : null)
+      .then(state => {
+        const d = state?.cursor_date ?? null;
+        setScheduledDate(d ? String(d).substring(0, 10) : format(new Date(), 'yyyy-MM-dd'));
+      })
+      .catch(() => setScheduledDate(format(new Date(), 'yyyy-MM-dd')));
+  }, []);
   const [maintenanceType, setMaintenanceType] = useState<
     "INSPECTION" | "MINOR_SERVICE" | "MAJOR_SERVICE"
   >("INSPECTION");
@@ -34,18 +42,24 @@ function RiskCard({ equipmentId }: { equipmentId: number }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const suggestedType = risk?.riskBand === 'HIGH'
+  const riskBand = prediction?.risk_level_30d as "LOW" | "MEDIUM" | "HIGH" | undefined;
+  const failureProbability = prediction ? parseFloat(prediction.prob_30d) : null;
+  const topDrivers: string[] = prediction?.top_drivers_30d
+    ? JSON.parse(prediction.top_drivers_30d)
+    : [];
+
+  const suggestedType = riskBand === 'HIGH'
     ? 'MAJOR_SERVICE'
-    : risk?.riskBand === 'MEDIUM'
+    : riskBand === 'MEDIUM'
     ? 'MINOR_SERVICE'
     : 'INSPECTION';
 
   const handleOpenSchedule = () => {
     setMaintenanceType(suggestedType);
     setDescription(
-      risk?.recommendation
-        ? risk.recommendation.slice(0, 200)
-        : `Scheduled based on ${risk?.riskBand ?? 'current'} risk assessment`
+      prediction?.recommendation
+        ? prediction.recommendation.slice(0, 200)
+        : `Scheduled based on ${riskBand ?? 'current'} risk assessment`
     );
     setIsScheduling(true);
   };
@@ -64,6 +78,7 @@ function RiskCard({ equipmentId }: { equipmentId: number }) {
           maintenanceType,
           description,
           performedBy: 'Scheduled via Risk Assessment',
+          eventSource: 'PREDICTIVE_INTERVENTION',
         }),
       });
       if (!maintRes.ok) throw new Error('Failed to create maintenance entry');
@@ -77,12 +92,27 @@ function RiskCard({ equipmentId }: { equipmentId: number }) {
       });
       if (!equipRes.ok) throw new Error('Failed to update equipment status');
 
+      // 3. Re-run ML prediction for this equipment so risk score reflects the
+      //    new maintenance event (days_since_last_maintenance resets → lower risk)
+      try {
+        await fetch('/api/risk-score/multi-horizon/batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ equipmentIds: [equipmentId] }),
+        });
+      } catch {
+        // Non-fatal: ML service may be offline; risk will refresh on next prediction run
+      }
+
       await queryClient.invalidateQueries({ queryKey: ['/api/equipment'] });
       await queryClient.invalidateQueries({ queryKey: ['/api/maintenance'] });
+      await queryClient.invalidateQueries({ queryKey: ['/api/risk-score/multi-horizon/latest'] });
+      await queryClient.invalidateQueries({ queryKey: ['/api/predictive-maintenance/equipment-with-risk'] });
 
       toast({
         title: 'Maintenance Scheduled',
-        description: `${maintenanceType.replace('_', ' ')} scheduled for ${format(new Date(scheduledDate), 'MMM d, yyyy')}. Equipment status set to MAINTENANCE.`,
+        description: `${maintenanceType.replace(/_/g, ' ')} logged for ${format(new Date(scheduledDate + 'T00:00:00'), 'MMM d, yyyy')}. Risk score recalculated.`,
       });
       setIsScheduling(false);
     } catch (err: any) {
@@ -105,10 +135,10 @@ function RiskCard({ equipmentId }: { equipmentId: number }) {
               <TrendingUp className="h-5 w-5 text-muted-foreground" />
               <CardTitle>Risk Assessment</CardTitle>
             </div>
-            {risk && (
+            {prediction && (
               <Button
                 size="sm"
-                variant={risk.riskBand === 'HIGH' ? 'destructive' : 'outline'}
+                variant={riskBand === 'HIGH' ? 'destructive' : 'outline'}
                 onClick={handleOpenSchedule}
               >
                 <Wrench className="h-4 w-4 mr-2" />
@@ -118,11 +148,7 @@ function RiskCard({ equipmentId }: { equipmentId: number }) {
           </div>
         </CardHeader>
         <CardContent>
-          {isLoading ? (
-            <div className="flex items-center justify-center py-6">
-              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-            </div>
-          ) : !risk ? (
+          {!prediction ? (
             <div className="text-sm text-muted-foreground py-4 text-center">
               No risk prediction available. Run predictions from the Predictive Maintenance dashboard.
             </div>
@@ -130,66 +156,53 @@ function RiskCard({ equipmentId }: { equipmentId: number }) {
             <div className="space-y-4">
               <div className="flex items-center justify-between p-4 rounded-lg border-2 border-dashed">
                 <div>
-                  <div className="text-xs text-muted-foreground mb-1">Failure Probability</div>
+                  <div className="text-xs text-muted-foreground mb-1">Failure Probability (30d)</div>
                   <div className="text-3xl font-bold">
-                    {(risk.failureProbability * 100).toFixed(1)}%
+                    {((failureProbability ?? 0) * 100).toFixed(1)}%
                   </div>
                   <div className="text-xs text-muted-foreground mt-1">
-                    Model {risk.modelVersion} • {format(new Date(risk.snapshotTs), 'MMM d, yyyy')}
+                    Model {prediction.model_version} • {format(new Date(prediction.predicted_at), 'MMM d, yyyy')}
                   </div>
                 </div>
                 <Badge
                   className={cn(
                     "text-base px-4 py-2",
-                    risk.riskBand === 'HIGH' && "bg-red-100 text-red-800 border-red-300",
-                    risk.riskBand === 'MEDIUM' && "bg-orange-100 text-orange-800 border-orange-300",
-                    risk.riskBand === 'LOW' && "bg-green-100 text-green-800 border-green-300"
+                    riskBand === 'HIGH' && "bg-red-100 text-red-800 border-red-300",
+                    riskBand === 'MEDIUM' && "bg-orange-100 text-orange-800 border-orange-300",
+                    riskBand === 'LOW' && "bg-green-100 text-green-800 border-green-300"
                   )}
                 >
-                  {risk.riskBand} RISK
+                  {riskBand} RISK
                 </Badge>
               </div>
 
-              {risk.recommendation && (
+              {prediction.recommendation && (
                 <Alert className={cn(
-                  risk.riskBand === 'HIGH' && "border-red-200 bg-red-50",
-                  risk.riskBand === 'MEDIUM' && "border-orange-200 bg-orange-50",
-                  risk.riskBand === 'LOW' && "border-green-200 bg-green-50",
+                  riskBand === 'HIGH' && "border-red-200 bg-red-50",
+                  riskBand === 'MEDIUM' && "border-orange-200 bg-orange-50",
+                  riskBand === 'LOW' && "border-green-200 bg-green-50",
                 )}>
-                  {risk.riskBand === 'HIGH' ? (
+                  {riskBand === 'HIGH' ? (
                     <AlertTriangle className="h-4 w-4 text-red-600" />
-                  ) : risk.riskBand === 'MEDIUM' ? (
+                  ) : riskBand === 'MEDIUM' ? (
                     <AlertTriangle className="h-4 w-4 text-orange-600" />
                   ) : (
                     <CheckCircle className="h-4 w-4 text-green-600" />
                   )}
                   <AlertDescription className="text-sm">
-                    {risk.recommendation}
+                    {prediction.recommendation}
                   </AlertDescription>
                 </Alert>
               )}
 
-              {risk.topDrivers && risk.topDrivers.length > 0 && (
+              {topDrivers.length > 0 && (
                 <div>
                   <div className="text-sm font-medium mb-2">Top Risk Drivers</div>
-                  <div className="space-y-2">
-                    {risk.topDrivers.map((driver: any, idx: number) => (
-                      <div key={idx} className="space-y-1">
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="text-muted-foreground">{driver.description}</span>
-                          <span className="font-medium">{(driver.impact * 100).toFixed(1)}%</span>
-                        </div>
-                        <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                          <div
-                            className={cn(
-                              "h-full rounded-full",
-                              risk.riskBand === 'HIGH' ? "bg-red-500" :
-                              risk.riskBand === 'MEDIUM' ? "bg-orange-500" : "bg-green-500"
-                            )}
-                            style={{ width: `${Math.min(driver.impact * 500, 100)}%` }}
-                          />
-                        </div>
-                      </div>
+                  <div className="flex flex-wrap gap-2">
+                    {topDrivers.map((feature: string, idx: number) => (
+                      <Badge key={idx} variant="outline" className="text-xs text-muted-foreground">
+                        {feature.replace(/_/g, ' ')}
+                      </Badge>
                     ))}
                   </div>
                 </div>
@@ -210,19 +223,19 @@ function RiskCard({ equipmentId }: { equipmentId: number }) {
           </DialogHeader>
 
           <div className="space-y-4 py-2">
-            {risk && (
+            {prediction && (
               <Alert className={cn(
-                risk.riskBand === 'HIGH' && "border-red-200 bg-red-50",
-                risk.riskBand === 'MEDIUM' && "border-orange-200 bg-orange-50",
-                risk.riskBand === 'LOW' && "border-green-200 bg-green-50",
+                riskBand === 'HIGH' && "border-red-200 bg-red-50",
+                riskBand === 'MEDIUM' && "border-orange-200 bg-orange-50",
+                riskBand === 'LOW' && "border-green-200 bg-green-50",
               )}>
                 <AlertTriangle className={cn(
                   "h-4 w-4",
-                  risk.riskBand === 'HIGH' ? "text-red-600" :
-                  risk.riskBand === 'MEDIUM' ? "text-orange-600" : "text-green-600"
+                  riskBand === 'HIGH' ? "text-red-600" :
+                  riskBand === 'MEDIUM' ? "text-orange-600" : "text-green-600"
                 )} />
                 <AlertDescription className="text-sm">
-                  <strong>{risk.riskBand} RISK</strong> — {(risk.failureProbability * 100).toFixed(1)}% failure probability.
+                  <strong>{riskBand} RISK</strong> — {((failureProbability ?? 0) * 100).toFixed(1)}% failure probability.
                   Suggested: <strong>{suggestedType.replace(/_/g, ' ')}</strong>
                 </AlertDescription>
               </Alert>
@@ -285,9 +298,10 @@ function RiskCard({ equipmentId }: { equipmentId: number }) {
 
 type EquipmentDetailViewProps = {
   equipment: any;
+  prediction?: any;
 };
 
-export function EquipmentDetailView({ equipment }: EquipmentDetailViewProps) {
+export function EquipmentDetailView({ equipment, prediction }: EquipmentDetailViewProps) {
   if (!equipment) {
     return (
       <div className="text-center py-12 text-muted-foreground">
@@ -415,7 +429,7 @@ export function EquipmentDetailView({ equipment }: EquipmentDetailViewProps) {
         </CardContent>
       </Card>
 
-      <RiskCard equipmentId={equipment.id} />
+      <RiskCard equipmentId={equipment.id} prediction={prediction ?? null} />
     </div>
   );
 }

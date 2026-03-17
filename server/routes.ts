@@ -6,8 +6,8 @@ import { storage } from "./storage";
 import { api } from "@shared/routes";
 import session from "express-session";
 import bcrypt from "bcryptjs";
-import { maintenanceEvents, equipment, equipmentRiskScores, rentals, equipmentFailurePredictions } from "@shared/schema";
-import { eq, desc, count, sql } from "drizzle-orm";
+import { maintenanceEvents, equipment, equipmentRiskScores, rentals, equipmentFailurePredictions, equipmentSwaps } from "@shared/schema";
+import { eq, desc, count, sql, and } from "drizzle-orm";
 import { db } from "./db";
 import { predictiveMaintenanceService } from './services/predictive-maintenance-fixed';
 import { featureEngineeringService } from './services/feature-engineering';
@@ -317,20 +317,53 @@ export async function registerRoutes(
     res.json(await storage.listEquipment(req.query.search as string, req.query.status as string));
   });
 
+  const EQUIPMENT_NULLABLE_FIELDS = [
+    'weeklyRate', 'monthlyRate', 'currentMileage', 'initialMileage',
+    'purchaseDate', 'make', 'model', 'serialNumber', 'location',
+  ] as const;
+
+  function sanitizeEquipmentBody(body: Record<string, any>) {
+    const out = { ...body };
+    for (const field of EQUIPMENT_NULLABLE_FIELDS) {
+      if (out[field] === '') out[field] = null;
+    }
+    return out;
+  }
+
+  app.get('/api/equipment/:id', requireAuth, async (req, res) => {
+    const equip = await storage.getEquipment(parseInt(req.params.id));
+    if (!equip) return res.status(404).json({ message: "Equipment not found" });
+    res.json(equip);
+  });
+
   app.post(api.equipment.create.path, requireAdmin, async (req, res) => {
-    res.status(201).json(await storage.createEquipment(api.equipment.create.input.parse(req.body)));
+    res.status(201).json(await storage.createEquipment(api.equipment.create.input.parse(sanitizeEquipmentBody(req.body))));
   });
 
   app.put('/api/equipment/:id', requireAdmin, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
-      const input = api.equipment.update.input.parse(req.body);
+      const input = api.equipment.update.input.parse(sanitizeEquipmentBody(req.body));
       const equip = await storage.getEquipment(id);
       if (!equip) return res.status(404).json({ message: "Equipment not found" });
       res.json(await storage.updateEquipment(id, input));
     } catch (error) {
       console.error('Update equipment error:', error);
       res.status(400).json({ message: (error instanceof Error ? error.message : String(error)) || 'Failed to update equipment' });
+    }
+  });
+
+  app.delete('/api/equipment/:id', requireAdmin, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const equip = await storage.getEquipment(id);
+      if (!equip) return res.status(404).json({ message: "Equipment not found" });
+      const [active] = await db.select({ count: count() }).from(rentals).where(and(eq(rentals.equipmentId, id), eq(rentals.status, 'ACTIVE')));
+      if (active.count > 0) return res.status(409).json({ message: "Cannot delete equipment with active rentals" });
+      await storage.deleteEquipment(id);
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ message: 'Failed to delete equipment' });
     }
   });
 
@@ -363,12 +396,56 @@ export async function registerRoutes(
     }
   });
 
+  app.get('/api/rentals/:id', requireAuth, async (req, res) => {
+    const rental = await storage.getRental(parseInt(req.params.id));
+    if (!rental) return res.status(404).json({ message: "Rental not found" });
+    res.json(rental);
+  });
+
   app.post(api.rentals.complete.path, requireAdmin, async (req, res) => {
     const rental = await storage.getRental(parseInt(req.params.id));
     if (!rental) return res.status(404).json({ message: "Rental not found" });
-    await storage.updateRental(rental.id, { status: "COMPLETED", returnDate: new Date().toISOString().split('T')[0] });
+    const cursor = await getSimulationDate();
+    const returnDate = cursor.toISOString().split('T')[0];
+    await storage.updateRental(rental.id, { status: "COMPLETED", returnDate });
     await storage.updateEquipment(rental.equipmentId, { status: "AVAILABLE" });
     res.json({ message: "Rental completed successfully" });
+  });
+
+  // ── INVOICES ─────────────────────────────────────────────────────────────
+  app.post('/api/invoices', requireAdmin, async (req, res) => {
+    try {
+      const { rentalId, periodFrom, periodTo, amount, invoiceNumber } = req.body;
+      if (!rentalId || !periodFrom || !periodTo || amount == null || !invoiceNumber) {
+        return res.status(400).json({ message: 'Missing required invoice fields' });
+      }
+      const rental = await storage.getRental(rentalId);
+      if (!rental) return res.status(404).json({ message: 'Rental not found' });
+      if (rental.invoices?.length) {
+        return res.status(409).json({ message: 'Invoice already exists for this rental' });
+      }
+      const cursor = await getSimulationDate();
+      const invoiceDate = cursor.toISOString().split('T')[0];
+      const invoice = await storage.createInvoice({ rentalId, invoiceDate, periodFrom, periodTo, amount: String(amount), invoiceNumber });
+      res.status(201).json(invoice);
+    } catch (e: any) {
+      res.status(500).json({ message: 'Failed to create invoice', error: e.message });
+    }
+  });
+
+  app.delete('/api/rentals/:id', requireAdmin, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const rental = await storage.getRental(id);
+      if (!rental) return res.status(404).json({ message: "Rental not found" });
+      if (rental.status === 'ACTIVE') {
+        return res.status(409).json({ message: "Cannot delete an active rental. Complete or cancel it first." });
+      }
+      await storage.deleteRental(id);
+      res.json({ message: "Rental deleted successfully" });
+    } catch (error) {
+      res.status(500).json({ message: 'Failed to delete rental' });
+    }
   });
 
   // ── JOB SITES ─────────────────────────────────────────────────────────────
@@ -484,12 +561,23 @@ export async function registerRoutes(
   // ── MAINTENANCE ───────────────────────────────────────────────────────────
   app.get('/api/maintenance', requireAuth, async (req, res) => {
     try {
-      const { equipmentId } = req.query;
-      let query = db.select().from(maintenanceEvents);
-      if (equipmentId) {
-        query = query.where(eq(maintenanceEvents.equipmentId, parseInt(equipmentId as string))) as any;
-      }
-      res.json(await query.orderBy(desc(maintenanceEvents.maintenanceDate)));
+      const { equipmentId, limit: limitStr, offset: offsetStr } = req.query;
+      const limit  = Math.min(Math.max(1, parseInt(limitStr  as string || '100', 10)), 500);
+      const offset = Math.max(0, parseInt(offsetStr as string || '0',   10));
+      const condition = equipmentId
+        ? eq(maintenanceEvents.equipmentId, parseInt(equipmentId as string))
+        : undefined;
+
+      const [countRows, events] = await Promise.all([
+        db.select({ total: count() }).from(maintenanceEvents).where(condition),
+        db.select().from(maintenanceEvents)
+          .where(condition)
+          .orderBy(desc(maintenanceEvents.maintenanceDate))
+          .limit(limit)
+          .offset(offset),
+      ]);
+
+      res.json({ events, total: countRows[0].total, limit, offset });
     } catch (error) {
       res.status(500).json({ message: 'Failed to fetch maintenance events' });
     }
@@ -1057,29 +1145,143 @@ export async function registerRoutes(
   // ── FINANCIAL ─────────────────────────────────────────────────────────────
   app.get('/api/dashboard/revenue-summary', requireAuth, async (req, res) => {
     try {
+      const cursor = await getSimulationDate();
+      const cursorStr = cursor.toISOString().split('T')[0];
+
       const [rows] = await db.execute(sql`
         SELECT
-          SUM(CASE WHEN r.status = 'COMPLETED' AND r.receive_date IS NOT NULL AND r.return_date IS NOT NULL AND r.return_date >= r.receive_date
-            THEN (DATEDIFF(r.return_date, r.receive_date) + 1) * CAST(e.daily_rate AS DECIMAL(10,2)) ELSE 0 END) AS revenue_30d,
-          SUM(CASE WHEN r.status = 'COMPLETED' AND r.receive_date IS NOT NULL AND r.return_date IS NOT NULL AND r.return_date >= r.receive_date
-            AND r.return_date >= DATE_SUB((SELECT MAX(return_date) FROM rentals WHERE status = 'COMPLETED'), INTERVAL 7 DAY)
-            THEN (DATEDIFF(r.return_date, r.receive_date) + 1) * CAST(e.daily_rate AS DECIMAL(10,2)) ELSE 0 END) AS revenue_wtd,
-          SUM(CASE WHEN r.status = 'COMPLETED' AND r.receive_date IS NOT NULL AND r.return_date IS NOT NULL AND r.return_date >= r.receive_date
-            AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.rental_id = r.id)
-            THEN (DATEDIFF(r.return_date, r.receive_date) + 1) * CAST(e.daily_rate AS DECIMAL(10,2)) ELSE 0 END) AS outstanding_ar,
+          -- Accrual: daily_rate × days active within the 30-day window (matches daily chart)
+          COALESCE(SUM(CASE
+            WHEN r.id IS NOT NULL AND r.status IN ('ACTIVE','COMPLETED')
+              AND r.receive_date IS NOT NULL
+              AND r.receive_date <= ${cursorStr}
+              AND (r.return_date IS NULL OR r.return_date >= DATE_SUB(${cursorStr}, INTERVAL 29 DAY))
+            THEN GREATEST(0, DATEDIFF(
+              LEAST(COALESCE(r.return_date, ${cursorStr}), ${cursorStr}),
+              GREATEST(r.receive_date, DATE_SUB(${cursorStr}, INTERVAL 29 DAY))
+            ) + 1) * CAST(e.daily_rate AS DECIMAL(10,2))
+            ELSE 0 END), 0) AS revenue_30d,
+          -- WTD accrual: days active in the rolling 7-day window
+          COALESCE(SUM(CASE
+            WHEN r.id IS NOT NULL AND r.status IN ('ACTIVE','COMPLETED')
+              AND r.receive_date IS NOT NULL
+              AND r.receive_date <= ${cursorStr}
+              AND (r.return_date IS NULL OR r.return_date >= DATE_SUB(${cursorStr}, INTERVAL 6 DAY))
+            THEN GREATEST(0, DATEDIFF(
+              LEAST(COALESCE(r.return_date, ${cursorStr}), ${cursorStr}),
+              GREATEST(r.receive_date, DATE_SUB(${cursorStr}, INTERVAL 6 DAY))
+            ) + 1) * CAST(e.daily_rate AS DECIMAL(10,2))
+            ELSE 0 END), 0) AS revenue_wtd,
+          -- Outstanding A/R: completed uninvoiced rentals, full rental value
+          COALESCE(SUM(CASE
+            WHEN r.status = 'COMPLETED' AND r.receive_date IS NOT NULL AND r.return_date IS NOT NULL
+              AND r.return_date >= r.receive_date
+              AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.rental_id = r.id)
+            THEN (DATEDIFF(r.return_date, r.receive_date) + 1) * CAST(e.daily_rate AS DECIMAL(10,2))
+            ELSE 0 END), 0) AS outstanding_ar,
           COUNT(DISTINCT e.id) AS total_equipment,
           SUM(CASE WHEN e.status = 'RENTED' THEN 1 ELSE 0 END) AS rented_equipment
         FROM equipment e LEFT JOIN rentals r ON r.equipment_id = e.id
       `) as any;
+
+      const [uninvoicedRows] = await db.execute(sql`
+        SELECT COUNT(*) AS uninvoiced_count
+        FROM rentals r
+        WHERE r.status = 'COMPLETED'
+          AND r.receive_date IS NOT NULL AND r.return_date IS NOT NULL
+          AND r.return_date >= r.receive_date
+          AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.rental_id = r.id)
+      `) as any;
+
+      const [utilRows] = await db.execute(sql`
+        SELECT COALESCE(
+          SUM(GREATEST(0, DATEDIFF(
+            LEAST(COALESCE(r.return_date, ${cursorStr}), ${cursorStr}),
+            GREATEST(r.receive_date, DATE_SUB(${cursorStr}, INTERVAL 29 DAY))
+          ) + 1)),
+          0
+        ) / NULLIF((SELECT COUNT(*) FROM equipment) * 30, 0) * 100 AS avg_utilization_30d
+        FROM rentals r
+        WHERE r.receive_date <= ${cursorStr}
+          AND (r.return_date IS NULL OR r.return_date >= DATE_SUB(${cursorStr}, INTERVAL 29 DAY))
+          AND r.status IN ('ACTIVE', 'COMPLETED')
+      `) as any;
+
       const data = (rows as any[])[0];
+      const uninvoicedCount = Number((uninvoicedRows as any[])[0]?.uninvoiced_count || 0);
+      const avgUtilization30d = Number((utilRows as any[])[0]?.avg_utilization_30d || 0);
+
       res.json({
-        revenue30d: Number(data.revenue_30d || 0), revenueWtd: Number(data.revenue_wtd || 0),
-        outstandingAr: Number(data.outstanding_ar || 0), totalEquipment: Number(data.total_equipment || 0),
+        revenue30d: Number(data.revenue_30d || 0),
+        revenueWtd: Number(data.revenue_wtd || 0),
+        outstandingAr: Number(data.outstanding_ar || 0),
+        uninvoicedCount,
+        totalEquipment: Number(data.total_equipment || 0),
         rentedEquipment: Number(data.rented_equipment || 0),
         utilizationRate: data.total_equipment > 0 ? (data.rented_equipment / data.total_equipment) * 100 : 0,
+        avgUtilization30d,
       });
     } catch (e: any) {
       res.status(500).json({ message: 'Failed to fetch revenue summary', error: e.message });
+    }
+  });
+
+  app.get('/api/dashboard/daily-revenue', requireAuth, async (req, res) => {
+    try {
+      const cursor = await getSimulationDate();
+      // Work entirely in UTC-parsed date strings to avoid local-timezone shifts
+      const cursorStr = cursor.toISOString().split('T')[0];
+      const MS_PER_DAY = 86400000;
+      const cursorMs = new Date(cursorStr + 'T00:00:00Z').getTime();
+      const windowStartMs = cursorMs - 29 * MS_PER_DAY;
+      const windowStartStr = new Date(windowStartMs).toISOString().split('T')[0];
+
+      // Build 30-day bucket array (index 0 = oldest day)
+      const days: string[] = [];
+      for (let i = 0; i < 30; i++) {
+        days.push(new Date(windowStartMs + i * MS_PER_DAY).toISOString().split('T')[0]);
+      }
+      const buckets: Record<string, number> = {};
+      for (const d of days) buckets[d] = 0;
+
+      // Fetch all rentals that overlap the window
+      const [rows] = await db.execute(sql`
+        SELECT
+          r.receive_date,
+          r.return_date,
+          CAST(e.daily_rate AS DECIMAL(10,2)) AS daily_rate
+        FROM rentals r
+        JOIN equipment e ON e.id = r.equipment_id
+        WHERE r.receive_date IS NOT NULL
+          AND r.receive_date <= ${cursorStr}
+          AND (r.return_date IS NULL OR r.return_date >= ${windowStartStr})
+          AND r.status IN ('ACTIVE', 'COMPLETED')
+      `) as any;
+
+      for (const row of rows as any[]) {
+        const rate = Number(row.daily_rate || 0);
+        if (!rate) continue;
+        // mysql2 returns DATE columns as 'YYYY-MM-DD' strings
+        const receiveStr: string = row.receive_date instanceof Date
+          ? row.receive_date.toISOString().split('T')[0]
+          : String(row.receive_date).substring(0, 10);
+        const returnStr: string = row.return_date
+          ? (row.return_date instanceof Date
+              ? row.return_date.toISOString().split('T')[0]
+              : String(row.return_date).substring(0, 10))
+          : cursorStr;
+
+        for (const day of days) {
+          if (day >= receiveStr && day <= returnStr) {
+            buckets[day] += rate;
+          }
+        }
+      }
+
+      res.json(days.map(day => ({ day, revenue: Math.round(buckets[day] * 100) / 100 })));
+    } catch (e: any) {
+      console.error('[daily-revenue]', e);
+      res.status(500).json({ message: 'Failed to fetch daily revenue', error: e.message });
     }
   });
 
@@ -1118,6 +1320,149 @@ export async function registerRoutes(
       res.json(await mlRes.json());
     } catch (e: any) {
       res.status(500).json({ message: "ML service unreachable", error: e.message });
+    }
+  });
+
+  // ── MAINTENANCE DUE SOON ──────────────────────────────────────────────────
+  app.get('/api/maintenance/due-soon', requireAuth, async (req, res) => {
+    try {
+      const [rows] = await db.execute(sql`
+        SELECT
+          e.id,
+          e.name,
+          e.equipment_id   AS equipmentId,
+          e.category,
+          e.status,
+          me.next_due_date AS nextDueDate,
+          DATEDIFF(me.next_due_date, CURDATE()) AS daysUntilDue
+        FROM equipment e
+        JOIN maintenance_events me ON me.id = (
+          SELECT id FROM maintenance_events m2
+          WHERE m2.equipment_id = e.id AND m2.next_due_date IS NOT NULL
+          ORDER BY m2.id DESC LIMIT 1
+        )
+        WHERE me.next_due_date <= DATE_ADD(CURDATE(), INTERVAL 30 DAY)
+        ORDER BY me.next_due_date ASC
+      `);
+      res.json((rows as any[]) || []);
+    } catch (error) {
+      res.status(500).json({ message: 'Failed to fetch due-soon maintenance' });
+    }
+  });
+
+  // ── EQUIPMENT SWAPS ────────────────────────────────────────────────────────
+  app.post('/api/rentals/:id/swap', requireAdmin, async (req, res) => {
+    try {
+      const rentalId = parseInt(req.params.id);
+      const { replacementEquipmentId, reason, swappedBy, notes } = req.body;
+
+      const rental = await storage.getRental(rentalId);
+      if (!rental) return res.status(404).json({ message: 'Rental not found' });
+      if (rental.status !== 'ACTIVE') return res.status(400).json({ message: 'Can only swap equipment on active rentals' });
+
+      const replacement = await storage.getEquipment(replacementEquipmentId);
+      if (!replacement) return res.status(404).json({ message: 'Replacement equipment not found' });
+      if (replacement.status !== 'AVAILABLE') return res.status(400).json({ message: 'Replacement equipment is not available' });
+      if (replacementEquipmentId === rental.equipmentId) return res.status(400).json({ message: 'Replacement must be different from current equipment' });
+
+      const originalEquipmentId = rental.equipmentId;
+      const today = new Date().toISOString().split('T')[0];
+
+      await Promise.all([
+        storage.updateEquipment(originalEquipmentId, { status: 'AVAILABLE' }),
+        storage.updateEquipment(replacementEquipmentId, { status: 'RENTED' }),
+        storage.updateRental(rentalId, { equipmentId: replacementEquipmentId }),
+      ]);
+
+      await storage.createSwap({
+        rentalId,
+        originalEquipmentId,
+        replacementEquipmentId,
+        swapDate: today,
+        reason: reason || null,
+        swappedBy: swappedBy || null,
+        notes: notes || null,
+      });
+
+      res.json({ message: 'Equipment swapped successfully' });
+    } catch (error) {
+      console.error('Swap error:', error);
+      res.status(500).json({ message: 'Failed to swap equipment' });
+    }
+  });
+
+  app.get('/api/rentals/:id/swaps', requireAuth, async (req, res) => {
+    try {
+      const rentalId = parseInt(req.params.id);
+      const swaps = await storage.listSwapsByRental(rentalId);
+      res.json(swaps);
+    } catch (error) {
+      res.status(500).json({ message: 'Failed to fetch swap history' });
+    }
+  });
+
+  // ── MAINTENANCE COST REPORT ────────────────────────────────────────────────
+  app.get('/api/reports/maintenance-costs', requireAuth, async (req, res) => {
+    try {
+      const cursor = await getSimulationDate();
+      const cursorStr = cursor.toISOString().split('T')[0];
+
+      const [byEquipment] = await db.execute(sql`
+        SELECT
+          e.id,
+          e.name,
+          e.equipment_id  AS equipmentId,
+          e.category,
+          COUNT(me.id)    AS eventCount,
+          COALESCE(SUM(CAST(me.cost AS DECIMAL(10,2))), 0) AS totalCost,
+          COALESCE(AVG(CAST(me.cost AS DECIMAL(10,2))), 0) AS avgCostPerEvent
+        FROM equipment e
+        LEFT JOIN maintenance_events me ON me.equipment_id = e.id
+        GROUP BY e.id, e.name, e.equipment_id, e.category
+        HAVING eventCount > 0
+        ORDER BY totalCost DESC
+      `);
+
+      const [byCategory] = await db.execute(sql`
+        SELECT
+          e.category,
+          COUNT(me.id) AS eventCount,
+          COALESCE(SUM(CAST(me.cost AS DECIMAL(10,2))), 0) AS totalCost
+        FROM maintenance_events me
+        JOIN equipment e ON e.id = me.equipment_id
+        GROUP BY e.category
+        ORDER BY totalCost DESC
+      `);
+
+      const [byMonth] = await db.execute(sql`
+        SELECT
+          DATE_FORMAT(me.maintenance_date, '%Y-%m') AS month,
+          COUNT(*)  AS eventCount,
+          COALESCE(SUM(CAST(me.cost AS DECIMAL(10,2))), 0) AS totalCost
+        FROM maintenance_events me
+        WHERE me.maintenance_date >= DATE_SUB(${cursorStr}, INTERVAL 12 MONTH)
+          AND me.maintenance_date <= ${cursorStr}
+        GROUP BY month
+        ORDER BY month ASC
+      `);
+
+      const [summaryRows] = await db.execute(sql`
+        SELECT
+          COUNT(*)  AS totalEvents,
+          COALESCE(SUM(CAST(cost AS DECIMAL(10,2))), 0) AS totalCost,
+          COALESCE(AVG(CAST(cost AS DECIMAL(10,2))), 0) AS avgCostPerEvent
+        FROM maintenance_events
+      `);
+
+      res.json({
+        byEquipment: byEquipment as any[],
+        byCategory: byCategory as any[],
+        byMonth: byMonth as any[],
+        summary: (summaryRows as any[])[0] || { totalEvents: 0, totalCost: 0, avgCostPerEvent: 0 },
+      });
+    } catch (error) {
+      console.error('Maintenance cost report error:', error);
+      res.status(500).json({ message: 'Failed to generate maintenance cost report' });
     }
   });
 

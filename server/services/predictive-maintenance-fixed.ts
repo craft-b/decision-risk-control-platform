@@ -33,19 +33,21 @@ export interface RiskPrediction {
 async function callMLService(
   snapshot: Record<string, unknown>
 ): Promise<{
-  equipment_id:       number;
-  failure_probability: number;
-  predicted_failure:  boolean;
-  risk_level:         "LOW" | "MEDIUM" | "HIGH";
-  model_version:      string;
-  top_risk_drivers:   Record<string, number> | string[];
-  recommendation:     string | null;
+  equipment_id:  number;
+  model_version: string;
+  risk_trend:    string;
+  predictions: {
+    "10d": { failure_probability: number; risk_level: "LOW" | "MEDIUM" | "HIGH"; risk_score: number; top_risk_drivers: Record<string, number> };
+    "30d": { failure_probability: number; risk_level: "LOW" | "MEDIUM" | "HIGH"; risk_score: number; top_risk_drivers: Record<string, number> };
+    "60d": { failure_probability: number; risk_level: "LOW" | "MEDIUM" | "HIGH"; risk_score: number; top_risk_drivers: Record<string, number> };
+  };
+  recommendation: string | null;
 }> {
   const controller = new AbortController();
   const timeout    = setTimeout(() => controller.abort(), ML_TIMEOUT_MS);
 
   try {
-    const response = await fetch(`${ML_SERVICE_URL}/predict`, {
+    const response = await fetch(`${ML_SERVICE_URL}/predict/multi-horizon`, {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
       body:    JSON.stringify(snapshot),
@@ -148,23 +150,18 @@ function convertMLResponse(
   result: Awaited<ReturnType<typeof callMLService>>,
   snapshotTs: Date
 ): RiskPrediction {
+  const p30d = result.predictions["30d"];
   return {
     equipmentId:        result.equipment_id,
-    failureProbability: result.failure_probability,
-    riskBand:           result.risk_level,
-    riskScore:          Math.round(result.failure_probability * 100),
-    confidence:         0.85, // FastAPI model confidence — could be added to API response later
-    topDrivers: (() => {
-      const drivers = result.top_risk_drivers;
-      if (Array.isArray(drivers)) {
-        return drivers.map(d => ({ feature: d, impact: 0, description: d }));
-      }
-      return Object.entries(drivers).map(([key, val]) => ({
-        feature:     key,
-        impact:      typeof val === 'number' ? val : Number(val),
-        description: key,
-      }));
-    })(),
+    failureProbability: p30d.failure_probability,
+    riskBand:           p30d.risk_level,
+    riskScore:          Math.round(p30d.failure_probability * 100),
+    confidence:         0.85,
+    topDrivers: Object.entries(p30d.top_risk_drivers || {}).map(([key, val]) => ({
+      feature:     key,
+      impact:      typeof val === 'number' ? val : Number(val),
+      description: key,
+    })),
     snapshotTs,
     modelVersion:  result.model_version,
     recommendation: result.recommendation,
@@ -222,7 +219,7 @@ class PredictiveMaintenanceService {
 
         const result = await callMLService(payload);
         const prediction = convertMLResponse(result, snapshot.snapshotTs);
-        await savePrediction(prediction, result.top_risk_drivers);
+        await savePrediction(prediction, result.predictions["30d"].top_risk_drivers);
 
         console.log(
           `[PM] EQ-${equipmentId} → ${prediction.riskBand} ` +
