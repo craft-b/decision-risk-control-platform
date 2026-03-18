@@ -479,7 +479,7 @@ export default function PredictiveMaintenanceDashboard() {
               No predictions yet. Click <strong>Run Predictions</strong> to generate multi-horizon forecasts.
             </div>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-0.5">
               {sortedResults.map((result) => {
                 const pred = result.predictions?.[selectedHorizon];
                 if (!pred) return null;
@@ -489,15 +489,24 @@ export default function PredictiveMaintenanceDashboard() {
                     key={result.equipmentId}
                     onClick={() => setSelectedResult(result)}
                     className={cn(
-                      "flex items-center justify-between p-4 rounded-lg border cursor-pointer transition-all hover:shadow-sm",
-                      RISK_ROW_COLORS[riskLevel]
+                      "flex items-center justify-between px-3 py-2.5 rounded-md cursor-pointer transition-colors group",
+                      riskLevel === "HIGH"   && "hover:bg-red-50",
+                      riskLevel === "MEDIUM" && "hover:bg-orange-50",
+                      riskLevel === "LOW"    && "hover:bg-green-50",
                     )}
                   >
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium truncate">{result.name}</div>
-                      <div className="text-sm text-muted-foreground">
+                    <div className="min-w-0 mr-3">
+                      <p className={cn(
+                        "text-sm font-medium truncate",
+                        riskLevel === "HIGH"   && "group-hover:text-red-900",
+                        riskLevel === "MEDIUM" && "group-hover:text-orange-900",
+                        riskLevel === "LOW"    && "group-hover:text-green-900",
+                      )}>
+                        {result.name}
+                      </p>
+                      <p className="text-xs text-muted-foreground font-mono">
                         {result.category} · {result.equipmentCode}
-                      </div>
+                      </p>
                     </div>
 
                     <div className="hidden md:flex items-center gap-6 mx-6">
@@ -535,7 +544,7 @@ export default function PredictiveMaintenanceDashboard() {
                       })}
                     </div>
 
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 shrink-0">
                       <TooltipProvider>
                         <Tooltip>
                           <TooltipTrigger asChild>

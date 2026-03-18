@@ -1,6 +1,7 @@
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import { useState, useEffect } from "react";
 import { useCreateMaintenance } from "@/hooks/use-maintenance";
 import { Button } from "@/components/ui/button";
 import {
@@ -109,6 +110,24 @@ export function MaintenanceForm({
     },
   });
 
+  // Use simulation cursor date so maintenance features (days_since_last_maintenance, etc.)
+  // are calculated correctly relative to the simulation timeline, not the real wall clock.
+  const [simDate, setSimDate] = useState(getTodayDate);
+
+  useEffect(() => {
+    fetch('/api/simulate/state', { credentials: 'include' })
+      .then(r => r.ok ? r.json() : null)
+      .then(state => {
+        const d = state?.cursor_date;
+        if (d) {
+          const dateStr = String(d).substring(0, 10);
+          setSimDate(dateStr);
+          form.setValue('maintenanceDate', dateStr);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   const watchedEventSource = form.watch("eventSource") as EventSourceValue;
   const selectedSourceOption = EVENT_SOURCE_OPTIONS.find(o => o.value === watchedEventSource);
 
@@ -153,7 +172,7 @@ export function MaintenanceForm({
               <FormItem>
                 <FormLabel>Maintenance Date</FormLabel>
                 <FormControl>
-                  <Input type="date" {...field} max={getTodayDate()} />
+                  <Input type="date" {...field} max={simDate} />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -299,7 +318,7 @@ export function MaintenanceForm({
             <FormItem>
               <FormLabel>Next Service Due (Optional)</FormLabel>
               <FormControl>
-                <Input type="date" {...field} min={getTodayDate()} />
+                <Input type="date" {...field} min={simDate} />
               </FormControl>
               <FormDescription>
                 Recommended next maintenance date

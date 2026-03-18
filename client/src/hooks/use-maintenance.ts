@@ -55,6 +55,55 @@ export function useMaintenanceDueSoon() {
   });
 }
 
+export function useUpdateMaintenance() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: async ({ id, data }: { id: number; data: any }) => {
+      const res = await fetch(`/api/maintenance/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: 'Failed to update maintenance event' }));
+        throw new Error(err.message);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['maintenance'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/maintenance/due-soon'] });
+      toast({ title: 'Maintenance updated' });
+    },
+  });
+}
+
+export function useDeleteMaintenance() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: async (id: number) => {
+      const res = await fetch(`/api/maintenance/${id}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: 'Failed to delete maintenance event' }));
+        throw new Error(err.message);
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['maintenance'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/maintenance/due-soon'] });
+      toast({ title: 'Maintenance event deleted' });
+    },
+  });
+}
+
 export function useCreateMaintenance() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -75,22 +124,30 @@ export function useCreateMaintenance() {
       return api.maintenance.create.responses[201].parse(await res.json());
     },
     onSuccess: (_, variables) => {
+      // Immediately refresh the maintenance log, equipment list, and due-soon
       queryClient.invalidateQueries({ queryKey: ['maintenance'] });
       queryClient.invalidateQueries({ queryKey: ['risk-scores'] });
       queryClient.invalidateQueries({ queryKey: [api.equipment.list.path] });
-      // Invalidate multi-horizon predictions so dashboard reflects new maintenance
-      queryClient.invalidateQueries({
-        queryKey: ["/api/risk-score/multi-horizon/latest"]
-      });
-      // Invalidate projection cache for this specific unit
-      queryClient.invalidateQueries({
-        queryKey: ["/api/equipment/:id/projection", variables.equipmentId]
-      });
-      // Delayed re-invalidation — the ML rescore runs async on the server via setImmediate
-      // after the 201 is sent. Give it 3s to complete, then pull fresh predictions.
-      setTimeout(() => {
+      queryClient.invalidateQueries({ queryKey: ['/api/maintenance/due-soon'] });
+
+      // Trigger an explicit ML rescore for this equipment so predictions reflect
+      // the new maintenance event (days_since_last_maintenance resets → lower risk).
+      // Invalidate prediction caches only after the rescore is stored in DB.
+      fetch('/api/risk-score/multi-horizon/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ equipmentIds: [variables.equipmentId] }),
+      }).then(() => {
         queryClient.invalidateQueries({ queryKey: ["/api/risk-score/multi-horizon/latest"] });
-      }, 3000);
+        queryClient.invalidateQueries({
+          queryKey: ["/api/equipment/:id/projection", variables.equipmentId],
+        });
+      }).catch(() => {
+        // ML service offline — still refresh so stale predictions are cleared
+        queryClient.invalidateQueries({ queryKey: ["/api/risk-score/multi-horizon/latest"] });
+      });
+
       toast({
         title: "Maintenance logged",
         description: "Risk scores will update shortly."

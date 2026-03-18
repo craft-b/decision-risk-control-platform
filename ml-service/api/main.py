@@ -166,6 +166,7 @@ async def multi_horizon_model_info():
             "30d": {"HIGH": 0.60, "MEDIUM": 0.30},
             "60d": {"HIGH": 0.60, "MEDIUM": 0.30},
         },
+        "monotonicity": "enforced — p(fail≤10d) ≤ p(fail≤30d) ≤ p(fail≤60d)",
     }
 
 
