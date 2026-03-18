@@ -1,8 +1,17 @@
+import { useState } from "react";
 import { useEquipment } from "@/hooks/use-equipment";
 import { useRentals } from "@/hooks/use-rentals";
 import { useMaintenanceDueSoon } from "@/hooks/use-maintenance";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { MaintenanceForm } from "@/components/maintenance-form";
 import {
   BarChart,
   Bar,
@@ -25,8 +34,12 @@ export default function Dashboard() {
   const { data: equipment } = useEquipment();
   const { data: rentals } = useRentals();
   const { data: dueSoonList } = useMaintenanceDueSoon();
-  const overdueCount = dueSoonList?.filter(d => Number(d.daysUntilDue) < 0).length ?? 0;
-  const dueSoonCount = dueSoonList?.filter(d => Number(d.daysUntilDue) >= 0).length ?? 0;
+  const overdueItems  = dueSoonList?.filter(d => Number(d.daysUntilDue) < 0)  ?? [];
+  const dueSoonItems  = dueSoonList?.filter(d => Number(d.daysUntilDue) >= 0) ?? [];
+  const overdueCount  = overdueItems.length;
+  const dueSoonCount  = dueSoonItems.length;
+
+  const [schedulingEquip, setSchedulingEquip] = useState<{ id: number; name: string } | null>(null);
 
   const today = new Date();
   const weekStart = startOfWeek(today, { weekStartsOn: 0 });
@@ -250,8 +263,14 @@ export default function Dashboard() {
                   <XAxis
                     dataKey="month"
                     stroke="#888888"
-                    fontSize={12}
+                    fontSize={11}
                     tickLine={false}
+                    tickFormatter={(v: string) => {
+                      try {
+                        const [y, m] = v.split('-').map(Number);
+                        return format(new Date(y, m - 1, 1), "MMM ''yy");
+                      } catch { return v; }
+                    }}
                   />
                   <YAxis
                     stroke="#888888"
@@ -260,12 +279,14 @@ export default function Dashboard() {
                     tickFormatter={(value) => `$${value / 1000}k`}
                   />
                   <Tooltip
-                    contentStyle={{
-                      borderRadius: '8px',
-                      border: 'none',
-                      boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
-                    }}
+                    contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
                     formatter={(value) => [`$${Number(value).toLocaleString()}`, 'Revenue']}
+                    labelFormatter={(label: string) => {
+                      try {
+                        const [y, m] = label.split('-').map(Number);
+                        return format(new Date(y, m - 1, 1), 'MMMM yyyy');
+                      } catch { return label; }
+                    }}
                   />
                   <Line
                     type="monotone"
@@ -336,51 +357,86 @@ export default function Dashboard() {
       </Card>
 
       {/* Maintenance Alerts */}
-      {(dueSoonList?.length ?? 0) > 0 && (
-        <Card className="border-l-4 border-l-orange-500 shadow-sm">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+      {(overdueCount > 0 || dueSoonCount > 0) && (
+        <Card className="shadow-sm">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
             <CardTitle className="text-base font-semibold flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-orange-500" />
+              <AlertTriangle className="h-4 w-4 text-orange-500" />
               Maintenance Alerts
             </CardTitle>
-            <Link href="/maintenance">
-              <span className="text-xs text-blue-600 hover:underline cursor-pointer">View log →</span>
+            <Link href="/equipment">
+              <span className="text-xs text-muted-foreground hover:text-foreground cursor-pointer transition-colors">
+                View equipment →
+              </span>
             </Link>
           </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              {overdueCount > 0 && (
-                <div className="flex items-center justify-between p-2 rounded-lg bg-red-50 border border-red-200">
-                  <span className="text-sm font-medium text-red-800">{overdueCount} unit{overdueCount !== 1 ? 's' : ''} overdue for service</span>
-                  <Badge variant="outline" className="bg-red-100 text-red-800 border-red-300">Overdue</Badge>
+          <CardContent className="space-y-5">
+
+            {/* Overdue section */}
+            {overdueCount > 0 && (
+              <div>
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-red-600">
+                    <span className="inline-block w-2 h-2 rounded-full bg-red-500" />
+                    Overdue
+                    <span className="ml-1 tabular-nums">({overdueCount})</span>
+                  </span>
+                  <div className="flex-1 h-px bg-red-200" />
                 </div>
-              )}
-              {dueSoonCount > 0 && (
-                <div className="flex items-center justify-between p-2 rounded-lg bg-orange-50 border border-orange-200">
-                  <span className="text-sm font-medium text-orange-800">{dueSoonCount} unit{dueSoonCount !== 1 ? 's' : ''} due within 30 days</span>
-                  <Badge variant="outline" className="bg-orange-100 text-orange-800 border-orange-300">Due Soon</Badge>
-                </div>
-              )}
-              <div className="space-y-1 pt-1">
-                {dueSoonList?.slice(0, 5).map((item) => {
-                  const days = Number(item.daysUntilDue);
-                  return (
-                    <div key={item.id} className="flex items-center justify-between text-sm py-1 border-b last:border-0">
-                      <div>
-                        <span className="font-medium">{item.name}</span>
-                        <span className="text-muted-foreground ml-2 text-xs font-mono">{item.equipmentId}</span>
+                <div className="space-y-0.5">
+                  {overdueItems.map((item) => (
+                    <button
+                      key={item.id}
+                      onClick={() => setSchedulingEquip({ id: item.id, name: item.name })}
+                      className="w-full flex items-center justify-between px-3 py-2 rounded-md text-left hover:bg-red-50 transition-colors group"
+                    >
+                      <div className="min-w-0 mr-3">
+                        <p className="text-sm font-medium text-foreground group-hover:text-red-900 truncate">{item.name}</p>
+                        <p className="text-xs text-muted-foreground font-mono">{item.equipmentId}</p>
                       </div>
-                      <span className={cn(
-                        "text-xs font-medium",
-                        days < 0 ? "text-red-600" : days <= 7 ? "text-orange-600" : "text-yellow-600"
-                      )}>
-                        {days < 0 ? `${Math.abs(days)}d overdue` : days === 0 ? 'Due today' : `${days}d`}
-                      </span>
-                    </div>
-                  );
-                })}
+                      <Badge className="shrink-0 bg-red-100 text-red-700 border-red-200 hover:bg-red-100 text-xs font-medium">
+                        {Math.abs(Number(item.daysUntilDue))}d overdue
+                      </Badge>
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
+
+            {/* Due Soon section */}
+            {dueSoonCount > 0 && (
+              <div>
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-orange-600">
+                    <span className="inline-block w-2 h-2 rounded-full bg-orange-500" />
+                    Due Soon
+                    <span className="ml-1 tabular-nums">({dueSoonCount})</span>
+                  </span>
+                  <div className="flex-1 h-px bg-orange-200" />
+                </div>
+                <div className="space-y-0.5">
+                  {dueSoonItems.map((item) => {
+                    const days = Number(item.daysUntilDue);
+                    return (
+                      <button
+                        key={item.id}
+                        onClick={() => setSchedulingEquip({ id: item.id, name: item.name })}
+                        className="w-full flex items-center justify-between px-3 py-2 rounded-md text-left hover:bg-orange-50 transition-colors group"
+                      >
+                        <div className="min-w-0 mr-3">
+                          <p className="text-sm font-medium text-foreground group-hover:text-orange-900 truncate">{item.name}</p>
+                          <p className="text-xs text-muted-foreground font-mono">{item.equipmentId}</p>
+                        </div>
+                        <Badge className="shrink-0 bg-orange-100 text-orange-700 border-orange-200 hover:bg-orange-100 text-xs font-medium">
+                          {days === 0 ? 'Today' : `${days}d`}
+                        </Badge>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
           </CardContent>
         </Card>
       )}
@@ -490,6 +546,25 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       </div>
+      {/* Schedule Maintenance Dialog (triggered from Maintenance Alerts card) */}
+      <Dialog open={!!schedulingEquip} onOpenChange={(open) => !open && setSchedulingEquip(null)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Log Maintenance Event</DialogTitle>
+            <DialogDescription>
+              {schedulingEquip ? `Schedule maintenance for ${schedulingEquip.name}` : 'Schedule maintenance'}
+            </DialogDescription>
+          </DialogHeader>
+          {schedulingEquip && (
+            <MaintenanceForm
+              equipmentId={schedulingEquip.id}
+              equipmentName={schedulingEquip.name}
+              defaultEventSource="SCHEDULED_PM"
+              onSuccess={() => setSchedulingEquip(null)}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

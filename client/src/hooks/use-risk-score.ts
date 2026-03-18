@@ -56,6 +56,7 @@ export function useLatestMultiHorizonPredictions() {
     queryFn: async () => {
       const res = await fetch("/api/risk-score/multi-horizon/latest", {
         credentials: "include",
+        cache: "no-store",
       });
       if (!res.ok) throw new Error("Failed to fetch latest predictions");
       return res.json();

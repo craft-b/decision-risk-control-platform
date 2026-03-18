@@ -586,6 +586,21 @@ export async function registerRoutes(
   app.post('/api/maintenance', requireAdmin, async (req, res) => {
     try {
       const input = req.body;
+
+      // Auto-calculate nextDueDate from simulation cursor when not provided
+      if (!input.nextDueDate) {
+        const simDate = await getSimulationDate();
+        const intervals: Record<string, number> = {
+          MAJOR_SERVICE: 180,
+          MINOR_SERVICE: 90,
+          INSPECTION: 60,
+        };
+        const days = intervals[input.maintenanceType] ?? 90;
+        const base = new Date(input.maintenanceDate || simDate);
+        base.setDate(base.getDate() + days);
+        input.nextDueDate = base.toISOString().split('T')[0];
+      }
+
       const event = await storage.createMaintenanceEvent(input);
 
       // Non-blocking multi-horizon rescore — fires after response is sent
@@ -663,6 +678,28 @@ export async function registerRoutes(
     } catch (error) {
       console.error('Create maintenance error:', error);
       res.status(400).json({ message: (error instanceof Error ? error.message : String(error)) || 'Failed to create maintenance event' });
+    }
+  });
+
+  app.put('/api/maintenance/:id', requireAdmin, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ message: 'Invalid maintenance event ID' });
+      const updated = await storage.updateMaintenanceEvent(id, req.body);
+      res.json(updated);
+    } catch (error) {
+      res.status(400).json({ message: (error instanceof Error ? error.message : String(error)) || 'Failed to update maintenance event' });
+    }
+  });
+
+  app.delete('/api/maintenance/:id', requireAdmin, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ message: 'Invalid maintenance event ID' });
+      await storage.deleteMaintenanceEvent(id);
+      res.status(204).send();
+    } catch (error) {
+      res.status(400).json({ message: (error instanceof Error ? error.message : String(error)) || 'Failed to delete maintenance event' });
     }
   });
 
@@ -799,7 +836,12 @@ export async function registerRoutes(
 
   app.get('/api/risk-score/multi-horizon/latest', requireAuth, async (req, res) => {
     try {
-      const latest = await db.execute(sql`
+      const [stateRows] = await db.execute(sql`SELECT cursor_date FROM simulation_state WHERE id = 1`) as any;
+      const cursorStr: string = stateRows[0]?.cursor_date
+        ? String(stateRows[0].cursor_date).substring(0, 10)
+        : new Date().toISOString().split('T')[0];
+
+      const [predRows] = await db.execute(sql`
         SELECT efp.*, e.name, e.equipment_id as equipment_code, e.category, e.status
         FROM equipment_failure_predictions efp
         JOIN equipment e ON e.id = efp.equipment_id
@@ -807,8 +849,71 @@ export async function registerRoutes(
           SELECT MAX(id) FROM equipment_failure_predictions GROUP BY equipment_id
         )
         ORDER BY efp.prob_30d DESC
-      `);
-      res.json((latest as any)[0] || []);
+      `) as any;
+
+      const rows: any[] = predRows || [];
+      if (rows.length === 0) { res.json([]); return; }
+
+      // Get the BEST maintenance type logged by a user in the last 24h per equipment,
+      // within 30 sim-days of the cursor.  Using the best type (not just most recent)
+      // prevents oscillation when someone logs MINOR after MAJOR — the stronger
+      // MAJOR discount sticks for the rest of the session window.
+      const [maintRows] = await db.execute(sql`
+        SELECT
+          equipment_id,
+          CASE MAX(CASE maintenance_type
+                WHEN 'MAJOR_SERVICE' THEN 3
+                WHEN 'MINOR_SERVICE' THEN 2
+                ELSE 1
+               END)
+            WHEN 3 THEN 'MAJOR_SERVICE'
+            WHEN 2 THEN 'MINOR_SERVICE'
+            ELSE 'INSPECTION'
+          END AS best_type,
+          MIN(DATEDIFF(${cursorStr}, maintenance_date)) AS days_since
+        FROM maintenance_events
+        WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+          AND DATEDIFF(${cursorStr}, maintenance_date) BETWEEN 0 AND 30
+        GROUP BY equipment_id
+      `) as any;
+
+      const maintMap = new Map<number, { type: string; days: number }>();
+      for (const m of (maintRows || [])) {
+        maintMap.set(Number(m.equipment_id), { type: m.best_type, days: Number(m.days_since) });
+      }
+
+      // Post-maintenance discount: reduce displayed probability to reflect that
+      // the maintenance event addresses neglect/scheduling risk.  Physical wear
+      // factors (age, hours) are unchanged, so we apply a partial reduction only.
+      const HIGH = 0.60, MED = 0.30;
+      const FACTORS: Record<string, number> = {
+        MAJOR_SERVICE: 0.75,
+        MINOR_SERVICE: 0.87,
+        INSPECTION:    0.95,
+      };
+      const band = (p: number) => p >= HIGH ? 'HIGH' : p >= MED ? 'MEDIUM' : 'LOW';
+
+      const result = rows.map((row: any) => {
+        const maint = maintMap.get(Number(row.equipment_id));
+        if (!maint) return { ...row, days_since_last_maint: null };
+
+        const f = FACTORS[maint.type] ?? 1.0;
+        const p30 = Math.max(0, parseFloat(row.prob_30d) * f);
+        const p10 = Math.max(0, parseFloat(row.prob_10d) * f);
+        const p60 = Math.max(0, parseFloat(row.prob_60d) * f);
+        return {
+          ...row,
+          prob_30d:       p30.toFixed(4),
+          prob_10d:       p10.toFixed(4),
+          prob_60d:       p60.toFixed(4),
+          risk_level_30d: band(p30),
+          risk_level_10d: band(p10),
+          risk_level_60d: band(p60),
+          days_since_last_maint: maint.days,
+        };
+      });
+
+      res.json(result);
     } catch (error) {
       res.status(500).json({ message: 'Failed to fetch latest predictions' });
     }
@@ -1287,16 +1392,58 @@ export async function registerRoutes(
 
   app.get('/api/dashboard/monthly-trend', requireAuth, async (req, res) => {
     try {
-      const result = await db.execute(sql`
-        SELECT DATE_FORMAT(r.return_date, '%Y-%m') AS month,
-          SUM((DATEDIFF(r.return_date, r.receive_date) + 1) * CAST(e.daily_rate AS DECIMAL(10,2))) AS revenue
+      const cursor = await getSimulationDate();
+      const cursorStr = cursor.toISOString().split('T')[0];
+
+      // Build 12 calendar-month buckets ending at cursor month (oldest → newest)
+      const months: string[] = [];
+      const buckets: Record<string, number> = {};
+      for (let i = 11; i >= 0; i--) {
+        const d = new Date(Date.UTC(cursor.getFullYear(), cursor.getMonth() - i, 1));
+        const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+        months.push(key);
+        buckets[key] = 0;
+      }
+      const windowStart = months[0] + '-01';
+
+      // Fetch all rentals that overlap the 12-month window (accrual — same logic as daily chart)
+      const [rows] = await db.execute(sql`
+        SELECT r.receive_date, r.return_date, CAST(e.daily_rate AS DECIMAL(10,2)) AS daily_rate
         FROM rentals r JOIN equipment e ON e.id = r.equipment_id
-        WHERE r.status = 'COMPLETED' AND r.receive_date IS NOT NULL AND r.return_date IS NOT NULL
-          AND r.return_date >= r.receive_date
-          AND r.return_date >= DATE_SUB((SELECT MAX(return_date) FROM rentals WHERE status = 'COMPLETED'), INTERVAL 12 MONTH)
-        GROUP BY DATE_FORMAT(r.return_date, '%Y-%m') ORDER BY month ASC
-      `);
-      res.json((result as unknown as any[][])[0].map((row: any) => ({ month: row.month, revenue: Number(row.revenue || 0) })));
+        WHERE r.receive_date IS NOT NULL
+          AND r.receive_date <= ${cursorStr}
+          AND (r.return_date IS NULL OR r.return_date >= ${windowStart})
+          AND r.status IN ('ACTIVE', 'COMPLETED')
+      `) as any;
+
+      for (const row of (rows as any[])) {
+        const rate = Number(row.daily_rate || 0);
+        if (!rate) continue;
+        const receiveStr: string = row.receive_date instanceof Date
+          ? row.receive_date.toISOString().split('T')[0]
+          : String(row.receive_date).substring(0, 10);
+        const returnStr: string = row.return_date
+          ? (row.return_date instanceof Date ? row.return_date.toISOString().split('T')[0] : String(row.return_date).substring(0, 10))
+          : cursorStr;
+
+        for (const monthKey of months) {
+          const [y, m] = monthKey.split('-').map(Number);
+          // First and last day of this calendar month (UTC)
+          const monthStart = `${y}-${String(m).padStart(2, '0')}-01`;
+          const monthEndDate = new Date(Date.UTC(y, m, 0)); // day 0 of next month = last day of this month
+          const monthEnd = monthEndDate.toISOString().split('T')[0];
+
+          const overlapStart = receiveStr > monthStart ? receiveStr : monthStart;
+          const overlapEnd   = returnStr  < monthEnd   ? returnStr  : monthEnd;
+          if (overlapStart <= overlapEnd) {
+            const days =
+              Math.round((new Date(overlapEnd + 'T00:00:00Z').getTime() - new Date(overlapStart + 'T00:00:00Z').getTime()) / 86400000) + 1;
+            buckets[monthKey] += rate * days;
+          }
+        }
+      }
+
+      res.json(months.map(m => ({ month: m, revenue: Math.round(buckets[m]) })));
     } catch (e: any) {
       res.status(500).json({ message: 'Failed to fetch monthly trend', error: e.message });
     }
@@ -1326,6 +1473,7 @@ export async function registerRoutes(
   // ── MAINTENANCE DUE SOON ──────────────────────────────────────────────────
   app.get('/api/maintenance/due-soon', requireAuth, async (req, res) => {
     try {
+      const cursorDate = await getSimulationDate();
       const [rows] = await db.execute(sql`
         SELECT
           e.id,
@@ -1334,14 +1482,14 @@ export async function registerRoutes(
           e.category,
           e.status,
           me.next_due_date AS nextDueDate,
-          DATEDIFF(me.next_due_date, CURDATE()) AS daysUntilDue
+          DATEDIFF(me.next_due_date, ${cursorDate}) AS daysUntilDue
         FROM equipment e
         JOIN maintenance_events me ON me.id = (
           SELECT id FROM maintenance_events m2
           WHERE m2.equipment_id = e.id AND m2.next_due_date IS NOT NULL
           ORDER BY m2.id DESC LIMIT 1
         )
-        WHERE me.next_due_date <= DATE_ADD(CURDATE(), INTERVAL 30 DAY)
+        WHERE me.next_due_date <= DATE_ADD(${cursorDate}, INTERVAL 30 DAY)
         ORDER BY me.next_due_date ASC
       `);
       res.json((rows as any[]) || []);

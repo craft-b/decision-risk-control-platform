@@ -63,6 +63,8 @@ export interface IStorage {
   getLatestRiskScore(equipmentId: number): Promise<EquipmentRiskScore | undefined>;
 
   createMaintenanceEvent(event: InsertMaintenanceEvent): Promise<MaintenanceEvent>;
+  updateMaintenanceEvent(id: number, data: Partial<InsertMaintenanceEvent>): Promise<MaintenanceEvent>;
+  deleteMaintenanceEvent(id: number): Promise<void>;
   getMaintenanceHistory(equipmentId: number): Promise<MaintenanceEvent[]>;
   getMaintenanceConfig(category: string): Promise<MaintenanceConfig | undefined>;
 
@@ -340,6 +342,16 @@ export class DatabaseStorage implements IStorage {
     const result = await db.insert(maintenanceEvents).values(eventData);
     const [newEvent] = await db.select().from(maintenanceEvents).where(eq(maintenanceEvents.id, result[0].insertId));
     return newEvent!;
+  }
+
+  async updateMaintenanceEvent(id: number, data: Partial<InsertMaintenanceEvent>): Promise<MaintenanceEvent> {
+    await db.update(maintenanceEvents).set(data).where(eq(maintenanceEvents.id, id));
+    const [updated] = await db.select().from(maintenanceEvents).where(eq(maintenanceEvents.id, id));
+    return updated!;
+  }
+
+  async deleteMaintenanceEvent(id: number): Promise<void> {
+    await db.delete(maintenanceEvents).where(eq(maintenanceEvents.id, id));
   }
 
   async getMaintenanceHistory(equipmentId: number): Promise<MaintenanceEvent[]> {

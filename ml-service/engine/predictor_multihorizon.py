@@ -13,12 +13,13 @@ from typing import Optional
 REGISTRY = Path(__file__).parent.parent / "registry"
 HORIZONS = [10, 30, 60]
 
-# Risk level thresholds per horizon
-# 10d uses lower threshold — short-horizon model is more conservative
+# Uniform thresholds across all horizons.
+# Monotonic enforcement (p10 ≤ p30 ≤ p60) guarantees risk levels are also
+# non-decreasing — no separate per-horizon compensation needed.
 RISK_THRESHOLDS = {
     10: {"HIGH": 0.60, "MEDIUM": 0.30},
-    30: {"HIGH": 0.65, "MEDIUM": 0.35},
-    60: {"HIGH": 0.70, "MEDIUM": 0.40},
+    30: {"HIGH": 0.60, "MEDIUM": 0.30},
+    60: {"HIGH": 0.60, "MEDIUM": 0.30},
 }
 
 # Confidence labels for UI display
@@ -113,11 +114,33 @@ class MultiHorizonPredictor:
         df = df.reindex(columns=self.expected_features, fill_value=0)
         df = df.apply(pd.to_numeric, errors="coerce").fillna(0)
 
-        predictions = {}
+        # ── Step 1: raw probabilities from each independent model ────────────────
+        raw = {}
         for h in HORIZONS:
             proba = self.models[h].predict_proba(df)[0]
-            failure_prob = float(proba[1])  # P(failure) — binary model
+            raw[h] = float(proba[1])
 
+        # ── Step 2: enforce isotonic monotonicity ─────────────────────────────
+        # Labels are cumulative: will_fail_Xd = "fails within X days".
+        # Therefore P(fail≤10d) ≤ P(fail≤30d) ≤ P(fail≤60d) is a mathematical
+        # identity — the 30d window strictly contains the 10d window.
+        # Independent calibrated classifiers violate this; fix it here.
+        p10 = raw[10]
+        p30 = max(raw[30], p10)   # 30d ⊇ 10d
+        p60 = max(raw[60], p30)   # 60d ⊇ 30d
+        enforced = {10: p10, 30: p30, 60: p60}
+
+        if raw[30] < p10 or raw[60] < p30:
+            print(
+                f"[MH] EQ-{snapshot['equipment_id']} monotonicity enforced: "
+                f"raw=({raw[10]:.3f},{raw[30]:.3f},{raw[60]:.3f}) → "
+                f"({p10:.3f},{p30:.3f},{p60:.3f})"
+            )
+
+        # ── Step 3: build predictions dict from enforced probabilities ────────
+        predictions = {}
+        for h in HORIZONS:
+            failure_prob = enforced[h]
             thresholds = RISK_THRESHOLDS[h]
             if failure_prob >= thresholds["HIGH"]:
                 risk_level = "HIGH"
@@ -136,16 +159,14 @@ class MultiHorizonPredictor:
 
             print(f"[MH] EQ-{snapshot['equipment_id']} {h}d: P={failure_prob:.3f} → {risk_level}")
 
-                            
-        # Trend arrow: is risk increasing across horizons?
-        p10 = predictions["10d"]["failure_probability"]
-        p30 = predictions["30d"]["failure_probability"]
-        p60 = predictions["60d"]["failure_probability"]
-
-        if p60 > p30 > p10 + 0.05:
+        # ── Step 4: trend — how steeply does risk escalate without intervention?
+        # DECREASING is impossible for cumulative probabilities (p60 ≥ p10 always).
+        # INCREASING = notable escalation across the horizon span (equipment is
+        #              deteriorating — risk will be materially worse if untreated).
+        # STABLE     = flat curve (already high everywhere, or genuinely low risk).
+        delta = p60 - p10
+        if delta > 0.10:
             trend = "INCREASING"
-        elif p60 < p30 < p10 - 0.05:
-            trend = "DECREASING"
         else:
             trend = "STABLE"
 

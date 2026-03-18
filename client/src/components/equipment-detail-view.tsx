@@ -39,6 +39,7 @@ function RiskCard({ equipmentId, prediction }: { equipmentId: number; prediction
     "INSPECTION" | "MINOR_SERVICE" | "MAJOR_SERVICE"
   >("INSPECTION");
   const [description, setDescription] = useState("");
+  const [cost, setCost] = useState("");
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -61,6 +62,7 @@ function RiskCard({ equipmentId, prediction }: { equipmentId: number; prediction
         ? prediction.recommendation.slice(0, 200)
         : `Scheduled based on ${riskBand ?? 'current'} risk assessment`
     );
+    setCost("");
     setIsScheduling(true);
   };
 
@@ -79,6 +81,7 @@ function RiskCard({ equipmentId, prediction }: { equipmentId: number; prediction
           description,
           performedBy: 'Scheduled via Risk Assessment',
           eventSource: 'PREDICTIVE_INTERVENTION',
+          cost: cost || null,
         }),
       });
       if (!maintRes.ok) throw new Error('Failed to create maintenance entry');
@@ -106,9 +109,10 @@ function RiskCard({ equipmentId, prediction }: { equipmentId: number; prediction
       }
 
       await queryClient.invalidateQueries({ queryKey: ['/api/equipment'] });
-      await queryClient.invalidateQueries({ queryKey: ['/api/maintenance'] });
+      await queryClient.invalidateQueries({ queryKey: ['maintenance'] });
       await queryClient.invalidateQueries({ queryKey: ['/api/risk-score/multi-horizon/latest'] });
       await queryClient.invalidateQueries({ queryKey: ['/api/predictive-maintenance/equipment-with-risk'] });
+      await queryClient.invalidateQueries({ queryKey: ['/api/maintenance/due-soon'] });
 
       toast({
         title: 'Maintenance Scheduled',
@@ -274,6 +278,25 @@ function RiskCard({ equipmentId, prediction }: { equipmentId: number; prediction
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
               />
+            </div>
+
+            <div className="flex items-center gap-3">
+              <div className="relative flex-1">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm pointer-events-none">$</span>
+                <Input
+                  className="pl-6"
+                  type="number"
+                  step="0.01"
+                  placeholder="Cost (optional)"
+                  value={cost}
+                  onChange={(e) => setCost(e.target.value)}
+                />
+              </div>
+              {cost && (
+                <span className="text-xs text-muted-foreground whitespace-nowrap">
+                  logged to record
+                </span>
+              )}
             </div>
 
             <p className="text-xs text-muted-foreground">
