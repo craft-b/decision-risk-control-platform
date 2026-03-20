@@ -6,6 +6,9 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell
 } from "recharts";
 import { DollarSign, Wrench, TrendingUp, BarChart2 } from "lucide-react";
+import { useTable } from "@/hooks/use-table";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { TablePagination } from "@/components/ui/table-pagination";
 
 function useMaintCostReport() {
   return useQuery({
@@ -28,6 +31,19 @@ const CATEGORY_COLORS = ['#3b82f6', '#ef4444', '#22c55e', '#f59e0b', '#8b5cf6', 
 
 export default function MaintenanceCostReport() {
   const { data, isLoading } = useMaintCostReport();
+
+  const { sort, onSort, page, setPage, rows: pagedEquipment, totalPages, total } = useTable(
+    data?.byEquipment,
+    {
+      defaultSortKey: "totalCost",
+      defaultDir: "desc",
+      getters: {
+        totalCost: (r) => Number(r.totalCost),
+        avgCostPerEvent: (r) => Number(r.avgCostPerEvent),
+        eventCount: (r) => Number(r.eventCount),
+      },
+    }
+  );
 
   const summary = data?.summary;
   const byMonth = (data?.byMonth ?? []).map((d: any) => ({
@@ -177,15 +193,15 @@ export default function MaintenanceCostReport() {
         <CardHeader>
           <CardTitle>All Equipment — Maintenance Spend</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-0">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Equipment</TableHead>
-                <TableHead>Category</TableHead>
-                <TableHead className="text-right">Events</TableHead>
-                <TableHead className="text-right">Total Cost</TableHead>
-                <TableHead className="text-right">Avg / Event</TableHead>
+                <SortableTableHead sortKey="name" sort={sort} onSort={onSort}>Equipment</SortableTableHead>
+                <SortableTableHead sortKey="category" sort={sort} onSort={onSort}>Category</SortableTableHead>
+                <SortableTableHead sortKey="eventCount" sort={sort} onSort={onSort} align="right">Events</SortableTableHead>
+                <SortableTableHead sortKey="totalCost" sort={sort} onSort={onSort} align="right">Total Cost</SortableTableHead>
+                <SortableTableHead sortKey="avgCostPerEvent" sort={sort} onSort={onSort} align="right">Avg / Event</SortableTableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -193,7 +209,7 @@ export default function MaintenanceCostReport() {
                 <TableRow>
                   <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">Loading...</TableCell>
                 </TableRow>
-              ) : (data?.byEquipment ?? []).map((item: any) => (
+              ) : pagedEquipment.map((item: any) => (
                 <TableRow key={item.id}>
                   <TableCell>
                     <div className="font-medium">{item.name}</div>
@@ -213,6 +229,7 @@ export default function MaintenanceCostReport() {
               ))}
             </TableBody>
           </Table>
+          <TablePagination page={page} totalPages={totalPages} total={total} onPage={setPage} />
         </CardContent>
       </Card>
     </div>

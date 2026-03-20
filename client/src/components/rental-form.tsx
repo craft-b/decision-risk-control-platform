@@ -1,7 +1,7 @@
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { insertRentalSchema, InsertRental } from "@shared/schema";
-import { useCreateRental, useUpdateRental } from "@/hooks/use-rentals";
+import { useCreateRental, useUpdateRental, useNextPoNumber } from "@/hooks/use-rentals";
 import { useEquipment } from "@/hooks/use-equipment";
 import { useJobSites } from "@/hooks/use-jobsites";
 import { useVendors } from "@/hooks/use-vendors";
@@ -48,12 +48,17 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
   const isEditing = !!initialData?.id;
   const createMutation = useCreateRental();
   const updateMutation = useUpdateRental();
+  const { data: nextPo } = useNextPoNumber();
 
   // ── Risk guard state ───────────────────────────────────────────────────────
   const [dispatchConfirmed, setDispatchConfirmed] = useState(false);
 
   // Fetch data for dropdowns
-  const { data: equipmentList, isLoading: isLoadingEquipment } = useEquipment({ status: "AVAILABLE" });
+  // Edit mode: fetch all equipment so the currently-RENTED piece appears in the selector.
+  // New mode: only AVAILABLE to prevent double-booking.
+  const { data: equipmentList, isLoading: isLoadingEquipment, isError: isEquipmentError } = useEquipment(
+    isEditing ? undefined : { status: "AVAILABLE" }
+  );
   const { data: jobSites, isLoading: isLoadingJobSites } = useJobSites();
   const { data: vendors, isLoading: isLoadingVendors } = useVendors();
 
@@ -80,6 +85,20 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
       notes: "",
     },
   });
+
+  // Use simulation cursor as default receive date so new rentals are consistent
+  // with the simulation timeline, not the real wall clock (~2026 vs ~2032).
+  useEffect(() => {
+    if (!isEditing) {
+      fetch('/api/simulate/state', { credentials: 'include' })
+        .then(r => r.ok ? r.json() : null)
+        .then(state => {
+          const d = state?.cursor_date;
+          if (d) form.setValue('receiveDate', String(d).substring(0, 10));
+        })
+        .catch(() => {});
+    }
+  }, []);
 
   const receiveDate       = form.watch("receiveDate");
   const returnDate        = form.watch("returnDate");
@@ -113,6 +132,13 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
   useEffect(() => {
     setDispatchConfirmed(false);
   }, [watchedEquipmentId]);
+
+  // Auto-populate PO number for new rentals once the server-generated value arrives
+  useEffect(() => {
+    if (!isEditing && nextPo && !form.getValues("poNumber")) {
+      form.setValue("poNumber", nextPo);
+    }
+  }, [nextPo, isEditing]);
 
   useEffect(() => {
     if (receiveDate && returnDate && returnDate < receiveDate) {
@@ -160,7 +186,7 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
   };
 
   const isPending = createMutation.isPending || updateMutation.isPending;
-  const hasAvailableEquipment = equipmentList && equipmentList.length > 0;
+  const hasAvailableEquipment = !isEquipmentError && equipmentList && equipmentList.length > 0;
   const hasJobSites = jobSites && jobSites.length > 0;
 
   // Submit is blocked when equipment is HIGH risk and dispatcher hasn't acknowledged
@@ -180,7 +206,16 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
           </Alert>
         )}
 
-        {!isLoadingEquipment && !hasAvailableEquipment && (
+        {isEquipmentError && (
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>
+              Failed to load equipment list. Please close and reopen the form.
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {!isLoadingEquipment && !isEquipmentError && !hasAvailableEquipment && !isEditing && (
           <Alert>
             <AlertCircle className="h-4 w-4" />
             <AlertDescription>
@@ -364,14 +399,17 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
           name="poNumber"
           render={({ field }) => (
             <FormItem>
-              <FormLabel>PO Number (Optional)</FormLabel>
+              <FormLabel>PO Number</FormLabel>
               <FormControl>
                 <Input
-                  placeholder="PO-12345"
+                  placeholder={nextPo ?? "PO-2032-0001"}
                   {...field}
                   value={field.value ?? ""}
                 />
               </FormControl>
+              <FormDescription className="text-xs">
+                Auto-generated. You may override with a custom PO number.
+              </FormDescription>
               <FormMessage />
             </FormItem>
           )}

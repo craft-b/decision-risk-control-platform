@@ -29,6 +29,8 @@ import {
   Tag,
   Info,
   Wrench,
+  DollarSign,
+  Target,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -54,7 +56,7 @@ import {
   Tooltip as RechartsTooltip,
   ResponsiveContainer,
 } from "recharts";
-import { computeOptimalIntervention } from "@/lib/cost-model";
+import { computeOptimalIntervention, PM_COST_BY_CATEGORY, DEFAULT_PM_COST, FAILURE_DOWNTIME_DAYS } from "@/lib/cost-model";
 import { useTrainModel, useTrainingStatus } from "@/hooks/use-predictive-maintenance";
 import { BrainCircuit, ScrollText } from "lucide-react";
 import { MaintenanceForm } from "@/components/maintenance-form";
@@ -319,6 +321,197 @@ function CostCallout({
   );
 }
 
+// ─── Fleet Cost Summary Card ──────────────────────────────────────────────────
+// Surfaces the decision-theory cost model at fleet level without needing
+// per-equipment projection calls. Uses current prob_60d × failure_cost vs.
+// scheduled PM cost to identify economically justified interventions.
+function FleetCostSummaryCard({
+  results,
+  equipment,
+}: {
+  results: Array<MultiHorizonResult & { name: string; category: string; status: string }>;
+  equipment: any[] | undefined;
+}) {
+  const actionable = results.flatMap((r) => {
+    const pred = r.predictions?.["60d"];
+    if (!pred || pred.risk_level === "LOW") return [];
+    const equip = equipment?.find((e) => e.id === r.equipmentId);
+    const dailyRate = equip?.dailyRate ? Number(equip.dailyRate) : 250;
+    const category  = r.category ?? equip?.category ?? "";
+    const pmCost     = PM_COST_BY_CATEGORY[category] ?? DEFAULT_PM_COST;
+    const failureCost = dailyRate * FAILURE_DOWNTIME_DAYS;
+    const expectedFailureCost = pred.failure_probability * failureCost;
+    if (expectedFailureCost <= pmCost) return [];
+    return [{ name: r.name, savings: Math.round(expectedFailureCost - pmCost), pmCost, risk: pred.risk_level }];
+  });
+
+  const totalSavings = actionable.reduce((s, a) => s + a.savings, 0);
+  const highCount    = actionable.filter((a) => a.risk === "HIGH").length;
+
+  if (actionable.length === 0) {
+    return (
+      <Card className="border-green-200">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <DollarSign className="h-4 w-4 text-green-600" />
+            Cost Model — Intervention Analysis
+          </CardTitle>
+          <CardDescription>Expected failure cost vs. scheduled PM cost (60d horizon)</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center gap-2 text-sm text-green-700">
+            <CheckCircle className="h-4 w-4" />
+            No fleet interventions are economically justified at current risk levels.
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="border-orange-200">
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <DollarSign className="h-4 w-4 text-orange-600" />
+          Cost Model — Intervention Analysis
+        </CardTitle>
+        <CardDescription>
+          Expected failure cost vs. scheduled PM cost · 7-day downtime assumption
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid grid-cols-3 gap-4">
+          <div>
+            <div className="text-2xl font-bold">{actionable.length}</div>
+            <div className="text-xs text-muted-foreground">assets with positive expected savings</div>
+          </div>
+          <div>
+            <div className="text-2xl font-bold text-red-600">{highCount}</div>
+            <div className="text-xs text-muted-foreground">HIGH risk — intervene immediately</div>
+          </div>
+          <div>
+            <div className="text-2xl font-bold text-green-700">${totalSavings.toLocaleString()}</div>
+            <div className="text-xs text-muted-foreground">total estimated savings</div>
+          </div>
+        </div>
+        <div className="space-y-1 max-h-32 overflow-y-auto">
+          {actionable.slice(0, 5).map((a, i) => (
+            <div key={i} className="flex items-center justify-between text-sm py-1 border-b last:border-0">
+              <span className="truncate mr-2">{a.name}</span>
+              <span className={cn(
+                "text-xs font-medium px-2 py-0.5 rounded-full shrink-0",
+                a.risk === "HIGH"   ? "bg-red-100 text-red-700"    : "bg-orange-100 text-orange-700"
+              )}>
+                save ${a.savings.toLocaleString()}
+              </span>
+            </div>
+          ))}
+          {actionable.length > 5 && (
+            <div className="text-xs text-muted-foreground pt-1">
+              +{actionable.length - 5} more assets
+            </div>
+          )}
+        </div>
+        <div className="text-xs text-muted-foreground">
+          Formula: E[failure cost] = P(fail≤60d) × daily_rate × 7d. Intervene when E[failure] &gt; PM cost.
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─── Feedback Loop Card ───────────────────────────────────────────────────────
+// Measures closed-loop model effectiveness: of assets the model flagged HIGH
+// risk, what % resulted in a PREDICTIVE_INTERVENTION maintenance event?
+function FeedbackLoopCard() {
+  const { data, isLoading } = useQuery({
+    queryKey: ["/api/analytics/feedback-loop"],
+    queryFn: async () => {
+      const res = await fetch("/api/analytics/feedback-loop", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch feedback loop metrics");
+      return res.json() as Promise<{
+        totalFlagged: number;
+        actedOn: number;
+        rate: number;
+        totalPredictiveInterventions: number;
+        windowDays: number;
+        lookbackDays: number;
+      }>;
+    },
+    staleTime: 60_000,
+  });
+
+  return (
+    <Card className="border-blue-200">
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Target className="h-4 w-4 text-blue-600" />
+          Prediction Feedback Loop
+        </CardTitle>
+        <CardDescription>
+          Of assets flagged HIGH risk (30d) in the last 90 days, how many resulted in a predictive intervention?
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading...
+          </div>
+        ) : !data || data.totalFlagged === 0 ? (
+          <div className="text-sm text-muted-foreground">
+            No HIGH-risk predictions in the last {data?.lookbackDays ?? 90} days yet.
+            Run predictions and log maintenance events with source "Predictive Intervention" to populate this metric.
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="grid grid-cols-3 gap-4">
+              <div>
+                <div className="text-2xl font-bold">{data.totalFlagged}</div>
+                <div className="text-xs text-muted-foreground">assets flagged HIGH</div>
+              </div>
+              <div>
+                <div className="text-2xl font-bold text-blue-700">{data.actedOn}</div>
+                <div className="text-xs text-muted-foreground">interventions within {data.windowDays}d</div>
+              </div>
+              <div>
+                <div className={cn(
+                  "text-2xl font-bold",
+                  data.rate >= 60 ? "text-green-600" : data.rate >= 30 ? "text-orange-600" : "text-slate-500"
+                )}>
+                  {data.rate}%
+                </div>
+                <div className="text-xs text-muted-foreground">action rate</div>
+              </div>
+            </div>
+
+            {/* Progress bar */}
+            <div className="space-y-1">
+              <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                <div
+                  className={cn(
+                    "h-full rounded-full transition-all",
+                    data.rate >= 60 ? "bg-green-500" : data.rate >= 30 ? "bg-orange-400" : "bg-slate-400"
+                  )}
+                  style={{ width: `${data.rate}%` }}
+                />
+              </div>
+              <div className="flex justify-between text-xs text-muted-foreground">
+                <span>{data.totalPredictiveInterventions} total predictive interventions logged (90d)</span>
+                <span>{data.lookbackDays}-day window</span>
+              </div>
+            </div>
+
+            <div className="text-xs text-muted-foreground">
+              Action rate = assets with a PREDICTIVE_INTERVENTION maintenance event within {data.windowDays} days of first HIGH flag ÷ total HIGH-flagged assets.
+              Target: &gt;50% indicates the model is driving real operational decisions.
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function PredictiveMaintenanceDashboard() {
@@ -566,6 +759,14 @@ export default function PredictiveMaintenanceDashboard() {
           )}
         </CardContent>
       </Card>
+
+      {/* Cost model + feedback loop cards */}
+      {sortedResults.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <FleetCostSummaryCard results={sortedResults} equipment={equipment} />
+          <FeedbackLoopCard />
+        </div>
+      )}
 
       {/* Admin Controls */}
       {isAdmin && (

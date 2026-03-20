@@ -1,4 +1,7 @@
 import { useState } from "react";
+import { useTable } from "@/hooks/use-table";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { TablePagination } from "@/components/ui/table-pagination";
 import { useRentals, useCompleteRental, useDeleteRental, useGenerateInvoice } from "@/hooks/use-rentals";
 import { useAuth } from "@/hooks/use-auth";
 import { SwapEquipmentDialog } from "@/components/swap-equipment-dialog";
@@ -48,6 +51,19 @@ export default function RentalsList() {
 
   const isAdmin = user?.role === 'ADMINISTRATOR';
   const invoiceMutation = useGenerateInvoice();
+
+  const { sort, onSort, page, setPage, rows: pagedRentals, totalPages, total } = useTable(
+    rentals,
+    {
+      defaultSortKey: "createdAt",
+      defaultDir: "desc",
+      getters: {
+        "jobSite": (r) => r.jobSite?.name ?? "",
+        "equipment": (r) => r.equipment?.name ?? "",
+        "receiveDate": (r) => r.receiveDate ? String(r.receiveDate) : "",
+      }
+    }
+  );
 
   const handleGenerateInvoice = (rental: any, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -133,29 +149,30 @@ export default function RentalsList() {
         <Table>
           <TableHeader className="bg-slate-50">
             <TableRow>
-              <TableHead>Job Site / Vendor</TableHead>
-              <TableHead>Equipment</TableHead>
-              <TableHead>Duration</TableHead>
-              <TableHead>Type</TableHead>
-              <TableHead>Status</TableHead>
+              <SortableTableHead sortKey="jobSite" sort={sort} onSort={onSort}>Job Site / Vendor</SortableTableHead>
+              <SortableTableHead sortKey="equipment" sort={sort} onSort={onSort}>Equipment</SortableTableHead>
+              <SortableTableHead sortKey="receiveDate" sort={sort} onSort={onSort}>Duration</SortableTableHead>
+              <SortableTableHead sortKey="poNumber" sort={sort} onSort={onSort}>PO #</SortableTableHead>
+              <SortableTableHead sortKey="buyRent" sort={sort} onSort={onSort}>Type</SortableTableHead>
+              <SortableTableHead sortKey="status" sort={sort} onSort={onSort}>Status</SortableTableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
                <TableRow>
-                 <TableCell colSpan={6} className="text-center py-12 text-muted-foreground">
+                 <TableCell colSpan={7} className="text-center py-12 text-muted-foreground">
                    Loading rentals...
                  </TableCell>
                </TableRow>
             ) : rentals?.length === 0 ? (
                <TableRow>
-                 <TableCell colSpan={6} className="text-center py-12 text-muted-foreground">
+                 <TableCell colSpan={7} className="text-center py-12 text-muted-foreground">
                    No active rentals found.
                  </TableCell>
                </TableRow>
             ) : (
-              rentals?.map((rental) => (
+              pagedRentals.map((rental) => (
                 <TableRow 
                   key={rental.id}
                   className="cursor-pointer hover:bg-slate-50 transition-colors"
@@ -192,6 +209,11 @@ export default function RentalsList() {
                         <span className="text-xs text-muted-foreground">Ongoing</span>
                       )}
                     </div>
+                  </TableCell>
+                  <TableCell>
+                    <span className="text-xs font-mono text-muted-foreground">
+                      {rental.poNumber || <span className="text-slate-400">—</span>}
+                    </span>
                   </TableCell>
                   <TableCell>
                     <Badge variant="outline" className={cn(
@@ -295,6 +317,7 @@ export default function RentalsList() {
             )}
           </TableBody>
         </Table>
+        <TablePagination page={page} totalPages={totalPages} total={total} onPage={setPage} />
       </div>
 
       {/* Rental Detail Sheet */}

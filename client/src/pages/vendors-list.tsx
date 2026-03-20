@@ -1,6 +1,9 @@
 // client/src/pages/VendorsList.tsx
 
 import { useState } from "react";
+import { useTable } from "@/hooks/use-table";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { TablePagination } from "@/components/ui/table-pagination";
 import { useVendors, useDeleteVendor } from "@/hooks/use-vendors";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
@@ -34,6 +37,12 @@ export default function VendorsList() {
   const [deleteId, setDeleteId] = useState<number | null>(null);
 
   const isAdmin = user?.role === 'ADMINISTRATOR';
+
+  const { sort, onSort, page, setPage, rows: pagedVendors, totalPages, total } = useTable(
+    vendors,
+    { defaultSortKey: "name", defaultDir: "asc",
+      getters: { "activeRentals": (v) => v._count?.rentals ?? 0 } }
+  );
 
   const handleDelete = () => {
     if (deleteId) {
@@ -85,11 +94,11 @@ export default function VendorsList() {
         <Table>
           <TableHeader className="bg-slate-50">
             <TableRow>
-              <TableHead>Vendor ID</TableHead>
-              <TableHead>Company Name</TableHead>
-              <TableHead>Location</TableHead>
-              <TableHead>Contact</TableHead>
-              <TableHead>Active Rentals</TableHead>
+              <SortableTableHead sortKey="vendorId" sort={sort} onSort={onSort}>Vendor ID</SortableTableHead>
+              <SortableTableHead sortKey="name" sort={sort} onSort={onSort}>Company Name</SortableTableHead>
+              <SortableTableHead sortKey="address" sort={sort} onSort={onSort}>Location</SortableTableHead>
+              <SortableTableHead sortKey="salesPerson" sort={sort} onSort={onSort}>Contact</SortableTableHead>
+              <SortableTableHead sortKey="activeRentals" sort={sort} onSort={onSort}>Active Rentals</SortableTableHead>
               {isAdmin && <TableHead className="text-right">Actions</TableHead>}
             </TableRow>
           </TableHeader>
@@ -107,7 +116,7 @@ export default function VendorsList() {
                  </TableCell>
                </TableRow>
             ) : (
-              vendors?.map((vendor) => (
+              pagedVendors.map((vendor) => (
                 <TableRow key={vendor.id}>
                   <TableCell>
                     <div className="font-mono text-sm font-medium text-slate-900">
@@ -182,6 +191,7 @@ export default function VendorsList() {
             )}
           </TableBody>
         </Table>
+        <TablePagination page={page} totalPages={totalPages} total={total} onPage={setPage} />
       </div>
 
       {/* Delete Confirmation Dialog */}

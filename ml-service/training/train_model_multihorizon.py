@@ -2,7 +2,48 @@
 # Multi-horizon failure prediction: trains separate models for 10d, 30d, 60d windows.
 # Each model is a calibrated Random Forest binary classifier.
 # Artifacts saved with horizon suffix: rf_10d_vX.Y.pkl, rf_30d_vX.Y.pkl, rf_60d_vX.Y.pkl
+#
+# ── Architecture decision: why three separate models? ─────────────────────────
+#
+# Alternative 1 — Single model, horizon as input feature:
+#   Simpler to train, but forces the model to learn one joint function over
+#   (features, horizon). The failure-probability surface has very different
+#   shapes at 10d vs. 60d (different dominant features, different class
+#   imbalance). A single model either over-smooths these differences or
+#   requires heavy interaction terms that obscure interpretability.
+#
+# Alternative 2 — Survival / Weibull model (e.g. Cox PH, DeepSurv):
+#   Correct statistical framing for time-to-event data. Chosen against because:
+#   (a) harder to calibrate to a point probability P(fail ≤ t) — requires
+#       integration of the survival function over [0, t], and calibration
+#       tools (Platt, isotonic) operate on binary outputs, not survival curves;
+#   (b) Cox PH assumes proportional hazards — violated here as fleet ages
+#       non-uniformly; (c) adds deployment complexity vs. a joblib-serialised RF.
+#
+# Chosen approach — three independent binary classifiers, one per label:
+#   Labels are will_fail_10d, will_fail_30d, will_fail_60d (binary, point-in-time).
+#   Each model is calibrated independently using CalibratedClassifierCV (Platt
+#   scaling for 10d, isotonic for 30d/60d — selected based on calibration set
+#   size and distribution shift characteristics per horizon). Monotonicity
+#   P(fail≤10d) ≤ P(fail≤30d) ≤ P(fail≤60d) is enforced at the READ layer
+#   (max() clamping), not in training, which keeps models independent and
+#   auditable. This design trades statistical elegance for operational clarity:
+#   each model can be evaluated, replaced, or retrained independently.
+#
+# ── Feature store framing ─────────────────────────────────────────────────────
+#
+# asset_feature_snapshots is a point-in-time correct feature store.
+# Snapshots are computed at label time (snapshot_ts < failure event) so no
+# future information leaks into training features — the classic "lookahead bias"
+# problem in time-series ML. Offline path: training reads from snapshots.
+# Online path: inference computes features from current operational DB state.
+# Tradeoff: online features are fresh but not pre-computed (adds latency);
+# snapshot features are stale by up to the snapshot cadence but instantly
+# available. For predictive maintenance at this cadence (daily batch predictions),
+# staleness is acceptable.
+# ─────────────────────────────────────────────────────────────────────────────
 
+import os
 import pandas as pd
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
@@ -22,6 +63,25 @@ from sqlalchemy import create_engine, text
 import warnings
 warnings.filterwarnings('ignore')
 from datetime import datetime
+
+# ── Reproducibility ───────────────────────────────────────────────────────────
+# Single seed applied to numpy and every RF estimator — guarantees bit-for-bit
+# reproducible training runs given the same data and sklearn version.
+RANDOM_SEED = 42
+
+# ── Experiment Tracking (opt-in) ──────────────────────────────────────────────
+# Set MLFLOW_TRACKING_URI in .env to activate (e.g. "http://localhost:5000" or
+# a local file store like "file:./mlruns"). Safe no-op if mlflow not configured.
+try:
+    import mlflow
+    import mlflow.sklearn
+    _MLFLOW_URI = os.getenv("MLFLOW_TRACKING_URI")
+    MLFLOW_ENABLED = bool(_MLFLOW_URI)
+    if MLFLOW_ENABLED:
+        mlflow.set_tracking_uri(_MLFLOW_URI)
+        print(f"[MLFLOW] Tracking enabled → {_MLFLOW_URI}")
+except ImportError:
+    MLFLOW_ENABLED = False
 
 SCRIPT_DIR = Path(__file__).parent.parent  # ml-service root
 MODEL_DIR  = SCRIPT_DIR / "registry"
@@ -265,7 +325,7 @@ def train_horizon_model(X: pd.DataFrame, y: pd.Series, horizon_days: int):
         min_samples_leaf=3,
         max_features='sqrt',
         class_weight='balanced',
-        random_state=42,
+        random_state=RANDOM_SEED,
         n_jobs=-1,
     )
 
@@ -345,7 +405,7 @@ def train_horizon_model(X: pd.DataFrame, y: pd.Series, horizon_days: int):
         min_samples_leaf=3,
         max_features='sqrt',
         class_weight='balanced',
-        random_state=42,
+        random_state=RANDOM_SEED,
         n_jobs=-1,
     )
     model = CalibratedClassifierCV(final_rf, method=calibration_method, cv=3)
@@ -551,6 +611,41 @@ def save_multihorizon_metrics_to_db(all_metrics: dict, dataset_size: int, model_
         print(f"[DATABASE] Warning: could not save metrics: {e}")
 
 
+def save_drift_reference(df_raw: pd.DataFrame, model_version: str):
+    """
+    Save per-feature raw distributions for PSI drift detection.
+    Sampled from the full training dataset (pre-transformation) so that
+    inference-time comparisons are in the operator-visible input space,
+    not the log-transformed model-internal space.
+    """
+    from engine.drift_detector import MONITORED_FEATURES
+    import sys
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+    sample = df_raw.sample(min(5000, len(df_raw)), random_state=RANDOM_SEED)
+    features = {}
+    for feat in MONITORED_FEATURES:
+        if feat in sample.columns:
+            vals = pd.to_numeric(sample[feat], errors='coerce').dropna().tolist()
+            features[feat] = [round(v, 6) for v in vals]
+
+    ref = {
+        "model_version": model_version,
+        "n_samples":     len(sample),
+        "features":      features,
+        "saved_at":      datetime.now().isoformat(),
+    }
+
+    out = MODEL_DIR / f"drift_reference_{model_version}.json"
+    with open(out, 'w') as f:
+        json.dump(ref, f, indent=2)
+    # Unversioned copy so DriftDetector fallback path also works
+    with open(MODEL_DIR / "drift_reference.json", 'w') as f:
+        json.dump(ref, f, indent=2)
+
+    print(f"[DRIFT] Reference distribution saved — {len(features)} features, n={len(sample)}")
+
+
 def save_clip_thresholds(clip_thresholds: dict, model_version: str):
     out = MODEL_DIR / f"clip_thresholds_{model_version}.json"
     with open(out, 'w') as f:
@@ -579,6 +674,10 @@ def main():
     print(f"        Horizons: {HORIZONS} days")
     print("=" * 60)
 
+    # Global seed — numpy operations (e.g. stratified split shuffles) must also
+    # be deterministic, not just the RF estimators.
+    np.random.seed(RANDOM_SEED)
+
     model_version = get_next_version()
     print(f"[VERSION] Training {model_version}")
 
@@ -587,8 +686,32 @@ def main():
     if len(df) < 500:
         raise ValueError(f"Insufficient samples: {len(df)} (minimum 500 required)")
 
-    # 2. Feature engineering — shared across all horizons
+    # 2. Save drift reference BEFORE feature engineering (raw input space)
+    save_drift_reference(df, model_version)
+
+    # 3. Feature engineering — shared across all horizons
     X, labels, feature_names, clip_thresholds = prepare_features(df, model_version)
+
+    # ── MLflow run (step 4) ───────────────────────────────────────────────────
+    # One run per training invocation; all three horizon models are logged as
+    # child artifacts of the same run so metrics are comparable in the UI.
+    if MLFLOW_ENABLED:
+        mlflow.set_experiment("equipment-failure-multihorizon")
+        run = mlflow.start_run(run_name=model_version)
+        mlflow.log_params({
+            "model_version":      model_version,
+            "random_seed":        RANDOM_SEED,
+            "n_estimators":       200,
+            "max_depth":          12,
+            "min_samples_split":  5,
+            "min_samples_leaf":   3,
+            "max_features":       "sqrt",
+            "class_weight":       "balanced",
+            "tscv_n_splits":      5,
+            "horizons":           str(HORIZONS),
+            "dataset_size":       len(df),
+            "feature_count":      len(feature_names),
+        })
 
     # 3. Train one model per horizon
     all_metrics = {}
@@ -604,9 +727,42 @@ def main():
         all_metrics[horizon] = metrics
         model_paths[horizon] = path
 
+        # Log per-horizon metrics and model artifact to MLflow
+        if MLFLOW_ENABLED:
+            h = horizon
+            mlflow.log_metrics({
+                f"roc_auc_{h}d":          metrics["roc_auc"],
+                f"pr_auc_{h}d":           metrics["pr_auc"],
+                f"accuracy_{h}d":         metrics["accuracy"],
+                f"cv_roc_auc_mean_{h}d":  metrics["cv_roc_auc_mean"],
+                f"cv_roc_auc_std_{h}d":   metrics["cv_roc_auc_std"],
+                f"recall_failure_{h}d":   metrics["recall"][1],
+                f"precision_failure_{h}d": metrics["precision"][1],
+                f"f1_failure_{h}d":       metrics["f1"][1],
+                f"distribution_shift_{h}d": metrics["distribution_shift"],
+            })
+            # Per-fold CV metrics — step = fold index for timeline view in UI
+            for i, fold_roc in enumerate(metrics["cv_fold_roc_aucs"], 1):
+                mlflow.log_metric(f"cv_fold_roc_auc_{h}d", fold_roc, step=i)
+            # Log the calibrated sklearn model as a versioned artifact
+            mlflow.sklearn.log_model(model, f"model_{h}d")
+            # Log feature importance JSON
+            fi_path = MODEL_DIR / f"feature_importance_{h}d_{model_version}.json"
+            mlflow.log_artifact(str(fi_path), artifact_path=f"feature_importance/{h}d")
+
     # 4. Save shared artifacts
     save_clip_thresholds(clip_thresholds, model_version)
     save_feature_cols(feature_names, model_version)
+
+    if MLFLOW_ENABLED:
+        mlflow.log_artifact(
+            str(MODEL_DIR / f"clip_thresholds_{model_version}.json"),
+            artifact_path="artifacts"
+        )
+        mlflow.log_artifact(
+            str(MODEL_DIR / f"feature_cols_{model_version}.json"),
+            artifact_path="artifacts"
+        )
 
     # 5. Persist summary to DB (uses 30d model as primary)
     save_multihorizon_metrics_to_db(all_metrics, len(df), model_version)
@@ -620,6 +776,10 @@ def main():
         m = all_metrics[h]
         print(f"{h}d{'':<8} {m['roc_auc']:.4f}{'':<4} {m['accuracy']*100:.1f}%{'':<5} "
               f"{m['recall'][1]*100:.1f}%{'':<9} {m['pr_auc']:.4f}")
+
+    if MLFLOW_ENABLED:
+        mlflow.end_run()
+        print(f"[MLFLOW] Run complete — ID: {run.info.run_id}")
 
     result = {
         'success':       True,

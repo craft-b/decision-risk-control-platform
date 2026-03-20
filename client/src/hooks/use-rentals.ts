@@ -4,6 +4,19 @@ import { InsertRental } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
 import { z } from "zod";
 
+export function useNextPoNumber() {
+  return useQuery({
+    queryKey: ['/api/rentals/next-po'],
+    queryFn: async () => {
+      const res = await fetch('/api/rentals/next-po', { credentials: 'include' });
+      if (!res.ok) throw new Error('Failed to fetch next PO number');
+      const data = await res.json();
+      return data.poNumber as string;
+    },
+    staleTime: 0, // Always fresh so concurrent tabs don't collide
+  });
+}
+
 export function useRentals() {
   return useQuery({
     queryKey: [api.rentals.list.path],

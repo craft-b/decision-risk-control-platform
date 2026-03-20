@@ -27,6 +27,7 @@ import {
 import { DollarSign, TrendingUp, Percent, AlertCircle, Calendar, AlertTriangle } from "lucide-react";
 import { format, startOfWeek, addDays, isSameDay, startOfMonth, subMonths, differenceInDays } from "date-fns";
 import { useQuery } from "@tanstack/react-query";
+import { useSimulationState } from "@/hooks/use-predictive-maintenance";
 import { Link } from "wouter";
 import { cn } from "@/lib/utils";
 
@@ -41,7 +42,10 @@ export default function Dashboard() {
 
   const [schedulingEquip, setSchedulingEquip] = useState<{ id: number; name: string } | null>(null);
 
-  const today = new Date();
+  const simState = useSimulationState();
+  const today = simState.data?.cursor_date
+    ? new Date(String(simState.data.cursor_date).substring(0, 10))
+    : new Date();
   const weekStart = startOfWeek(today, { weekStartsOn: 0 });
   
   const { data: revenueSummary } = useQuery({
