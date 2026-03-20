@@ -1,4 +1,4 @@
-import { useModelMetrics } from "@/hooks/use-predictive-maintenance";
+import { useModelMetrics, useDriftStatus, useComputeDriftReference } from "@/hooks/use-predictive-maintenance";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -15,6 +15,8 @@ import {
   Legend,
   Cell,
 } from "recharts";
+import { Button } from "@/components/ui/button";
+import { useAuth } from "@/hooks/use-auth";
 import {
   Activity,
   TrendingUp,
@@ -24,8 +26,152 @@ import {
   Brain,
   Database,
   Zap,
-  Loader2
+  Loader2,
+  ShieldAlert,
+  RefreshCw,
 } from "lucide-react";
+
+const PSI_THRESHOLDS = { WARNING: 0.1, ALERT: 0.2 };
+
+const FEATURE_LABELS: Record<string, string> = {
+  mean_time_between_failures: "Mean Time Between Failures",
+  vendor_reliability_score: "Vendor Reliability Score",
+};
+
+function DriftMonitorCard() {
+  const { data: drift, isLoading, error } = useDriftStatus();
+  const computeRef = useComputeDriftReference();
+  const { user } = useAuth();
+  const isAdmin = (user as any)?.role === "admin";
+
+  const overallColor =
+    drift?.overall === "ALERT"   ? "border-red-500 bg-red-50" :
+    drift?.overall === "WARNING" ? "border-yellow-500 bg-yellow-50" :
+    drift?.overall === "STABLE"  ? "border-green-500 bg-green-50" :
+                                   "border-slate-200";
+
+  const overallTextColor =
+    drift?.overall === "ALERT"   ? "text-red-700" :
+    drift?.overall === "WARNING" ? "text-yellow-700" :
+    drift?.overall === "STABLE"  ? "text-green-700" :
+                                   "text-slate-500";
+
+  return (
+    <Card className={`border-l-4 ${overallColor}`}>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+        <div className="flex items-center gap-2">
+          <ShieldAlert className={`h-5 w-5 ${overallTextColor}`} />
+          <div>
+            <CardTitle>Feature Drift Monitor</CardTitle>
+            <CardDescription>
+              Population Stability Index vs. training distribution
+            </CardDescription>
+          </div>
+        </div>
+        {isAdmin && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => computeRef.mutate()}
+            disabled={computeRef.isPending}
+          >
+            {computeRef.isPending
+              ? <Loader2 className="h-3 w-3 animate-spin mr-1" />
+              : <RefreshCw className="h-3 w-3 mr-1" />}
+            Reset Baseline
+          </Button>
+        )}
+      </CardHeader>
+      <CardContent>
+        {isLoading && (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading drift metrics…
+          </div>
+        )}
+        {(error || (drift?.overall === "NO_DATA" && !isLoading)) && (
+          <div className="space-y-2">
+            <Alert className="border-slate-200">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription className="text-sm">
+                No drift data yet. {isAdmin ? "Click \"Reset Baseline\" to compute a reference distribution from current training data." : "A baseline has not been computed yet."}
+              </AlertDescription>
+            </Alert>
+          </div>
+        )}
+        {drift && drift.overall !== "NO_DATA" && (
+          <div className="space-y-4">
+            {/* Overall status */}
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">Overall status:</span>
+              <Badge
+                className={
+                  drift.overall === "ALERT"   ? "bg-red-100 text-red-800 border-red-300" :
+                  drift.overall === "WARNING" ? "bg-yellow-100 text-yellow-800 border-yellow-300" :
+                                               "bg-green-100 text-green-800 border-green-300"
+                }
+              >
+                {drift.overall}
+              </Badge>
+              {drift.features[0] && (
+                <span className="text-xs text-muted-foreground ml-auto">
+                  Last checked {new Date(drift.features[0].checked_at).toLocaleString()}
+                </span>
+              )}
+            </div>
+
+            {/* Per-feature rows */}
+            <div className="space-y-3">
+              {drift.features.map((f) => {
+                const psiPct = Math.min(f.psi / PSI_THRESHOLDS.ALERT, 1);
+                const barColor =
+                  f.status === "ALERT"   ? "bg-red-500" :
+                  f.status === "WARNING" ? "bg-yellow-400" :
+                                          "bg-green-500";
+                return (
+                  <div key={f.feature} className="space-y-1">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="font-medium">
+                        {FEATURE_LABELS[f.feature] ?? f.feature}
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-xs text-muted-foreground">
+                          PSI {f.psi.toFixed(4)}
+                        </span>
+                        <Badge
+                          variant="outline"
+                          className={
+                            f.status === "ALERT"   ? "text-red-700 border-red-300" :
+                            f.status === "WARNING" ? "text-yellow-700 border-yellow-300" :
+                                                     "text-green-700 border-green-300"
+                          }
+                        >
+                          {f.status}
+                        </Badge>
+                      </div>
+                    </div>
+                    <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all ${barColor}`}
+                        style={{ width: `${psiPct * 100}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Legend */}
+            <div className="flex gap-4 text-xs text-muted-foreground pt-1">
+              <span><span className="font-medium text-green-600">Stable</span> PSI &lt; 0.10</span>
+              <span><span className="font-medium text-yellow-600">Warning</span> 0.10 – 0.20</span>
+              <span><span className="font-medium text-red-600">Alert</span> &gt; 0.20 → retrain recommended</span>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 export default function MLPerformanceDashboard() {
   const { data: modelMetrics, isLoading, error } = useModelMetrics();
@@ -435,6 +581,9 @@ export default function MLPerformanceDashboard() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Drift Monitor */}
+      <DriftMonitorCard />
 
       {/* Key Insights */}
       <Card className="border-blue-200 bg-blue-50">

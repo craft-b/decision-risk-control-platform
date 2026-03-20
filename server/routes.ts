@@ -1635,6 +1635,27 @@ export async function registerRoutes(
     }
   });
 
+  // ── DRIFT MONITORING ─────────────────────────────────────────────────────
+  app.get("/api/ml/drift/latest", requireAuth, async (req, res) => {
+    try {
+      const mlRes = await fetch("http://localhost:8000/drift/latest");
+      if (!mlRes.ok) return res.status(mlRes.status).json({ message: "Drift data unavailable" });
+      res.json(await mlRes.json());
+    } catch (e: any) {
+      res.status(500).json({ message: "ML service unreachable", error: e.message });
+    }
+  });
+
+  app.post("/api/ml/drift/compute-reference", requireAdmin, async (req, res) => {
+    try {
+      const mlRes = await fetch("http://localhost:8000/drift/compute-reference", { method: "POST" });
+      if (!mlRes.ok) return res.status(mlRes.status).json({ message: await mlRes.text() });
+      res.json(await mlRes.json());
+    } catch (e: any) {
+      res.status(500).json({ message: "ML service unreachable", error: e.message });
+    }
+  });
+
   // ── MAINTENANCE DUE SOON ──────────────────────────────────────────────────
   app.get('/api/maintenance/due-soon', requireAuth, async (req, res) => {
     try {
@@ -1778,6 +1799,141 @@ export async function registerRoutes(
       console.error('Maintenance cost report error:', error);
       res.status(500).json({ message: 'Failed to generate maintenance cost report' });
     }
+  });
+
+  // ── AGENT API ─────────────────────────────────────────────────────────────
+  //
+  // Bearer-token auth for programmatic / LLM agent access.
+  // Set AGENT_API_KEY env var to a long random string to enable.
+  // Agents pass: Authorization: Bearer <key>
+  //
+  function requireAgentKey(req: any, res: any, next: any) {
+    const key = process.env.AGENT_API_KEY;
+    if (!key) return res.status(503).json({ error: "Agent API not enabled — set AGENT_API_KEY env var" });
+    const header = req.headers.authorization ?? "";
+    if (header !== `Bearer ${key}`) return res.status(401).json({ error: "Invalid or missing agent API key" });
+    next();
+  }
+
+  // GET /api/agent/model-health
+  // Returns a single consolidated snapshot of model + drift + pipeline health
+  // plus a machine-readable recommended_action field agents can act on.
+  app.get("/api/agent/model-health", requireAgentKey, async (req, res) => {
+    try {
+      const { modelTrainingMetrics, assetFeatureSnapshots, assetRiskPredictions } = await import("@shared/schema");
+
+      // ── model metrics ──────────────────────────────────────────────────────
+      const [latestModel] = await db
+        .select()
+        .from(modelTrainingMetrics)
+        .orderBy(desc(modelTrainingMetrics.trainedAt))
+        .limit(1);
+
+      // ── pipeline stats ─────────────────────────────────────────────────────
+      const [snapStats] = await db.select({
+        total: count(),
+        labeled: sql<number>`SUM(CASE WHEN ${assetFeatureSnapshots.willFail30d} IS NOT NULL THEN 1 ELSE 0 END)`,
+      }).from(assetFeatureSnapshots);
+
+      const [predStats] = await db.select({ total: count() }).from(assetRiskPredictions);
+
+      // ── drift ──────────────────────────────────────────────────────────────
+      let drift: { overall: string; features: any[] } = { overall: "NO_DATA", features: [] };
+      try {
+        const mlRes = await fetch("http://localhost:8000/drift/latest");
+        if (mlRes.ok) drift = await mlRes.json();
+      } catch { /* ML service offline — surface NO_DATA */ }
+
+      // ── training status ────────────────────────────────────────────────────
+      let trainingRunning = false;
+      try {
+        const tr = await fetch("http://localhost:8000/train/status");
+        if (tr.ok) { const d = await tr.json(); trainingRunning = d.running ?? false; }
+      } catch { /* ignore */ }
+
+      // ── recommended action ─────────────────────────────────────────────────
+      let recommended_action: "none" | "retrain" | "compute_drift_reference" = "none";
+      let reasoning = "Model is healthy and drift is within acceptable bounds.";
+
+      if (drift.overall === "NO_DATA") {
+        recommended_action = "compute_drift_reference";
+        reasoning = "No drift reference baseline exists. Compute one before relying on drift monitoring.";
+      } else if (drift.overall === "ALERT") {
+        recommended_action = "retrain";
+        reasoning = `Feature drift is in ALERT state (PSI ≥ 0.20 on ${drift.features.filter((f: any) => f.status === "ALERT").map((f: any) => f.feature).join(", ")}). Model predictions may be unreliable — retrain recommended.`;
+      } else if (drift.overall === "WARNING") {
+        recommended_action = "none";
+        reasoning = "Feature drift is elevated (PSI 0.10–0.20). Monitor closely; retrain if drift continues to rise.";
+      }
+
+      if (trainingRunning) {
+        recommended_action = "none";
+        reasoning = "Training is currently in progress.";
+      }
+
+      res.json({
+        model: latestModel ? {
+          version: latestModel.modelVersion,
+          trained_at: latestModel.trainedAt,
+          accuracy: Number(latestModel.accuracy),
+          dataset_size: latestModel.datasetSize,
+        } : null,
+        pipeline: {
+          snapshots_total: Number(snapStats?.total) || 0,
+          snapshots_labeled: Number(snapStats?.labeled) || 0,
+          predictions_total: Number(predStats?.total) || 0,
+          training_running: trainingRunning,
+          ready_for_training: (Number(snapStats?.labeled) || 0) > 100,
+        },
+        drift: {
+          overall: drift.overall,
+          features: drift.features.map((f: any) => ({
+            feature: f.feature,
+            psi: f.psi,
+            status: f.status,
+            checked_at: f.checked_at,
+          })),
+        },
+        recommended_action,
+        reasoning,
+        generated_at: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      console.error("Agent model-health error:", error);
+      res.status(500).json({ error: "Failed to assemble model health snapshot", detail: error.message });
+    }
+  });
+
+  // POST /api/agent/actions
+  // Body: { "action": "retrain" | "compute_drift_reference" }
+  // Lets an agent trigger operations without a browser session.
+  app.post("/api/agent/actions", requireAgentKey, async (req, res) => {
+    const { action } = req.body ?? {};
+
+    if (action === "retrain") {
+      try {
+        const mlRes = await fetch("http://localhost:8000/train", { method: "POST" });
+        if (!mlRes.ok) return res.status(mlRes.status).json({ error: await mlRes.text() });
+        return res.json({ action, status: "accepted", detail: await mlRes.json() });
+      } catch (e: any) {
+        return res.status(500).json({ error: "ML service unreachable", detail: e.message });
+      }
+    }
+
+    if (action === "compute_drift_reference") {
+      try {
+        const mlRes = await fetch("http://localhost:8000/drift/compute-reference", { method: "POST" });
+        if (!mlRes.ok) return res.status(mlRes.status).json({ error: await mlRes.text() });
+        return res.json({ action, status: "accepted", detail: await mlRes.json() });
+      } catch (e: any) {
+        return res.status(500).json({ error: "ML service unreachable", detail: e.message });
+      }
+    }
+
+    res.status(400).json({
+      error: "Unknown action",
+      allowed_actions: ["retrain", "compute_drift_reference"],
+    });
   });
 
   return httpServer;
