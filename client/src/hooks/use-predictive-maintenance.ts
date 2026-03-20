@@ -373,6 +373,56 @@ export function useTrainModel() {
   });
 }
 
+// ── Drift monitoring ──────────────────────────────────────────────────────────
+
+export interface DriftFeature {
+  feature: string;
+  psi: number;
+  status: "STABLE" | "WARNING" | "ALERT";
+  checked_at: string;
+  model_version: string;
+}
+
+export interface DriftStatus {
+  overall: "STABLE" | "WARNING" | "ALERT" | "NO_DATA";
+  features: DriftFeature[];
+}
+
+export function useDriftStatus() {
+  return useQuery<DriftStatus>({
+    queryKey: ["/api/ml/drift/latest"],
+    queryFn: async () => {
+      const res = await fetch("/api/ml/drift/latest", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch drift status");
+      return res.json();
+    },
+    staleTime: 2 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
+}
+
+export function useComputeDriftReference() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  return useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/ml/drift/compute-reference", {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ml/drift/latest"] });
+      toast({ title: "Reference updated", description: "Drift baseline recomputed from current training data." });
+    },
+    onError: (e: any) => {
+      toast({ title: "Failed to update reference", description: e.message, variant: "destructive" });
+    },
+  });
+}
+
 export function useTrainingStatus(enabled: boolean) {
   return useQuery({
     queryKey: ["/api/ml/train/status"],
