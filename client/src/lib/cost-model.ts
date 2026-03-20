@@ -1,8 +1,9 @@
-import type { ProjectionPoint } from "@/pages/predictive-maintenance-dashboard";
+// ProjectionPoint inlined here to avoid a circular import with the dashboard page.
+interface ProjectionPoint { day: number; "10d": number; "30d": number; "60d": number; }
 
 // PM cost estimates by equipment category (USD)
 // Derived from industry averages for construction rental fleets
-const PM_COST_BY_CATEGORY: Record<string, number> = {
+export const PM_COST_BY_CATEGORY: Record<string, number> = {
   "Excavator":          850,
   "Bulldozer":          900,
   "Crane":             1200,
@@ -14,10 +15,10 @@ const PM_COST_BY_CATEGORY: Record<string, number> = {
   "Grader":             850,
   "Trencher":           550,
 };
-const DEFAULT_PM_COST = 700;
+export const DEFAULT_PM_COST = 700;
 
 // Assumed downtime days if failure occurs (unplanned breakdown)
-const FAILURE_DOWNTIME_DAYS = 7;
+export const FAILURE_DOWNTIME_DAYS = 7;
 
 export interface CostModelResult {
   optimalDay: number | null;       // day to intervene; null = already past or never crosses

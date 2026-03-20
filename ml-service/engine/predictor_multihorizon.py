@@ -10,6 +10,12 @@ import joblib
 from pathlib import Path
 from typing import Optional
 
+try:
+    import shap
+    SHAP_AVAILABLE = True
+except ImportError:
+    SHAP_AVAILABLE = False
+
 REGISTRY = Path(__file__).parent.parent / "registry"
 HORIZONS = [10, 30, 60]
 
@@ -42,6 +48,7 @@ class MultiHorizonPredictor:
     def _load_artifacts(self):
         self.models = {}
         self.versions = {}
+        self.shap_explainers = {}
 
         for h in HORIZONS:
             def _version_key(p):
@@ -56,6 +63,19 @@ class MultiHorizonPredictor:
             self.models[h] = model_data["model"]
             self.versions[h] = model_data["version"]
             print(f"[MH-PREDICTOR] Loaded {h}d model {model_data['version']} ({len(model_data['feature_names'])} features)")
+
+            # SHAP TreeExplainer — operates on the base RF inside the calibrated wrapper.
+            # We use calibrated_classifiers_[0].estimator (first CV fold's estimator) as a
+            # representative tree for attribution. SHAP values are in log-odds space from
+            # the uncalibrated RF; the sign and ranking are reliable, the magnitude is not
+            # a calibrated probability — communicate this in interviews.
+            if SHAP_AVAILABLE:
+                try:
+                    base_rf = self.models[h].calibrated_classifiers_[0].estimator
+                    self.shap_explainers[h] = shap.TreeExplainer(base_rf)
+                    print(f"[MH-PREDICTOR] SHAP TreeExplainer ready for {h}d")
+                except Exception as e:
+                    print(f"[MH-PREDICTOR] SHAP init failed for {h}d: {e}")
 
         # Use 30d model's feature names as canonical (all horizons share same features)
         model_data_30 = joblib.load(sorted(REGISTRY.glob("rf_30d_*.pkl"), key=_version_key, reverse=True)[0])
@@ -120,6 +140,9 @@ class MultiHorizonPredictor:
             proba = self.models[h].predict_proba(df)[0]
             raw[h] = float(proba[1])
 
+        # Pre-compute SHAP attributions for all horizons (done once on aligned df)
+        shap_by_horizon = {h: self._get_shap_attribution(df, h) for h in HORIZONS}
+
         # ── Step 2: enforce isotonic monotonicity ─────────────────────────────
         # Labels are cumulative: will_fail_Xd = "fails within X days".
         # Therefore P(fail≤10d) ≤ P(fail≤30d) ≤ P(fail≤60d) is a mathematical
@@ -133,7 +156,7 @@ class MultiHorizonPredictor:
         if raw[30] < p10 or raw[60] < p30:
             print(
                 f"[MH] EQ-{snapshot['equipment_id']} monotonicity enforced: "
-                f"raw=({raw[10]:.3f},{raw[30]:.3f},{raw[60]:.3f}) → "
+                f"raw=({raw[10]:.3f},{raw[30]:.3f},{raw[60]:.3f}) -> "
                 f"({p10:.3f},{p30:.3f},{p60:.3f})"
             )
 
@@ -155,9 +178,13 @@ class MultiHorizonPredictor:
                 "risk_score":          round(failure_prob * 100),
                 "model_confidence":    MODEL_CONFIDENCE[h],
                 "top_risk_drivers":    self._get_risk_drivers(snapshot, failure_prob, h),
+                # Per-prediction SHAP attribution: feature → contribution to failure probability.
+                # Positive = pushes toward failure; negative = protective.
+                # Ranked by |SHAP value|, top 5 features shown.
+                "shap_attribution":    shap_by_horizon[h],
             }
 
-            print(f"[MH] EQ-{snapshot['equipment_id']} {h}d: P={failure_prob:.3f} → {risk_level}")
+            print(f"[MH] EQ-{snapshot['equipment_id']} {h}d: P={failure_prob:.3f} -> {risk_level}")
 
         # ── Step 4: trend — how steeply does risk escalate without intervention?
         # DECREASING is impossible for cumulative probabilities (p60 ≥ p10 always).
@@ -240,6 +267,44 @@ class MultiHorizonPredictor:
         df = df.fillna(0)
 
         return df
+
+    # ─────────────────────────────────────────────────────────────────────
+    # PRIVATE — SHAP ATTRIBUTION
+    # Per-prediction feature contributions using TreeExplainer on base RF.
+    # Values are in log-odds space (uncalibrated) — sign and rank are
+    # reliable; magnitude should not be compared to failure_probability.
+    # ─────────────────────────────────────────────────────────────────────
+
+    def _get_shap_attribution(self, df_aligned: pd.DataFrame, horizon: int) -> dict:
+        if not SHAP_AVAILABLE or horizon not in self.shap_explainers:
+            return {}
+        try:
+            explainer = self.shap_explainers[horizon]
+            explanation = explainer(df_aligned)
+
+            # shap >= 0.40 returns an Explanation object: shape (n_samples, n_features, n_classes)
+            # We want class-1 (failure) SHAP values for the single sample.
+            if hasattr(explanation, "values"):
+                vals = explanation.values
+                if vals.ndim == 3:
+                    shap_vals = vals[0, :, 1]      # (n_features,), class=failure
+                else:
+                    shap_vals = vals[0]            # fallback for 2-D output
+            else:
+                # Older shap API: returns list of arrays per class
+                raw = explainer.shap_values(df_aligned)
+                shap_vals = raw[1][0] if isinstance(raw, list) else raw[0]
+
+            feature_names = df_aligned.columns.tolist()
+            top5 = sorted(
+                zip(feature_names, shap_vals),
+                key=lambda x: abs(x[1]),
+                reverse=True
+            )[:5]
+            return {feat: round(float(val), 4) for feat, val in top5}
+        except Exception as e:
+            print(f"[SHAP] Attribution failed for {horizon}d: {e}")
+            return {}
 
     # ─────────────────────────────────────────────────────────────────────
     # PRIVATE — RISK DRIVERS

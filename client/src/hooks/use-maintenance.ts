@@ -6,15 +6,19 @@ export function useMaintenance(params: {
   equipmentId?: number;
   limit?: number;
   offset?: number;
+  sortBy?: string;
+  sortDir?: "asc" | "desc";
 } = {}) {
-  const { equipmentId, limit = 100, offset = 0 } = params;
+  const { equipmentId, limit = 10, offset = 0, sortBy, sortDir } = params;
   return useQuery({
-    queryKey: ['maintenance', equipmentId, limit, offset],
+    queryKey: ['maintenance', equipmentId, limit, offset, sortBy, sortDir],
     queryFn: async () => {
       const qs = new URLSearchParams();
       if (equipmentId != null) qs.set('equipmentId', String(equipmentId));
       qs.set('limit',  String(limit));
       qs.set('offset', String(offset));
+      if (sortBy)  qs.set('sortBy',  sortBy);
+      if (sortDir) qs.set('sortDir', sortDir);
       const res = await fetch(`${api.maintenance.list.path}?${qs}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch maintenance events");
       return api.maintenance.list.responses[200].parse(await res.json());

@@ -24,17 +24,19 @@ from api.schemas.prediction import (
 from engine.genai_advisor import generate_recommendation, is_available, LLM_PROVIDER
 from engine.predictor_multihorizon import MultiHorizonPredictor
 from engine.projector import project as project_trajectory
+from engine.drift_detector import DriftDetector
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STARTUP / SHUTDOWN
 # ─────────────────────────────────────────────────────────────────────────────
 
 mh_predictor: MultiHorizonPredictor = None  # type: ignore
+drift_detector: DriftDetector = None         # type: ignore
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global mh_predictor
+    global mh_predictor, drift_detector
     print("[STARTUP] Loading ML artifacts...")
     try:
         mh_predictor = MultiHorizonPredictor()
@@ -42,6 +44,10 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[STARTUP] FATAL: Could not load model: {e}")
         raise
+    try:
+        drift_detector = DriftDetector()
+    except Exception as e:
+        print(f"[STARTUP] Drift detector init warning: {e}")
     yield
     print("[SHUTDOWN] ML service stopping")
 
@@ -112,6 +118,7 @@ async def predict_multi_horizon(snapshot: SnapshotInput):
 async def predict_multi_horizon_batch(batch: BatchInput):
     """
     Batch multi-horizon predictions for multiple equipment items.
+    Runs PSI drift detection on the batch post-prediction (non-blocking).
     """
     if not mh_predictor:
         raise HTTPException(status_code=503, detail="Multi-horizon model not loaded")
@@ -120,7 +127,19 @@ async def predict_multi_horizon_batch(batch: BatchInput):
     try:
         snapshots = [s.model_dump() for s in batch.snapshots]
         results = mh_predictor.predict_multi_horizon_batch(snapshots)
-        return {"predictions": results, "total": len(results)}
+
+        drift_summary = None
+        if drift_detector:
+            try:
+                drift_summary = drift_detector.check(snapshots, mh_predictor.version)
+            except Exception as de:
+                print(f"[DRIFT] check error (non-fatal): {de}")
+
+        return {
+            "predictions": results,
+            "total":       len(results),
+            "drift":       drift_summary,
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Batch prediction failed: {str(e)}")
 
@@ -168,6 +187,43 @@ async def multi_horizon_model_info():
         },
         "monotonicity": "enforced — p(fail≤10d) ≤ p(fail≤30d) ≤ p(fail≤60d)",
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DRIFT DETECTION
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/drift/latest", tags=["Drift"])
+async def drift_latest():
+    """
+    Returns the most recent PSI result per monitored feature.
+    Use this to build a drift monitoring dashboard or alert feed.
+    """
+    if not drift_detector:
+        raise HTTPException(status_code=503, detail="Drift detector not initialized")
+    rows = drift_detector.get_latest()
+    overall = (
+        "ALERT"   if any(r["status"] == "ALERT"   for r in rows) else
+        "WARNING" if any(r["status"] == "WARNING" for r in rows) else
+        "STABLE"  if rows else
+        "NO_DATA"
+    )
+    return {"overall": overall, "features": rows}
+
+
+@app.post("/drift/compute-reference", tags=["Drift"])
+async def drift_compute_reference():
+    """
+    Bootstrap drift reference distribution from current training data in DB.
+    Use when no retrain has been run yet or to reset the reference baseline.
+    Safe to call multiple times — overwrites drift_reference.json in registry/.
+    """
+    if not drift_detector:
+        raise HTTPException(status_code=503, detail="Drift detector not initialized")
+    result = drift_detector.compute_reference_from_db()
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("error", "Unknown error"))
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -7,7 +7,7 @@ import { api } from "@shared/routes";
 import session from "express-session";
 import bcrypt from "bcryptjs";
 import { maintenanceEvents, equipment, equipmentRiskScores, rentals, equipmentFailurePredictions, equipmentSwaps } from "@shared/schema";
-import { eq, desc, count, sql, and } from "drizzle-orm";
+import { eq, desc, asc, count, sql, and, like } from "drizzle-orm";
 import { db } from "./db";
 import { predictiveMaintenanceService } from './services/predictive-maintenance-fixed';
 import { featureEngineeringService } from './services/feature-engineering';
@@ -368,6 +368,73 @@ export async function registerRoutes(
   });
 
   // ── RENTALS ───────────────────────────────────────────────────────────────
+
+  // Generate next PO number for a given year: PO-YYYY-NNNN
+  async function generatePoNumber(year: number): Promise<string> {
+    const pattern = `PO-${year}-%`;
+    const [rows] = await db.execute(sql`
+      SELECT MAX(CAST(SUBSTRING_INDEX(po_number, '-', -1) AS UNSIGNED)) AS maxSeq
+      FROM rentals
+      WHERE po_number LIKE ${pattern}
+    `);
+    const maxSeq = (rows as unknown as any[])[0]?.maxSeq ?? 0;
+    const next = (Number(maxSeq) || 0) + 1;
+    return `PO-${year}-${String(next).padStart(4, "0")}`;
+  }
+
+  // Preview next PO number (for form auto-population)
+  app.get('/api/rentals/next-po', requireAuth, async (req, res) => {
+    try {
+      const simDate = await getSimulationDate();
+      const year = simDate.getFullYear();
+      res.json({ poNumber: await generatePoNumber(year) });
+    } catch (error) {
+      res.status(500).json({ message: 'Failed to generate PO number' });
+    }
+  });
+
+  // Backfill PO numbers for all rentals that have none (idempotent, admin only)
+  app.post('/api/admin/backfill-po', requireAdmin, async (req, res) => {
+    try {
+      const [untagged] = await db.execute(sql`
+        SELECT id, receive_date FROM rentals
+        WHERE po_number IS NULL OR po_number = ''
+        ORDER BY receive_date ASC, id ASC
+      `);
+      const rows = untagged as unknown as any[];
+      if (rows.length === 0) return res.json({ updated: 0 });
+
+      // Group by year
+      const byYear = new Map<number, { id: number }[]>();
+      for (const r of rows) {
+        const year = r.receive_date
+          ? new Date(r.receive_date).getFullYear()
+          : new Date().getFullYear();
+        if (!byYear.has(year)) byYear.set(year, []);
+        byYear.get(year)!.push({ id: r.id });
+      }
+
+      let updated = 0;
+      for (const [year, items] of Array.from(byYear.entries())) {
+        // Find max existing sequence for this year
+        const [existing] = await db.execute(sql`
+          SELECT MAX(CAST(SUBSTRING_INDEX(po_number, '-', -1) AS UNSIGNED)) AS maxSeq
+          FROM rentals WHERE po_number LIKE ${`PO-${year}-%`}
+        `);
+        let seq = (Number((existing as unknown as any[])[0]?.maxSeq) || 0);
+        for (const item of items) {
+          seq++;
+          const po = `PO-${year}-${String(seq).padStart(4, "0")}`;
+          await db.execute(sql`UPDATE rentals SET po_number = ${po} WHERE id = ${item.id}`);
+          updated++;
+        }
+      }
+      res.json({ updated });
+    } catch (error) {
+      res.status(500).json({ message: 'Backfill failed', error: String(error) });
+    }
+  });
+
   app.get(api.rentals.list.path, requireAuth, async (req, res) => {
     res.json(await storage.listRentals());
   });
@@ -377,6 +444,11 @@ export async function registerRoutes(
     const equip = await storage.getEquipment(input.equipmentId);
     if (!equip || equip.status !== "AVAILABLE") {
       return res.status(400).json({ message: "Equipment unavailable" });
+    }
+    // Auto-generate PO number if not provided
+    if (!input.poNumber) {
+      const simDate = await getSimulationDate();
+      (input as any).poNumber = await generatePoNumber(simDate.getFullYear());
     }
     const rental = await storage.createRental(input);
     await storage.updateEquipment(input.equipmentId, { status: "RENTED" });
@@ -426,7 +498,7 @@ export async function registerRoutes(
       }
       const cursor = await getSimulationDate();
       const invoiceDate = cursor.toISOString().split('T')[0];
-      const invoice = await storage.createInvoice({ rentalId, invoiceDate, periodFrom, periodTo, amount: String(amount), invoiceNumber });
+      const invoice = await storage.createInvoice({ rentalId, invoiceDate: new Date(invoiceDate), periodFrom, periodTo, amount: String(amount), invoiceNumber });
       res.status(201).json(invoice);
     } catch (e: any) {
       res.status(500).json({ message: 'Failed to create invoice', error: e.message });
@@ -561,18 +633,29 @@ export async function registerRoutes(
   // ── MAINTENANCE ───────────────────────────────────────────────────────────
   app.get('/api/maintenance', requireAuth, async (req, res) => {
     try {
-      const { equipmentId, limit: limitStr, offset: offsetStr } = req.query;
-      const limit  = Math.min(Math.max(1, parseInt(limitStr  as string || '100', 10)), 500);
-      const offset = Math.max(0, parseInt(offsetStr as string || '0',   10));
+      const { equipmentId, limit: limitStr, offset: offsetStr, sortBy, sortDir } = req.query;
+      const limit  = Math.min(Math.max(1, parseInt(limitStr  as string || '10', 10)), 500);
+      const offset = Math.max(0, parseInt(offsetStr as string || '0', 10));
       const condition = equipmentId
         ? eq(maintenanceEvents.equipmentId, parseInt(equipmentId as string))
         : undefined;
+
+      const colMap: Record<string, any> = {
+        maintenanceDate: maintenanceEvents.maintenanceDate,
+        maintenanceType: maintenanceEvents.maintenanceType,
+        cost:            maintenanceEvents.cost,
+        nextDueDate:     maintenanceEvents.nextDueDate,
+        eventSource:     maintenanceEvents.eventSource,
+        performedBy:     maintenanceEvents.performedBy,
+      };
+      const col = colMap[sortBy as string] ?? maintenanceEvents.maintenanceDate;
+      const orderFn = (sortDir as string) === 'asc' ? asc : desc;
 
       const [countRows, events] = await Promise.all([
         db.select({ total: count() }).from(maintenanceEvents).where(condition),
         db.select().from(maintenanceEvents)
           .where(condition)
-          .orderBy(desc(maintenanceEvents.maintenanceDate))
+          .orderBy(orderFn(col))
           .limit(limit)
           .offset(offset),
       ]);
@@ -895,19 +978,36 @@ export async function registerRoutes(
 
       const result = rows.map((row: any) => {
         const maint = maintMap.get(Number(row.equipment_id));
-        if (!maint) return { ...row, days_since_last_maint: null };
+
+        // Always enforce cumulative-probability monotonicity: P(fail≤10d) ≤ P(fail≤30d) ≤ P(fail≤60d)
+        // Stale DB rows may violate this if they were stored before monotonicity enforcement was added.
+        if (!maint) {
+          const p10 = parseFloat(row.prob_10d);
+          const p30 = Math.max(parseFloat(row.prob_30d), p10);
+          const p60 = Math.max(parseFloat(row.prob_60d), p30);
+          return {
+            ...row,
+            prob_10d:       p10.toFixed(4),
+            prob_30d:       p30.toFixed(4),
+            prob_60d:       p60.toFixed(4),
+            risk_level_10d: band(p10),
+            risk_level_30d: band(p30),
+            risk_level_60d: band(p60),
+            days_since_last_maint: null,
+          };
+        }
 
         const f = FACTORS[maint.type] ?? 1.0;
-        const p30 = Math.max(0, parseFloat(row.prob_30d) * f);
         const p10 = Math.max(0, parseFloat(row.prob_10d) * f);
-        const p60 = Math.max(0, parseFloat(row.prob_60d) * f);
+        const p30 = Math.max(Math.max(0, parseFloat(row.prob_30d) * f), p10);
+        const p60 = Math.max(Math.max(0, parseFloat(row.prob_60d) * f), p30);
         return {
           ...row,
-          prob_30d:       p30.toFixed(4),
           prob_10d:       p10.toFixed(4),
+          prob_30d:       p30.toFixed(4),
           prob_60d:       p60.toFixed(4),
-          risk_level_30d: band(p30),
           risk_level_10d: band(p10),
+          risk_level_30d: band(p30),
           risk_level_60d: band(p60),
           days_since_last_maint: maint.days,
         };
@@ -916,6 +1016,70 @@ export async function registerRoutes(
       res.json(result);
     } catch (error) {
       res.status(500).json({ message: 'Failed to fetch latest predictions' });
+    }
+  });
+
+  // ── PREDICTION FEEDBACK LOOP ──────────────────────────────────────────────
+  // Measures model effectiveness: of assets flagged HIGH risk (30d horizon)
+  // in the last 90 days, what % had a PREDICTIVE_INTERVENTION maintenance event
+  // within 30 days of the prediction?
+  app.get('/api/analytics/feedback-loop', requireAuth, async (req, res) => {
+    try {
+      // Distinct equipment flagged HIGH (30d) in last 90 days + their first prediction date
+      const [flaggedRows] = await db.execute(sql`
+        SELECT equipment_id, MIN(predicted_at) AS first_flagged_at
+        FROM equipment_failure_predictions
+        WHERE risk_level_30d = 'HIGH'
+          AND predicted_at >= DATE_SUB(NOW(), INTERVAL 90 DAY)
+        GROUP BY equipment_id
+      `) as any;
+
+      const flagged: Array<{ equipment_id: number; first_flagged_at: string }> = flaggedRows || [];
+      const totalFlagged = flagged.length;
+
+      if (totalFlagged === 0) {
+        res.json({ totalFlagged: 0, actedOn: 0, rate: 0, windowDays: 30, lookbackDays: 90 });
+        return;
+      }
+
+      // For each flagged equipment, check for a PREDICTIVE_INTERVENTION event
+      // within 30 days of its first HIGH prediction
+      const [actionRows] = await db.execute(sql`
+        SELECT DISTINCT me.equipment_id
+        FROM maintenance_events me
+        JOIN (
+          SELECT equipment_id, MIN(predicted_at) AS first_flagged_at
+          FROM equipment_failure_predictions
+          WHERE risk_level_30d = 'HIGH'
+            AND predicted_at >= DATE_SUB(NOW(), INTERVAL 90 DAY)
+          GROUP BY equipment_id
+        ) fp ON me.equipment_id = fp.equipment_id
+        WHERE me.event_source = 'PREDICTIVE_INTERVENTION'
+          AND me.maintenance_date >= DATE(fp.first_flagged_at)
+          AND DATEDIFF(me.maintenance_date, DATE(fp.first_flagged_at)) <= 30
+      `) as any;
+
+      const actedOn = (actionRows || []).length;
+      const rate = Math.round((actedOn / totalFlagged) * 100);
+
+      // Total PREDICTIVE_INTERVENTION events in the lookback window (any risk level)
+      const [totalIntervRows] = await db.execute(sql`
+        SELECT COUNT(*) AS cnt
+        FROM maintenance_events
+        WHERE event_source = 'PREDICTIVE_INTERVENTION'
+          AND created_at >= DATE_SUB(NOW(), INTERVAL 90 DAY)
+      `) as any;
+
+      res.json({
+        totalFlagged,
+        actedOn,
+        rate,
+        totalPredictiveInterventions: Number((totalIntervRows as any[])[0]?.cnt ?? 0),
+        windowDays: 30,
+        lookbackDays: 90,
+      });
+    } catch (error) {
+      res.status(500).json({ message: 'Failed to compute feedback loop metrics' });
     }
   });
 
@@ -1029,13 +1193,14 @@ export async function registerRoutes(
 
       if (!latestMetrics) return res.json(getDefaultMetrics());
 
+      const simCursorForHistory = await getSimulationDate();
       const predictionHistory = await db.execute(sql`
         SELECT DATE_FORMAT(snapshot_ts, '%Y-%m') as month, COUNT(*) as total,
           SUM(CASE WHEN risk_band = 'HIGH' THEN 1 ELSE 0 END) as high,
           SUM(CASE WHEN risk_band = 'MEDIUM' THEN 1 ELSE 0 END) as medium,
           SUM(CASE WHEN risk_band = 'LOW' THEN 1 ELSE 0 END) as low
         FROM asset_risk_predictions
-        WHERE snapshot_ts >= DATE_SUB(NOW(), INTERVAL 3 MONTH)
+        WHERE snapshot_ts >= DATE_SUB(${simCursorForHistory.toISOString().split('T')[0]}, INTERVAL 6 MONTH)
         GROUP BY DATE_FORMAT(snapshot_ts, '%Y-%m') ORDER BY month
       `);
 
@@ -1492,7 +1657,7 @@ export async function registerRoutes(
         WHERE me.next_due_date <= DATE_ADD(${cursorDate}, INTERVAL 30 DAY)
         ORDER BY me.next_due_date ASC
       `);
-      res.json((rows as any[]) || []);
+      res.json((rows as unknown as any[]) || []);
     } catch (error) {
       res.status(500).json({ message: 'Failed to fetch due-soon maintenance' });
     }
@@ -1514,7 +1679,8 @@ export async function registerRoutes(
       if (replacementEquipmentId === rental.equipmentId) return res.status(400).json({ message: 'Replacement must be different from current equipment' });
 
       const originalEquipmentId = rental.equipmentId;
-      const today = new Date().toISOString().split('T')[0];
+      const simCursor = await getSimulationDate();
+      const today = simCursor.toISOString().split('T')[0];
 
       await Promise.all([
         storage.updateEquipment(originalEquipmentId, { status: 'AVAILABLE' }),
@@ -1603,10 +1769,10 @@ export async function registerRoutes(
       `);
 
       res.json({
-        byEquipment: byEquipment as any[],
-        byCategory: byCategory as any[],
-        byMonth: byMonth as any[],
-        summary: (summaryRows as any[])[0] || { totalEvents: 0, totalCost: 0, avgCostPerEvent: 0 },
+        byEquipment: byEquipment as unknown as any[],
+        byCategory: byCategory as unknown as any[],
+        byMonth: byMonth as unknown as any[],
+        summary: (summaryRows as unknown as any[])[0] || { totalEvents: 0, totalCost: 0, avgCostPerEvent: 0 },
       });
     } catch (error) {
       console.error('Maintenance cost report error:', error);

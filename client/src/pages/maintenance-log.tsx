@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useMaintenance, useUpdateMaintenance, useDeleteMaintenance } from "@/hooks/use-maintenance";
+import { useSimulationState } from "@/hooks/use-predictive-maintenance";
 import { useEquipment } from "@/hooks/use-equipment";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
@@ -48,20 +49,55 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Plus, Wrench, Calendar, DollarSign, User, ChevronDown, Pencil, Trash2, Loader2 } from "lucide-react";
+import { Plus, Wrench, Calendar, DollarSign, User, ChevronUp, ChevronDown, ChevronsUpDown, Pencil, Trash2, Loader2, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 
-const PAGE_SIZE = 100;
+const PAGE_SIZE = 10;
+
+type SortKey = "maintenanceDate" | "maintenanceType" | "cost" | "nextDueDate" | "eventSource" | "performedBy";
+
+function MaintSortHead({ col, active, dir, onSort, children, align }: {
+  col: SortKey; active: SortKey; dir: "asc" | "desc";
+  onSort: (k: SortKey) => void; children: React.ReactNode; align?: "right";
+}) {
+  const isActive = active === col;
+  return (
+    <TableHead
+      className={cn("cursor-pointer select-none whitespace-nowrap", align === "right" && "text-right")}
+      onClick={() => onSort(col)}
+    >
+      <div className={cn("flex items-center gap-1", align === "right" && "justify-end")}>
+        <span>{children}</span>
+        {isActive
+          ? (dir === "asc" ? <ChevronUp className="h-3.5 w-3.5 text-foreground/70 shrink-0" /> : <ChevronDown className="h-3.5 w-3.5 text-foreground/70 shrink-0" />)
+          : <ChevronsUpDown className="h-3.5 w-3.5 text-muted-foreground/40 shrink-0" />}
+      </div>
+    </TableHead>
+  );
+}
 
 export default function MaintenanceLog() {
   const { user } = useAuth();
+  const simState = useSimulationState();
   const [selectedEquipmentId, setSelectedEquipmentId] = useState<number | undefined>();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [equipmentForMaintenance, setEquipmentForMaintenance] = useState<any>(null);
-  // Use a growing limit (always offset=0) so a query invalidation after a new event
-  // re-fetches the full window and the new event appears at the top immediately.
-  const [limit, setLimit] = useState(PAGE_SIZE);
+
+  // Server-side pagination + sort
+  const [page, setPage] = useState(0);
+  const [sortBy, setSortBy] = useState<SortKey>("maintenanceDate");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+
+  const onSort = (key: SortKey) => {
+    if (sortBy === key) {
+      setSortDir(d => d === "asc" ? "desc" : "asc");
+    } else {
+      setSortBy(key);
+      setSortDir("asc");
+    }
+    setPage(0);
+  };
 
   // Edit state
   const [editingEvent, setEditingEvent] = useState<any>(null);
@@ -104,8 +140,10 @@ export default function MaintenanceLog() {
 
   const { data, isLoading, isFetching } = useMaintenance({
     equipmentId: selectedEquipmentId,
-    limit,
-    offset: 0,
+    limit: PAGE_SIZE,
+    offset: page * PAGE_SIZE,
+    sortBy,
+    sortDir,
   });
   const { data: equipment } = useEquipment();
 
@@ -114,7 +152,7 @@ export default function MaintenanceLog() {
 
   const handleEquipmentFilter = (val: string) => {
     setSelectedEquipmentId(val === "all" ? undefined : parseInt(val));
-    setLimit(PAGE_SIZE); // reset to first page on filter change
+    setPage(0);
   };
 
   const isAdmin = user?.role === 'ADMINISTRATOR';
@@ -149,13 +187,16 @@ export default function MaintenanceLog() {
   const totalCost = displayedEvents.reduce((sum: number, event: any) => {
     return sum + parseFloat(event.cost || '0');
   }, 0);
-  const lastMonth = new Date();
+  const cursorDate = simState.data?.cursor_date
+    ? new Date(String(simState.data.cursor_date).substring(0, 10))
+    : new Date();
+  const lastMonth = new Date(cursorDate);
   lastMonth.setMonth(lastMonth.getMonth() - 1);
   const recentEvents = displayedEvents.filter((event: any) =>
     new Date(event.maintenanceDate) >= lastMonth
   ).length;
 
-  const hasMore = data ? limit < data.total : false;
+  const totalPages = Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE));
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
@@ -307,14 +348,14 @@ export default function MaintenanceLog() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Date</TableHead>
+                <MaintSortHead col="maintenanceDate" active={sortBy} dir={sortDir} onSort={onSort}>Date</MaintSortHead>
                 <TableHead>Equipment</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Source</TableHead>
+                <MaintSortHead col="maintenanceType" active={sortBy} dir={sortDir} onSort={onSort}>Type</MaintSortHead>
+                <MaintSortHead col="eventSource" active={sortBy} dir={sortDir} onSort={onSort}>Source</MaintSortHead>
                 <TableHead>Description</TableHead>
-                <TableHead>Performed By</TableHead>
-                <TableHead className="text-right">Cost</TableHead>
-                <TableHead>Next Due</TableHead>
+                <MaintSortHead col="performedBy" active={sortBy} dir={sortDir} onSort={onSort}>Performed By</MaintSortHead>
+                <MaintSortHead col="cost" active={sortBy} dir={sortDir} onSort={onSort} align="right">Cost</MaintSortHead>
+                <MaintSortHead col="nextDueDate" active={sortBy} dir={sortDir} onSort={onSort}>Next Due</MaintSortHead>
                 {isAdmin && <TableHead className="w-24" />}
               </TableRow>
             </TableHeader>
@@ -448,37 +489,32 @@ export default function MaintenanceLog() {
               )}
             </TableBody>
           </Table>
-          {/* Load more / footer */}
-          {(hasMore || isFetching) && (
-            <div className="flex items-center justify-between pt-4 border-t">
-              <p className="text-sm text-muted-foreground">
-                Showing {displayedEvents.length.toLocaleString()} of {totalEvents.toLocaleString()} events
-              </p>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setLimit(prev => prev + PAGE_SIZE)}
-                disabled={isFetching}
-              >
-                {isFetching ? (
-                  <span className="flex items-center gap-2">
-                    <span className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                    Loading...
-                  </span>
-                ) : (
-                  <span className="flex items-center gap-2">
-                    <ChevronDown className="h-4 w-4" />
-                    Load more
-                  </span>
-                )}
-              </Button>
-            </div>
-          )}
-          {!hasMore && !isFetching && displayedEvents.length > 0 && displayedEvents.length < totalEvents && (
-            <p className="pt-4 text-center text-sm text-muted-foreground border-t">
-              All {totalEvents.toLocaleString()} events loaded
-            </p>
-          )}
+          {/* Pagination */}
+          <div className="flex items-center justify-between px-2 py-3 border-t text-sm">
+            <span className="text-muted-foreground text-xs">
+              {totalEvents === 0
+                ? "No results"
+                : `${page * PAGE_SIZE + 1}–${Math.min((page + 1) * PAGE_SIZE, totalEvents)} of ${totalEvents.toLocaleString()}`}
+              {isFetching && <span className="ml-2 text-muted-foreground/60">Updating…</span>}
+            </span>
+            {totalPages > 1 && (
+              <div className="flex items-center gap-0.5">
+                <Button variant="ghost" size="icon" className="h-7 w-7" disabled={page === 0} onClick={() => setPage(0)}>
+                  <ChevronsLeft className="h-3.5 w-3.5" />
+                </Button>
+                <Button variant="ghost" size="icon" className="h-7 w-7" disabled={page === 0} onClick={() => setPage(p => p - 1)}>
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                </Button>
+                <span className="px-2 text-xs text-muted-foreground tabular-nums">{page + 1} / {totalPages}</span>
+                <Button variant="ghost" size="icon" className="h-7 w-7" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}>
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </Button>
+                <Button variant="ghost" size="icon" className="h-7 w-7" disabled={page >= totalPages - 1} onClick={() => setPage(totalPages - 1)}>
+                  <ChevronsRight className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            )}
+          </div>
         </CardContent>
       </Card>
       {/* Edit Dialog */}

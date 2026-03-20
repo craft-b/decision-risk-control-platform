@@ -1,6 +1,9 @@
 // client/src/pages/EquipmentList.tsx - Complete with Detail View
 
 import { useState, useMemo } from "react";
+import { useTable } from "@/hooks/use-table";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { TablePagination } from "@/components/ui/table-pagination";
 import { useEquipment, useCreateEquipment, useUpdateEquipment, useDeleteEquipment } from "@/hooks/use-equipment";
 import { useLatestMultiHorizonPredictions } from "@/hooks/use-risk-score";
 import { useMaintenanceDueSoon } from "@/hooks/use-maintenance";
@@ -100,6 +103,25 @@ export default function EquipmentList() {
 
   const isAdmin = user?.role === 'ADMINISTRATOR';
 
+  const { sort, onSort, page, setPage, rows: pagedEquipment, totalPages, total } = useTable(
+    equipment,
+    {
+      defaultSortKey: "createdAt",
+      defaultDir: "desc",
+      getters: {
+        "risk": (e) => {
+          const p = predMap.get(e.id);
+          return p ? parseFloat(p.prob_30d) : -1;
+        },
+        "nextService": (e) => {
+          const d = dueSoonMap.get(e.id);
+          return d ? Number(d.daysUntilDue) : 9999;
+        },
+        "dailyRate": (e) => parseFloat(e.dailyRate ?? "0"),
+      }
+    }
+  );
+
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
@@ -160,12 +182,12 @@ export default function EquipmentList() {
         <Table>
           <TableHeader className="bg-slate-50">
             <TableRow>
-              <TableHead>Equipment</TableHead>
-              <TableHead>Category</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Risk Level</TableHead>
-              <TableHead>Next Service</TableHead>
-              <TableHead>Daily Rate</TableHead>
+              <SortableTableHead sortKey="name" sort={sort} onSort={onSort}>Equipment</SortableTableHead>
+              <SortableTableHead sortKey="category" sort={sort} onSort={onSort}>Category</SortableTableHead>
+              <SortableTableHead sortKey="status" sort={sort} onSort={onSort}>Status</SortableTableHead>
+              <SortableTableHead sortKey="risk" sort={sort} onSort={onSort}>Risk Level</SortableTableHead>
+              <SortableTableHead sortKey="nextService" sort={sort} onSort={onSort}>Next Service</SortableTableHead>
+              <SortableTableHead sortKey="dailyRate" sort={sort} onSort={onSort} align="right">Daily Rate</SortableTableHead>
               {isAdmin && <TableHead className="text-right">Actions</TableHead>}
             </TableRow>
           </TableHeader>
@@ -183,7 +205,7 @@ export default function EquipmentList() {
                 </TableCell>
               </TableRow>
             ) : (
-              equipment?.map((equip) => (
+              pagedEquipment.map((equip) => (
                 <TableRow 
                   key={equip.id}
                   className="cursor-pointer hover:bg-slate-50"
@@ -263,6 +285,7 @@ export default function EquipmentList() {
             )}
           </TableBody>
         </Table>
+        <TablePagination page={page} totalPages={totalPages} total={total} onPage={setPage} />
       </div>
 
       {/* Edit Dialog */}
