@@ -104,7 +104,8 @@ services:
     volumes:
       # Model artifacts persist across container rebuilds.
       # Train once locally, ship the registry dir — no retraining on start.
-      - ./ml-service/registry:/app/registry
+      # Path matches WORKDIR /app/ml-service inside the container.
+      - ./ml-service/registry:/app/ml-service/registry
     healthcheck:
       test:
         - CMD

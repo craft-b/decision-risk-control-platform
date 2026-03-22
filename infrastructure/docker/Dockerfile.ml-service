@@ -1,0 +1,35 @@
+# Dockerfile.ml-service — FastAPI Python ML service
+# Installs pinned requirements, copies code + trained model registry.
+# No venv — pip installs directly into the system Python.
+
+FROM python:3.12-slim
+
+WORKDIR /app/ml-service
+
+# System deps needed by some ML packages (scipy, numba, etc.)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc \
+        g++ \
+        libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies (pinned for reproducibility)
+COPY ml-service/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy ML service source
+COPY ml-service/ .
+
+# Model artifacts are in registry/ — baked into the image at build time.
+# No retraining occurs on container start; train locally and rebuild to ship
+# a new model version.
+# (The volume mount in docker-compose.yml overrides this in local dev,
+#  allowing hot-swap of the registry without rebuilding the image.)
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONIOENCODING=utf-8
+
+EXPOSE 8000
+
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
