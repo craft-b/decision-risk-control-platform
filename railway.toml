@@ -1,0 +1,7 @@
+[build]
+dockerfilePath = "infrastructure/docker/Dockerfile.server"
+
+[deploy]
+startCommand = "node dist/index.cjs"
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3
