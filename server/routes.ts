@@ -1193,15 +1193,13 @@ export async function registerRoutes(
 
       if (!latestMetrics) return res.json(getDefaultMetrics());
 
-      const simCursorForHistory = await getSimulationDate();
       const predictionHistory = await db.execute(sql`
-        SELECT DATE_FORMAT(snapshot_ts, '%Y-%m') as month, COUNT(*) as total,
+        SELECT DATE_FORMAT(predicted_at, '%Y-%m') as month, COUNT(*) as total,
           SUM(CASE WHEN risk_band = 'HIGH' THEN 1 ELSE 0 END) as high,
           SUM(CASE WHEN risk_band = 'MEDIUM' THEN 1 ELSE 0 END) as medium,
           SUM(CASE WHEN risk_band = 'LOW' THEN 1 ELSE 0 END) as low
         FROM asset_risk_predictions
-        WHERE snapshot_ts >= DATE_SUB(${simCursorForHistory.toISOString().split('T')[0]}, INTERVAL 6 MONTH)
-        GROUP BY DATE_FORMAT(snapshot_ts, '%Y-%m') ORDER BY month
+        GROUP BY DATE_FORMAT(predicted_at, '%Y-%m') ORDER BY month DESC LIMIT 12
       `);
 
       let featureImportance: { feature: string; importance: number; description: string }[] = [];

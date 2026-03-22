@@ -61,7 +61,7 @@ export default function Login() {
         <div className="absolute top-24 right-24 w-64 h-64 bg-blue-500/10 rounded-full blur-3xl z-[1]" />
         
         {/* Background Image */}
-        <div 
+        <div
           className="absolute inset-0 z-0"
           style={{
             backgroundImage: `url(${landingImg})`,
