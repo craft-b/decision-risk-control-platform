@@ -156,6 +156,33 @@ Three separate Random Forest classifiers are trained, one per horizon, using tem
 
 Version is auto-incremented from the last DB record. No version string appears in inference code.
 
+**MLflow integration:** Each training run is logged to the `equipment-failure-multihorizon` experiment with 12 shared hyperparameters, per-horizon metrics (ROC-AUC, PR-AUC, recall, F1, distribution shift, CV mean/std), per-fold ROC-AUC as a step metric, sklearn model artifacts, feature importance JSONs, and clip thresholds. Opt-in via `MLFLOW_TRACKING_URI` env var — safe no-op if unset. Reproducibility is enforced via `RANDOM_SEED = 42` applied to `np.random.seed()` and all RF estimators.
+
+### Explainability
+
+`shap.TreeExplainer` is initialized at predictor startup for each horizon's base RF (extracted from `calibrated_classifiers_[0].estimator`). At inference time, `_get_shap_attribution(df_aligned, horizon)` returns the top 5 features by |SHAP value|, appended to every horizon's prediction response as `shap_attribution`. SHAP values are log-odds from the uncalibrated RF — sign and rank are reliable; magnitude is not directly comparable to `failure_probability`.
+
+### Drift Detection
+
+PSI (Population Stability Index) is computed post-batch-prediction on two monitored features: `mean_time_between_failures` and `vendor_reliability_score`. These were selected for (a) high model importance and (b) non-degenerate distributions in the training data (other features are zero-inflated simulation artifacts).
+
+**Implementation details:**
+- 5 quantile bins (fleet-scale, ~68 assets gives adequate bin coverage)
+- 1/n additive smoothing (prevents log(0) and bounds PSI magnitude better than fixed epsilon)
+- Results persisted to `drift_metrics` table with `feature`, `psi`, `status`, `ref_mean`, `cur_mean`, `ref_std`, `cur_std`
+- Reference distribution bootstrappable via `POST /drift/compute-reference` — writes `drift_reference.json` to registry and immediately runs a post-reset PSI check so the dashboard reflects the new baseline
+
+**PSI thresholds:** `< 0.10` STABLE · `0.10–0.20` WARNING · `≥ 0.20` ALERT → retrain recommended
+
+### Agent API & Monitoring
+
+The agent API provides bearer-token authenticated access to model health for programmatic consumers (scripts, LLM agents, CI/CD):
+
+- `GET /api/agent/model-health` — returns model version, pipeline stats, drift status, and a machine-readable `recommended_action` (`none` / `retrain` / `compute_drift_reference`) with a `reasoning` string
+- `POST /api/agent/actions` — triggers `retrain` or `compute_drift_reference` without a browser session
+
+`monitor.py` is a local cron script that calls `GET /api/agent/model-health`, logs drift per feature, and triggers the recommended action automatically. Suitable for scheduling via cron, Airflow, or any task runner.
+
 ### Inference
 
 The FastAPI predictor loads all three models at startup from the model registry via glob pattern. At inference time:
@@ -355,6 +382,13 @@ The predictor loads models at startup by globbing the registry for the latest ve
 | G | Rental dispatch guard — HIGH risk blocks dispatch, MEDIUM advisory | ✅ Complete |
 | H | RUL display — days to HIGH threshold in prediction modal | ✅ Complete (via sparkline pill) |
 | — | Admin retrain pipeline — UI-triggered training with live log stream | ✅ Complete |
+| v1.6-I | MLflow experiment tracking — hyperparams, metrics, artifacts, CV fold scores | ✅ Complete |
+| v1.6-J | SHAP explainability — per-prediction top-5 attribution at inference | ✅ Complete |
+| v1.6-K | PSI drift detection — monitored features, drift_metrics table, dashboard card | ✅ Complete |
+| v1.6-L | Fleet cost summary card — E[failure cost] per asset, estimated savings | ✅ Complete |
+| v1.6-M | Feedback loop card — predictive intervention rate (flagged HIGH → acted on) | ✅ Complete |
+| v1.6-N | Agent API — bearer token auth, model-health endpoint, actions endpoint | ✅ Complete |
+| v1.6-O | monitor.py — local cron script for automated drift/retrain loop | ✅ Complete |
 
 ---
 
@@ -386,12 +420,17 @@ The `modelStatus` field in `/api/ml/pipeline-status` uses alphabetic sort on reg
 | ML Service | Python 3.12, FastAPI, scikit-learn, pandas, SQLAlchemy | Port 8000 |
 | Database | MySQL 8.0 | |
 | Models | Random Forest (scikit-learn), CalibratedClassifierCV | 3 models × version in registry |
+| Experiment Tracking | MLflow 2.16 | Opt-in via `MLFLOW_TRACKING_URI`; logs hyperparams, per-horizon metrics, CV fold scores, artifacts |
+| Explainability | SHAP 0.51, TreeExplainer | Per-prediction top-5 feature attribution at inference time |
+| Drift Detection | PSI (Population Stability Index) | 5-bin quantile scheme, 1/n smoothing, persisted to `drift_metrics` table |
+| Agent API | Bearer token auth | `GET /api/agent/model-health`, `POST /api/agent/actions` |
+| Monitoring | `monitor.py` cron script | Polls agent API, auto-triggers retrain or reference recompute |
 | Simulation | Custom discrete-event engine, Weibull hazard function, fleet renewal | 2,900+ simulated days (2024–2032) |
 | Model Registry | Filesystem (pkl + json), glob-based version resolution | `ml-service/registry/` |
-| LLM | Groq (llama3-8b-8192) | Maintenance recommendations |
+| LLM | Groq (llama-3.1-8b-instant) | Maintenance recommendations |
 
 ---
 
-*Last updated: v1.14 — current production models*  
+*Last updated: v1.14 + v1.6 MLOps tracks — MLflow, SHAP, drift detection, agent API, monitoring*
 *Training script: `ml-service/training/train_model_multihorizon.py`*  
 *Model registry: `ml-service/registry/`*

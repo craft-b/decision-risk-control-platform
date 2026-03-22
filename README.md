@@ -12,8 +12,13 @@ Predictive maintenance platform for heavy construction equipment rental fleets. 
 - **Rental dispatch guard** — Blocks or warns dispatchers when HIGH/MEDIUM risk equipment is selected for a new rental, with mandatory risk acknowledgement for HIGH-risk dispatches
 - **Fleet simulation engine** — Discrete-event simulator advances a cursor date, generates sensor readings, fires maintenance events via a Weibull-inspired hazard function, and handles fleet renewal (retirement + replacement) automatically
 - **ML pipeline** — Full automated pipeline: feature snapshot generation → failure labeling → model training → inference, all triggerable from the admin UI
+- **MLflow experiment tracking** — Every training run logs hyperparameters, per-horizon metrics (ROC-AUC, PR-AUC, recall, F1), per-fold CV scores, model artifacts, and feature importance JSONs under the `equipment-failure-multihorizon` experiment
+- **SHAP explainability** — `TreeExplainer` runs at inference time; top 5 features by |SHAP value| are returned with every prediction for per-asset attribution
+- **PSI drift detection** — Population Stability Index computed post-batch on monitored features; results persisted to `drift_metrics` table; dashboard surfaces per-feature PSI with STABLE / WARNING / ALERT status
+- **Agent API** — Bearer-token authenticated endpoints (`GET /api/agent/model-health`, `POST /api/agent/actions`) for programmatic and LLM agent access; returns consolidated health snapshot with machine-readable `recommended_action`
+- **Automated monitoring** — `monitor.py` cron script polls model health and auto-triggers retraining or reference recomputation based on drift state
 - **GenAI recommendations** — Groq LLM turns risk scores into plain-English maintenance actions per asset
-- **ML metrics dashboard** — Live feature importance, confusion matrix, per-class precision/recall/F1, prediction distribution over time, and hyperparameter display
+- **ML metrics dashboard** — Live feature importance, confusion matrix, per-class precision/recall/F1, prediction distribution over time, hyperparameter display, and drift monitor card
 
 ---
 
@@ -44,7 +49,9 @@ React SPA (Vite, port 5173)
 | API | Node.js, Express, Drizzle ORM |
 | ML Service | Python 3.12, FastAPI, scikit-learn, pandas, SQLAlchemy |
 | Database | MySQL 8 |
-| LLM | Groq (llama3-8b-8192) |
+| Experiment Tracking | MLflow 2.16 |
+| Explainability | SHAP 0.51 (TreeExplainer) |
+| LLM | Groq (llama-3.1-8b-instant) |
 
 ---
 
@@ -129,29 +136,30 @@ A discrete-event simulator advances a cursor date day by day:
 ├── client/                        # React frontend (Vite)
 │   └── src/
 │       ├── components/            # Shared UI components
-│       ├── hooks/                 # TanStack Query hooks
+│       ├── hooks/
+│       │   └── use-predictive-maintenance.ts  # TanStack Query hooks (predictions, drift, training)
 │       ├── lib/
-│       │   └── cost-model.ts      # Track F: optimal PM intervention calculator
+│       │   └── cost-model.ts      # Optimal PM intervention calculator
 │       └── pages/
-│           ├── predictive-maintenance-dashboard.tsx  # Main prediction UI + modal
-│           └── risk-monitoring.tsx                   # Fleet risk analytics
+│           ├── predictive-maintenance-dashboard.tsx  # Fleet prediction UI + SHAP modal
+│           └── ml-dashboard.tsx                      # Model metrics, drift monitor, MLflow stats
 │
 ├── server/                        # Node.js API gateway
-│   ├── routes.ts                  # All Express routes + simulation engine
+│   ├── routes.ts                  # All Express routes incl. agent API + drift proxy
 │   └── services/
-│       ├── feature-engineering.ts          # Base feature service + snapshot persistence
-│       ├── feature-engineering-enhanced.ts # Full 31-feature computation + velocity features
-│       └── risk-scoring.ts
+│       ├── feature-engineering-enhanced.ts  # Full 31-feature computation + velocity features
+│       └── feature-engineering.ts           # Base snapshot persistence
 │
 ├── ml-service/                    # Python FastAPI ML service
 │   ├── api/
-│   │   └── main.py                # FastAPI app, all routes, training endpoint
+│   │   └── main.py                # FastAPI app — inference, drift, training endpoints
 │   ├── engine/
-│   │   ├── predictor_multihorizon.py  # Multi-horizon inference + version sorting
+│   │   ├── predictor_multihorizon.py  # Multi-horizon inference + SHAP attribution
+│   │   ├── drift_detector.py          # PSI drift detection + drift_metrics persistence
 │   │   ├── projector.py               # 60-day forward projection engine
 │   │   └── genai_advisor.py           # Groq recommendation generation
 │   ├── training/
-│   │   └── train_model_multihorizon.py  # Full training pipeline (TimeSeriesSplit CV)
+│   │   └── train_model_multihorizon.py  # Training pipeline — TimeSeriesSplit CV + MLflow logging
 │   └── registry/                  # Versioned model artifacts
 │       ├── rf_{h}d_v1.14.pkl
 │       ├── clip_thresholds_v1.14.json
@@ -159,6 +167,7 @@ A discrete-event simulator advances a cursor date day by day:
 │       ├── metadata_{h}d_v1.14.json
 │       └── feature_importance_{h}d_v1.14.json
 │
+├── monitor.py                     # Local cron script — polls agent API, auto-triggers retrain
 └── shared/
     ├── schema.ts                  # Drizzle table definitions (source of truth)
     └── routes.ts                  # Shared API route/type definitions
@@ -188,6 +197,22 @@ Full interactive docs at **http://localhost:8000/docs** when running.
 | `GET` | `/api/ml/train/status` | Poll training progress + log |
 | `GET` | `/api/ml/pipeline-status` | Snapshot counts, model version, readiness |
 | `GET` | `/api/ml/model-metrics` | Accuracy, confusion matrix, feature importance |
+
+### Drift Monitoring
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/ml/drift/latest` | Most recent PSI per monitored feature |
+| `POST` | `/api/ml/drift/compute-reference` | Recompute reference baseline from training data |
+
+### Agent API
+
+Authenticated with `Authorization: Bearer <AGENT_API_KEY>`. Designed for programmatic access by scripts or LLM agents.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/agent/model-health` | Consolidated model + drift + pipeline health with `recommended_action` |
+| `POST` | `/api/agent/actions` | Trigger `retrain` or `compute_drift_reference` |
 
 ### Simulation
 
@@ -266,8 +291,10 @@ From the admin panel (ADMINISTRATOR role):
 | `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASSWORD` / `DB_NAME` | ✅ | MySQL connection |
 | `SESSION_SECRET` | ✅ | Express session signing key |
 | `GROQ_API_KEY` | ✅ | Groq API key for LLM recommendations |
-| `GROQ_MODEL` | — | Groq model ID (default: `llama3-8b-8192`) |
+| `AGENT_API_KEY` | ✅ | Bearer token for agent API (`/api/agent/*`). Generate: `python -c "import secrets; print(secrets.token_hex(32))"` |
+| `GROQ_MODEL` | — | Groq model ID (default: `llama-3.1-8b-instant`) |
 | `LLM_PROVIDER` | — | `groq` or `ollama` (default: `groq`) |
+| `MLFLOW_TRACKING_URI` | — | MLflow server URI. If unset, MLflow logging is skipped (safe no-op). |
 | `PYTHONIOENCODING` | — | Set to `utf-8` on Windows to avoid codec errors |
 
 ---
