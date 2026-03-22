@@ -241,23 +241,27 @@ class DriftDetector:
             "features":      results,
         }
 
-    def get_latest(self, n_features: int = 20) -> list[dict]:
-        """Return the most recent PSI row per feature from drift_metrics."""
+    def get_latest(self) -> list[dict]:
+        """Return the single most recent PSI row per monitored feature."""
+        if not MONITORED_FEATURES:
+            return []
         try:
             from sqlalchemy import text as sqla_text
             engine = self._get_engine()
+            placeholders = ", ".join(f":f{i}" for i in range(len(MONITORED_FEATURES)))
+            params = {f"f{i}": f for i, f in enumerate(MONITORED_FEATURES)}
             with engine.connect() as conn:
-                rows = conn.execute(sqla_text("""
+                rows = conn.execute(sqla_text(f"""
                     SELECT d1.*
                     FROM drift_metrics d1
                     INNER JOIN (
-                        SELECT feature, MAX(checked_at) AS latest
+                        SELECT feature, MAX(id) AS latest_id
                         FROM drift_metrics
+                        WHERE feature IN ({placeholders})
                         GROUP BY feature
-                    ) d2 ON d1.feature = d2.feature AND d1.checked_at = d2.latest
+                    ) d2 ON d1.id = d2.latest_id
                     ORDER BY d1.psi DESC
-                    LIMIT :n
-                """), {"n": n_features}).fetchall()
+                """), params).fetchall()
             engine.dispose()
             return [dict(r._mapping) for r in rows]
         except Exception as e:
