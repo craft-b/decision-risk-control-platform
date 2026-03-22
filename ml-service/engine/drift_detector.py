@@ -303,6 +303,15 @@ class DriftDetector:
 
         self.ref_model_version = model_version
         print(f"[DRIFT] Reference computed from DB — {len(features)} features, n={len(sample)}")
+
+        # Immediately run a drift check against the new reference so drift_metrics
+        # is updated and the dashboard reflects STABLE instead of stale ALERT rows.
+        try:
+            check_result = self.check(sample.to_dict("records"), model_version)
+            print(f"[DRIFT] Post-reset check: {check_result.get('status')}")
+        except Exception as e:
+            print(f"[DRIFT] Post-reset check warning (non-fatal): {e}")
+
         return {"success": True, "n_samples": len(sample), "features": list(features.keys())}
 
     # ── Internal ──────────────────────────────────────────────────────────────

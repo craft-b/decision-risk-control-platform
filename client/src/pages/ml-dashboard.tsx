@@ -42,7 +42,7 @@ function DriftMonitorCard() {
   const { data: drift, isLoading, error } = useDriftStatus();
   const computeRef = useComputeDriftReference();
   const { user } = useAuth();
-  const isAdmin = (user as any)?.role === "admin";
+  const isAdmin = (user as any)?.role === "ADMINISTRATOR";
 
   const overallColor =
     drift?.overall === "ALERT"   ? "border-red-500 bg-red-50" :
