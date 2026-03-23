@@ -51,6 +51,7 @@ export const jobSites = mysqlTable("job_sites", {
   address: text("address"),
   contactPerson: varchar("contact_person", { length: 255 }),
   contactPhone: varchar("contact_phone", { length: 50 }),
+  distanceMiles: decimal("distance_miles", { precision: 6, scale: 1 }).default("25.0"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
