@@ -445,6 +445,10 @@ export function EquipmentDetailView({ equipment, prediction }: EquipmentDetailVi
               <span className="font-mono font-medium">{equipment.equipmentId}</span>
             </div>
             <div className="flex justify-between">
+              <span className="text-muted-foreground">Current Mileage</span>
+              <span className="font-medium">{equipment.currentMileage ? `${parseFloat(equipment.currentMileage).toLocaleString()} mi` : 'N/A'}</span>
+            </div>
+            <div className="flex justify-between">
               <span className="text-muted-foreground">Database ID</span>
               <span className="font-mono">{equipment.id}</span>
             </div>
