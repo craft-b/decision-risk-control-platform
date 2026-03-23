@@ -485,7 +485,19 @@ export async function registerRoutes(
     const cursor = await getSimulationDate();
     const returnDate = cursor.toISOString().split('T')[0];
     await storage.updateRental(rental.id, { status: "COMPLETED", returnDate });
-    await storage.updateEquipment(rental.equipmentId, { status: "AVAILABLE" });
+
+    // Auto-increment mileage: round trip distance × rental days ÷ avg days on site
+    // Models real-world wear from transport + on-site operation hours converted to miles
+    const distanceMiles = parseFloat(rental.jobSite?.distanceMiles ?? "25");
+    const receiveDate = new Date(rental.receiveDate);
+    const rentalDays = Math.max(1, Math.round((cursor.getTime() - receiveDate.getTime()) / 86400000));
+    const mileageAdded = parseFloat(((distanceMiles * 2) + (rentalDays * 1.5)).toFixed(1));
+    const current = parseFloat(rental.equipment?.currentMileage ?? "0");
+    await storage.updateEquipment(rental.equipmentId, {
+      status: "AVAILABLE",
+      currentMileage: (current + mileageAdded).toFixed(1),
+    });
+
     res.json({ message: "Rental completed successfully" });
   });
 
