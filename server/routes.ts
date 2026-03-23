@@ -1148,8 +1148,9 @@ export async function registerRoutes(
       }
 
       const SNAPSHOT_INTERVAL_DAYS = 7;
-      const [rangeRow] = await db.execute(sql`SELECT MIN(DATE(timestamp)) as earliest, MAX(DATE(timestamp)) as latest FROM sensor_data_logs`) as any;
-      const earliest = rangeRow[0]?.earliest ? new Date(rangeRow[0].earliest) : new Date('2024-01-01');
+      // Use earliest maintenance event as the data anchor — sensor_data_logs is not used
+      const [maintRangeRow] = await db.execute(sql`SELECT MIN(DATE(maintenance_date)) as earliest FROM maintenance_events`) as any;
+      const earliest = maintRangeRow[0]?.earliest ? new Date(maintRangeRow[0].earliest) : new Date('2028-01-01');
       const latest = await getSimulationDate();
 
       const [existingRows] = await db.execute(sql`SELECT DISTINCT DATE(snapshot_ts) as snap_date FROM asset_feature_snapshots`) as any;
