@@ -26,6 +26,10 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
 
+  // Railway (and most cloud platforms) sit behind a reverse proxy.
+  // Without this, Express won't see HTTPS and won't set secure cookies.
+  app.set("trust proxy", 1);
+
   app.use(
     session({
       secret: process.env.SESSION_SECRET || "dev_secret_key",
@@ -33,6 +37,7 @@ export async function registerRoutes(
       saveUninitialized: false,
       cookie: {
         secure: process.env.NODE_ENV === "production",
+        sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
         maxAge: 24 * 60 * 60 * 1000,
       },
     })
