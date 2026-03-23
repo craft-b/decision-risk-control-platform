@@ -486,12 +486,21 @@ export async function registerRoutes(
     const returnDate = cursor.toISOString().split('T')[0];
     await storage.updateRental(rental.id, { status: "COMPLETED", returnDate });
 
-    // Auto-increment mileage: round trip distance × rental days ÷ avg days on site
-    // Models real-world wear from transport + on-site operation hours converted to miles
+    // Mileage = round-trip transport + daily on-site accumulation
+    // Daily rate varies by category: mobile equipment (skid steers, backhoes) racks up
+    // more miles per day than cranes which are mostly stationary once erected.
+    const DAILY_MILES: Record<string, number> = {
+      "Skid Steer": 14,
+      "Backhoe":    11,
+      "Excavator":   9,
+      "Crane":       4,
+    };
     const distanceMiles = parseFloat(rental.jobSite?.distanceMiles ?? "25");
     const receiveDate = new Date(rental.receiveDate);
     const rentalDays = Math.max(1, Math.round((cursor.getTime() - receiveDate.getTime()) / 86400000));
-    const mileageAdded = parseFloat(((distanceMiles * 2) + (rentalDays * 1.5)).toFixed(1));
+    const category = rental.equipment?.category ?? "";
+    const dailyRate = DAILY_MILES[category] ?? 8;
+    const mileageAdded = parseFloat(((distanceMiles * 2) + (rentalDays * dailyRate)).toFixed(1));
     const current = parseFloat(rental.equipment?.currentMileage ?? "0");
     await storage.updateEquipment(rental.equipmentId, {
       status: "AVAILABLE",
