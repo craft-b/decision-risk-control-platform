@@ -1,6 +1,8 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
+const ML_SERVICE_URL = process.env.ML_SERVICE_URL || "http://localhost:8000";
+
 import { seedMaintenanceConfig } from './seeds/maintenance-config';
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
@@ -191,7 +193,7 @@ async function runDriftRescore() {
           sensor_degradation_rate:     snapshot.sensorDegradationRate ?? 0,
         };
 
-        const fastapiRes = await fetch("http://localhost:8000/predict/multi-horizon", {
+        const fastapiRes = await fetch(ML_SERVICE_URL + "/predict/multi-horizon", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
