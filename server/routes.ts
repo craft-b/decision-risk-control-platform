@@ -1,5 +1,7 @@
 // server/routes.ts
 
+const ML_SERVICE_URL = process.env.ML_SERVICE_URL || "http://localhost:8000";
+
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
@@ -762,7 +764,7 @@ export async function registerRoutes(
             sensor_degradation_rate:     snapshot.sensorDegradationRate ?? 0,
           };
 
-          const fastapiRes = await fetch('http://localhost:8000/predict/multi-horizon', {
+          const fastapiRes = await fetch(ML_SERVICE_URL + '/predict/multi-horizon', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
@@ -908,7 +910,7 @@ export async function registerRoutes(
         }
       }
 
-      const fastapiRes = await fetch('http://localhost:8000/predict/multi-horizon/batch', {
+      const fastapiRes = await fetch(ML_SERVICE_URL + '/predict/multi-horizon/batch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ snapshots: snapshotsToScore }),
@@ -1435,7 +1437,7 @@ export async function registerRoutes(
         sensor_degradation_rate: snapshot.sensorDegradationRate,
       };
 
-      const mlResponse = await fetch("http://localhost:8000/predict/project", {
+      const mlResponse = await fetch(ML_SERVICE_URL + "/predict/project", {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(mlPayload),
       });
 
@@ -1649,7 +1651,7 @@ export async function registerRoutes(
   // ── ML TRAINING PROXY ─────────────────────────────────────────────────────
   app.post("/api/ml/train", requireAdmin, async (req, res) => {
     try {
-      const mlRes = await fetch("http://localhost:8000/train", { method: "POST" });
+      const mlRes = await fetch(ML_SERVICE_URL + "/train", { method: "POST" });
       if (!mlRes.ok) return res.status(mlRes.status).json({ message: await mlRes.text() });
       res.json(await mlRes.json());
     } catch (e: any) {
@@ -1659,7 +1661,7 @@ export async function registerRoutes(
 
   app.get("/api/ml/train/status", requireAuth, async (req, res) => {
     try {
-      const mlRes = await fetch("http://localhost:8000/train/status");
+      const mlRes = await fetch(ML_SERVICE_URL + "/train/status");
       if (!mlRes.ok) return res.status(mlRes.status).json({ message: "Status unavailable" });
       res.json(await mlRes.json());
     } catch (e: any) {
@@ -1670,7 +1672,7 @@ export async function registerRoutes(
   // ── DRIFT MONITORING ─────────────────────────────────────────────────────
   app.get("/api/ml/drift/latest", requireAuth, async (req, res) => {
     try {
-      const mlRes = await fetch("http://localhost:8000/drift/latest");
+      const mlRes = await fetch(ML_SERVICE_URL + "/drift/latest");
       if (!mlRes.ok) return res.status(mlRes.status).json({ message: "Drift data unavailable" });
       res.json(await mlRes.json());
     } catch (e: any) {
@@ -1680,7 +1682,7 @@ export async function registerRoutes(
 
   app.post("/api/ml/drift/compute-reference", requireAdmin, async (req, res) => {
     try {
-      const mlRes = await fetch("http://localhost:8000/drift/compute-reference", { method: "POST" });
+      const mlRes = await fetch(ML_SERVICE_URL + "/drift/compute-reference", { method: "POST" });
       if (!mlRes.ok) return res.status(mlRes.status).json({ message: await mlRes.text() });
       res.json(await mlRes.json());
     } catch (e: any) {
@@ -1872,14 +1874,14 @@ export async function registerRoutes(
       // ── drift ──────────────────────────────────────────────────────────────
       let drift: { overall: string; features: any[] } = { overall: "NO_DATA", features: [] };
       try {
-        const mlRes = await fetch("http://localhost:8000/drift/latest");
+        const mlRes = await fetch(ML_SERVICE_URL + "/drift/latest");
         if (mlRes.ok) drift = await mlRes.json();
       } catch { /* ML service offline — surface NO_DATA */ }
 
       // ── training status ────────────────────────────────────────────────────
       let trainingRunning = false;
       try {
-        const tr = await fetch("http://localhost:8000/train/status");
+        const tr = await fetch(ML_SERVICE_URL + "/train/status");
         if (tr.ok) { const d = await tr.json(); trainingRunning = d.running ?? false; }
       } catch { /* ignore */ }
 
@@ -1944,7 +1946,7 @@ export async function registerRoutes(
 
     if (action === "retrain") {
       try {
-        const mlRes = await fetch("http://localhost:8000/train", { method: "POST" });
+        const mlRes = await fetch(ML_SERVICE_URL + "/train", { method: "POST" });
         if (!mlRes.ok) return res.status(mlRes.status).json({ error: await mlRes.text() });
         return res.json({ action, status: "accepted", detail: await mlRes.json() });
       } catch (e: any) {
@@ -1954,7 +1956,7 @@ export async function registerRoutes(
 
     if (action === "compute_drift_reference") {
       try {
-        const mlRes = await fetch("http://localhost:8000/drift/compute-reference", { method: "POST" });
+        const mlRes = await fetch(ML_SERVICE_URL + "/drift/compute-reference", { method: "POST" });
         if (!mlRes.ok) return res.status(mlRes.status).json({ error: await mlRes.text() });
         return res.json({ action, status: "accepted", detail: await mlRes.json() });
       } catch (e: any) {
