@@ -392,6 +392,7 @@ export const insertEquipmentSchema = createInsertSchema(equipment, {
 })
   .omit({ id: true, createdAt: true })
   .extend({
+    equipmentId: z.string().optional(),
     yearManufactured: z.number().nullable().optional(),
     purchaseDate: z.string().nullable().optional(),
     currentMileage: z.string().nullable().optional(),

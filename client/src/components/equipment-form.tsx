@@ -47,7 +47,6 @@ export function EquipmentForm({ initialData, onSuccess }: EquipmentFormProps) {
   const form = useForm<InsertEquipment>({
     resolver: zodResolver(insertEquipmentSchema),
     defaultValues: initialData || {
-      equipmentId: "",
       name: "",
       category: "",
       make: "",
@@ -98,19 +97,6 @@ export function EquipmentForm({ initialData, onSuccess }: EquipmentFormProps) {
         )}
 
         {/* ── Identity ── */}
-        <FormField
-          control={form.control}
-          name="equipmentId"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Equipment ID</FormLabel>
-              <FormControl><Input placeholder="e.g. EQ-001" {...field} /></FormControl>
-              <FormDescription>Unique identifier for this equipment</FormDescription>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <FormField
             control={form.control}

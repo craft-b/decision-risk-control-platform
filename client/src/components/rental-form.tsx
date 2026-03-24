@@ -133,6 +133,16 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
     setDispatchConfirmed(false);
   }, [watchedEquipmentId]);
 
+  // Auto-populate receiveHours from selected equipment's current mileage
+  useEffect(() => {
+    if (!isEditing && watchedEquipmentId && equipmentList) {
+      const equip = equipmentList.find((e: any) => e.id === watchedEquipmentId);
+      if (equip?.currentMileage) {
+        form.setValue("receiveHours", equip.currentMileage);
+      }
+    }
+  }, [watchedEquipmentId, equipmentList, isEditing]);
+
   // Auto-populate PO number for new rentals once the server-generated value arrives
   useEffect(() => {
     if (!isEditing && nextPo && !form.getValues("poNumber")) {
@@ -439,20 +449,19 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
             name="receiveHours"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Receive Hours (Optional)</FormLabel>
+                <FormLabel>Hours at Dispatch</FormLabel>
                 <FormControl>
                   <Input
                     type="number"
                     step="0.1"
-                    placeholder="0.0"
-                    {...field}
+                    placeholder="Auto-populated on equipment select"
+                    readOnly
+                    className="bg-muted cursor-not-allowed"
                     value={field.value ?? ""}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      field.onChange(val === "" ? null : val);
-                    }}
+                    onChange={() => {}}
                   />
                 </FormControl>
+                <FormDescription>Current equipment hours at time of dispatch</FormDescription>
                 <FormMessage />
               </FormItem>
             )}
@@ -482,20 +491,19 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
             name="returnHours"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Return Hours (Optional)</FormLabel>
+                <FormLabel>Hours at Return</FormLabel>
                 <FormControl>
                   <Input
                     type="number"
                     step="0.1"
-                    placeholder="0.0"
-                    {...field}
+                    readOnly
+                    className="bg-muted cursor-not-allowed"
+                    placeholder="Auto-calculated on completion"
                     value={field.value ?? ""}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      field.onChange(val === "" ? null : val);
-                    }}
+                    onChange={() => {}}
                   />
                 </FormControl>
+                <FormDescription>Dispatch hours + round-trip distance + daily usage</FormDescription>
                 <FormMessage />
               </FormItem>
             )}

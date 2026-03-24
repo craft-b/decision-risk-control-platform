@@ -217,6 +217,16 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createEquipment(equip: InsertEquipment): Promise<Equipment> {
+    // Auto-generate equipmentId if not provided (e.g. EQ-009)
+    if (!equip.equipmentId) {
+      const [last] = await db
+        .select({ equipmentId: equipment.equipmentId })
+        .from(equipment)
+        .orderBy(sql`id DESC`)
+        .limit(1);
+      const lastNum = last ? parseInt(last.equipmentId.replace(/\D/g, ""), 10) : 0;
+      (equip as any).equipmentId = `EQ-${String((isNaN(lastNum) ? 0 : lastNum) + 1).padStart(3, "0")}`;
+    }
     const result = await db.insert(equipment).values(equip);
     const [newEquip] = await db.select().from(equipment).where(eq(equipment.id, result[0].insertId));
     return newEquip!;
@@ -265,14 +275,24 @@ export class DatabaseStorage implements IStorage {
   async createRental(rental: InsertRental): Promise<Rental> {
     // Convert date strings to Date objects for MySQL
     const insertData: any = { ...rental };
-    
+
     if (insertData.receiveDate && typeof insertData.receiveDate === 'string') {
       insertData.receiveDate = insertData.receiveDate.substring(0, 10);
     }
     if (insertData.returnDate && typeof insertData.returnDate === 'string') {
       insertData.returnDate = insertData.returnDate.substring(0, 10);
     }
-    
+
+    // Auto-populate receiveHours from equipment's current mileage if not provided
+    if (!insertData.receiveHours && insertData.equipmentId) {
+      const [equip] = await db
+        .select({ currentMileage: equipment.currentMileage })
+        .from(equipment)
+        .where(eq(equipment.id, insertData.equipmentId))
+        .limit(1);
+      if (equip?.currentMileage) insertData.receiveHours = equip.currentMileage;
+    }
+
     const result = await db.insert(rentals).values(insertData);
     const [newRental] = await db.select().from(rentals).where(eq(rentals.id, result[0].insertId));
     return newRental!;
