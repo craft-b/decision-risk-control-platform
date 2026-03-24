@@ -486,26 +486,36 @@ export async function registerRoutes(
     const returnDate = cursor.toISOString().split('T')[0];
     await storage.updateRental(rental.id, { status: "COMPLETED", returnDate });
 
-    // Mileage = round-trip transport + daily on-site accumulation
-    // Daily rate varies by category: mobile equipment (skid steers, backhoes) racks up
-    // more miles per day than cranes which are mostly stationary once erected.
-    const DAILY_MILES: Record<string, number> = {
-      "Skid Steer": 14,
-      "Backhoe":    11,
-      "Excavator":   9,
-      "Crane":       4,
+    // Hours accumulation model:
+    //   transport   = round-trip to jobsite (delivery + pickup)
+    //   daily ops   = on-site operating hours per day (category-dependent)
+    //   idle standby= 15% of daily ops for engine warm-up, repositioning, idle time
+    //   weather days= ~10% of rental days lost to weather/downtime (reduces ops hours)
+    const DAILY_OPS_HOURS: Record<string, number> = {
+      "Skid Steer": 7.5,  // highly mobile, used all day across site
+      "Backhoe":    6.5,  // split between digging and repositioning
+      "Excavator":  6.0,  // mostly stationary per cycle, moves between zones
+      "Crane":      5.0,  // rigging/lift time; long setup reduces operating hours
     };
-    const distanceMiles = parseFloat(rental.jobSite?.distanceMiles ?? "25");
-    const receiveDate = new Date(rental.receiveDate);
-    const rentalDays = Math.max(1, Math.round((cursor.getTime() - receiveDate.getTime()) / 86400000));
-    const category = rental.equipment?.category ?? "";
-    const dailyRate = DAILY_MILES[category] ?? 8;
-    const mileageAdded = parseFloat(((distanceMiles * 2) + (rentalDays * dailyRate)).toFixed(1));
-    const current = parseFloat(rental.equipment?.currentMileage ?? "0");
+    const TRANSPORT_HOURS_PER_MILE = 0.05; // ~20mph average for equipment transport
+    const distanceMiles  = parseFloat(rental.jobSite?.distanceMiles ?? "25");
+    const receiveDate    = new Date(rental.receiveDate);
+    const rentalDays     = Math.max(1, Math.round((cursor.getTime() - receiveDate.getTime()) / 86400000));
+    const category       = rental.equipment?.category ?? "";
+    const dailyOps       = DAILY_OPS_HOURS[category] ?? 6.0;
+    const effectiveDays  = rentalDays * 0.90;                             // 10% weather/downtime
+    const transportHours = distanceMiles * 2 * TRANSPORT_HOURS_PER_MILE; // round-trip
+    const opsHours       = effectiveDays * dailyOps;
+    const idleHours      = opsHours * 0.15;                              // 15% standby/idle
+    const hoursAdded     = parseFloat((transportHours + opsHours + idleHours).toFixed(1));
+    const receiveHours   = parseFloat(rental.receiveHours ?? rental.equipment?.currentMileage ?? "0");
+    const returnHours    = parseFloat((receiveHours + hoursAdded).toFixed(1));
+
     await storage.updateEquipment(rental.equipmentId, {
       status: "AVAILABLE",
-      currentMileage: (current + mileageAdded).toFixed(1),
+      currentMileage: returnHours.toFixed(1),
     });
+    await storage.updateRental(rental.id, { returnHours: returnHours.toFixed(1) });
 
     res.json({ message: "Rental completed successfully" });
   });
@@ -1443,40 +1453,43 @@ export async function registerRoutes(
       const cursor = await getSimulationDate();
       const cursorStr = cursor.toISOString().split('T')[0];
 
+      // Revenue recognition rules:
+      //   - Invoiced rentals   → recognized on invoice_date, amount = invoice amount
+      //   - Completed, no invoice → recognized on return_date, amount = days × daily_rate
+      //   - Active (uninvoiced) → not counted
       const [rows] = await db.execute(sql`
         SELECT
-          -- Accrual: daily_rate × days active within the 30-day window (matches daily chart)
           COALESCE(SUM(CASE
-            WHEN r.id IS NOT NULL AND r.status IN ('ACTIVE','COMPLETED')
-              AND r.receive_date IS NOT NULL
-              AND r.receive_date <= ${cursorStr}
-              AND (r.return_date IS NULL OR r.return_date >= DATE_SUB(${cursorStr}, INTERVAL 29 DAY))
-            THEN GREATEST(0, DATEDIFF(
-              LEAST(COALESCE(r.return_date, ${cursorStr}), ${cursorStr}),
-              GREATEST(r.receive_date, DATE_SUB(${cursorStr}, INTERVAL 29 DAY))
-            ) + 1) * CAST(e.daily_rate AS DECIMAL(10,2))
-            ELSE 0 END), 0) AS revenue_30d,
-          -- WTD accrual: days active in the rolling 7-day window
+            WHEN rec_date BETWEEN DATE_SUB(${cursorStr}, INTERVAL 29 DAY) AND ${cursorStr}
+            THEN rec_amount ELSE 0 END), 0) AS revenue_30d,
           COALESCE(SUM(CASE
-            WHEN r.id IS NOT NULL AND r.status IN ('ACTIVE','COMPLETED')
-              AND r.receive_date IS NOT NULL
-              AND r.receive_date <= ${cursorStr}
-              AND (r.return_date IS NULL OR r.return_date >= DATE_SUB(${cursorStr}, INTERVAL 6 DAY))
-            THEN GREATEST(0, DATEDIFF(
-              LEAST(COALESCE(r.return_date, ${cursorStr}), ${cursorStr}),
-              GREATEST(r.receive_date, DATE_SUB(${cursorStr}, INTERVAL 6 DAY))
-            ) + 1) * CAST(e.daily_rate AS DECIMAL(10,2))
-            ELSE 0 END), 0) AS revenue_wtd,
-          -- Outstanding A/R: completed uninvoiced rentals, full rental value
+            WHEN rec_date BETWEEN DATE_SUB(${cursorStr}, INTERVAL 6 DAY) AND ${cursorStr}
+            THEN rec_amount ELSE 0 END), 0) AS revenue_wtd,
           COALESCE(SUM(CASE
-            WHEN r.status = 'COMPLETED' AND r.receive_date IS NOT NULL AND r.return_date IS NOT NULL
-              AND r.return_date >= r.receive_date
-              AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.rental_id = r.id)
-            THEN (DATEDIFF(r.return_date, r.receive_date) + 1) * CAST(e.daily_rate AS DECIMAL(10,2))
-            ELSE 0 END), 0) AS outstanding_ar,
-          COUNT(DISTINCT e.id) AS total_equipment,
-          SUM(CASE WHEN e.status = 'RENTED' THEN 1 ELSE 0 END) AS rented_equipment
-        FROM equipment e LEFT JOIN rentals r ON r.equipment_id = e.id
+            WHEN is_outstanding THEN rec_amount ELSE 0 END), 0) AS outstanding_ar,
+          (SELECT COUNT(*) FROM equipment) AS total_equipment,
+          (SELECT COUNT(*) FROM equipment WHERE status = 'RENTED') AS rented_equipment
+        FROM (
+          -- Invoiced rentals: use invoice date + invoice amount
+          SELECT i.invoice_date AS rec_date, i.amount AS rec_amount, 0 AS is_outstanding
+          FROM invoices i
+          JOIN rentals r ON r.id = i.rental_id
+          WHERE i.invoice_date <= ${cursorStr}
+
+          UNION ALL
+
+          -- Completed rentals with no invoice: use return_date + computed amount
+          SELECT
+            r.return_date AS rec_date,
+            (DATEDIFF(r.return_date, r.receive_date) + 1) * CAST(e.daily_rate AS DECIMAL(10,2)) AS rec_amount,
+            1 AS is_outstanding
+          FROM rentals r
+          JOIN equipment e ON e.id = r.equipment_id
+          WHERE r.status = 'COMPLETED'
+            AND r.return_date IS NOT NULL
+            AND r.return_date <= ${cursorStr}
+            AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.rental_id = r.id)
+        ) AS recognized
       `) as any;
 
       const [uninvoicedRows] = await db.execute(sql`
@@ -1539,37 +1552,35 @@ export async function registerRoutes(
       const buckets: Record<string, number> = {};
       for (const d of days) buckets[d] = 0;
 
-      // Fetch all rentals that overlap the window
+      // Fetch recognized revenue events in the window:
+      //   - Invoiced rentals → on invoice_date
+      //   - Completed uninvoiced → on return_date
       const [rows] = await db.execute(sql`
-        SELECT
-          r.receive_date,
-          r.return_date,
-          CAST(e.daily_rate AS DECIMAL(10,2)) AS daily_rate
-        FROM rentals r
-        JOIN equipment e ON e.id = r.equipment_id
-        WHERE r.receive_date IS NOT NULL
-          AND r.receive_date <= ${cursorStr}
-          AND (r.return_date IS NULL OR r.return_date >= ${windowStartStr})
-          AND r.status IN ('ACTIVE', 'COMPLETED')
+        SELECT rec_date, rec_amount FROM (
+          SELECT i.invoice_date AS rec_date, i.amount AS rec_amount
+          FROM invoices i
+          JOIN rentals r ON r.id = i.rental_id
+          WHERE i.invoice_date BETWEEN ${windowStartStr} AND ${cursorStr}
+
+          UNION ALL
+
+          SELECT
+            r.return_date AS rec_date,
+            (DATEDIFF(r.return_date, r.receive_date) + 1) * CAST(e.daily_rate AS DECIMAL(10,2)) AS rec_amount
+          FROM rentals r
+          JOIN equipment e ON e.id = r.equipment_id
+          WHERE r.status = 'COMPLETED'
+            AND r.return_date BETWEEN ${windowStartStr} AND ${cursorStr}
+            AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.rental_id = r.id)
+        ) AS recognized
       `) as any;
 
       for (const row of rows as any[]) {
-        const rate = Number(row.daily_rate || 0);
-        if (!rate) continue;
-        // mysql2 returns DATE columns as 'YYYY-MM-DD' strings
-        const receiveStr: string = row.receive_date instanceof Date
-          ? row.receive_date.toISOString().split('T')[0]
-          : String(row.receive_date).substring(0, 10);
-        const returnStr: string = row.return_date
-          ? (row.return_date instanceof Date
-              ? row.return_date.toISOString().split('T')[0]
-              : String(row.return_date).substring(0, 10))
-          : cursorStr;
-
-        for (const day of days) {
-          if (day >= receiveStr && day <= returnStr) {
-            buckets[day] += rate;
-          }
+        const recDate: string = row.rec_date instanceof Date
+          ? row.rec_date.toISOString().split('T')[0]
+          : String(row.rec_date).substring(0, 10);
+        if (buckets[recDate] !== undefined) {
+          buckets[recDate] += Number(row.rec_amount || 0);
         }
       }
 
@@ -1596,40 +1607,36 @@ export async function registerRoutes(
       }
       const windowStart = months[0] + '-01';
 
-      // Fetch all rentals that overlap the 12-month window (accrual — same logic as daily chart)
+      // Fetch recognized revenue events in the 12-month window:
+      //   - Invoiced rentals → on invoice_date
+      //   - Completed uninvoiced → on return_date
       const [rows] = await db.execute(sql`
-        SELECT r.receive_date, r.return_date, CAST(e.daily_rate AS DECIMAL(10,2)) AS daily_rate
-        FROM rentals r JOIN equipment e ON e.id = r.equipment_id
-        WHERE r.receive_date IS NOT NULL
-          AND r.receive_date <= ${cursorStr}
-          AND (r.return_date IS NULL OR r.return_date >= ${windowStart})
-          AND r.status IN ('ACTIVE', 'COMPLETED')
+        SELECT rec_date, rec_amount FROM (
+          SELECT i.invoice_date AS rec_date, i.amount AS rec_amount
+          FROM invoices i
+          JOIN rentals r ON r.id = i.rental_id
+          WHERE i.invoice_date BETWEEN ${windowStart} AND ${cursorStr}
+
+          UNION ALL
+
+          SELECT
+            r.return_date AS rec_date,
+            (DATEDIFF(r.return_date, r.receive_date) + 1) * CAST(e.daily_rate AS DECIMAL(10,2)) AS rec_amount
+          FROM rentals r
+          JOIN equipment e ON e.id = r.equipment_id
+          WHERE r.status = 'COMPLETED'
+            AND r.return_date BETWEEN ${windowStart} AND ${cursorStr}
+            AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.rental_id = r.id)
+        ) AS recognized
       `) as any;
 
       for (const row of (rows as any[])) {
-        const rate = Number(row.daily_rate || 0);
-        if (!rate) continue;
-        const receiveStr: string = row.receive_date instanceof Date
-          ? row.receive_date.toISOString().split('T')[0]
-          : String(row.receive_date).substring(0, 10);
-        const returnStr: string = row.return_date
-          ? (row.return_date instanceof Date ? row.return_date.toISOString().split('T')[0] : String(row.return_date).substring(0, 10))
-          : cursorStr;
-
-        for (const monthKey of months) {
-          const [y, m] = monthKey.split('-').map(Number);
-          // First and last day of this calendar month (UTC)
-          const monthStart = `${y}-${String(m).padStart(2, '0')}-01`;
-          const monthEndDate = new Date(Date.UTC(y, m, 0)); // day 0 of next month = last day of this month
-          const monthEnd = monthEndDate.toISOString().split('T')[0];
-
-          const overlapStart = receiveStr > monthStart ? receiveStr : monthStart;
-          const overlapEnd   = returnStr  < monthEnd   ? returnStr  : monthEnd;
-          if (overlapStart <= overlapEnd) {
-            const days =
-              Math.round((new Date(overlapEnd + 'T00:00:00Z').getTime() - new Date(overlapStart + 'T00:00:00Z').getTime()) / 86400000) + 1;
-            buckets[monthKey] += rate * days;
-          }
+        const recDate: string = row.rec_date instanceof Date
+          ? row.rec_date.toISOString().split('T')[0]
+          : String(row.rec_date).substring(0, 10);
+        const monthKey = recDate.substring(0, 7);
+        if (buckets[monthKey] !== undefined) {
+          buckets[monthKey] += Number(row.rec_amount || 0);
         }
       }
 
