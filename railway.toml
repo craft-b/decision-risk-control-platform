@@ -2,6 +2,5 @@
 builder = "dockerfile"
 
 [deploy]
-startCommand = "node dist/index.cjs"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
