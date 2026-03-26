@@ -42,8 +42,7 @@ async def lifespan(app: FastAPI):
         mh_predictor = MultiHorizonPredictor()
         print(f"[STARTUP] Multi-horizon models ready — version {mh_predictor.version}")
     except Exception as e:
-        print(f"[STARTUP] FATAL: Could not load model: {e}")
-        raise
+        print(f"[STARTUP] No trained models found ({e}). Service will start without predictor — train via /train endpoint.")
     try:
         drift_detector = DriftDetector()
     except Exception as e:
