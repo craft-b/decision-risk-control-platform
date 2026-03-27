@@ -15,6 +15,7 @@ import { predictiveMaintenanceService } from './services/predictive-maintenance-
 import { featureEngineeringService } from './services/feature-engineering';
 import { assetRiskPredictions } from "@shared/schema";
 import { enhancedFeatureService } from "./services/feature-engineering-enhanced";
+import { evaluatePMSchedule, generatePMDescription, samplePMCost, MaintenanceTypeKey } from "./services/pm-scheduler";
 
 declare module "express-session" {
   interface SessionData {
@@ -276,6 +277,127 @@ export async function registerRoutes(
     } catch (e: any) {
       console.error("[SIMULATE]", e);
       res.status(500).json({ message: "Simulation failed", error: e.message });
+    }
+  });
+
+  // ── PREVENTIVE MAINTENANCE SIMULATION ────────────────────────────────────
+  // Advances the simulation cursor by N days and auto-logs SCHEDULED_PM events
+  // for any equipment whose feature-driven PM interval has elapsed.
+  //
+  // Each day:
+  //   1. Cursor advances by 1 day
+  //   2. Per-equipment feature snapshot generated
+  //   3. Days-since-last-PM computed per maintenance type
+  //   4. PM config evaluated — feature thresholds can shorten base intervals
+  //   5. Triggered types get a maintenance_event logged (eventSource=SCHEDULED_PM)
+  //
+  app.post('/api/simulate/advance-pm', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const days = Math.min(Math.max(parseInt(req.body.days) || 1, 1), 30);
+
+      const [stateRows] = await db.execute(
+        sql`SELECT cursor_date, total_days_run FROM simulation_state WHERE id = 1`
+      ) as any;
+      let cursorDate: Date = stateRows[0]?.cursor_date
+        ? new Date(stateRows[0].cursor_date)
+        : new Date();
+
+      const allEquipment = await db.select({
+        id: equipment.id,
+        name: equipment.name,
+        category: equipment.category,
+      }).from(equipment);
+
+      let totalCreated = 0;
+      const summary: Array<{ equipmentId: number; name: string; types: string[]; date: string }> = [];
+
+      for (let d = 0; d < days; d++) {
+        cursorDate = new Date(cursorDate.getTime() + 24 * 3600 * 1000);
+        const dateStr = cursorDate.toISOString().split("T")[0];
+
+        for (const equip of allEquipment) {
+          const category = equip.category || "Excavator";
+
+          // Get latest feature snapshot for this equipment
+          let snapshot: any;
+          try {
+            snapshot = await enhancedFeatureService.generateSnapshot(equip.id, cursorDate);
+          } catch {
+            continue; // Skip if snapshot generation fails
+          }
+
+          // Days since last PM per maintenance type
+          const [lastPMRows] = await db.execute(sql`
+            SELECT maintenance_type, DATEDIFF(${dateStr}, MAX(maintenance_date)) AS days_since
+            FROM maintenance_events
+            WHERE equipment_id = ${equip.id}
+              AND maintenance_date <= ${dateStr}
+            GROUP BY maintenance_type
+          `) as any;
+
+          const lastPMByType: Record<MaintenanceTypeKey, number | null> = {
+            INSPECTION:    null,
+            MINOR_SERVICE: null,
+            MAJOR_SERVICE: null,
+          };
+          for (const row of (lastPMRows as any[]) ?? []) {
+            const t = row.maintenance_type as MaintenanceTypeKey;
+            if (t in lastPMByType) {
+              lastPMByType[t] = row.days_since != null ? Number(row.days_since) : null;
+            }
+          }
+
+          // Evaluate PM schedule
+          const triggered = evaluatePMSchedule(category, snapshot, lastPMByType);
+          if (triggered.length === 0) continue;
+
+          const createdTypes: string[] = [];
+
+          for (const item of triggered) {
+            const description = generatePMDescription(item.maintenanceType, item, category);
+            const cost = samplePMCost(category, item.maintenanceType);
+            const nextDueDays = { MAJOR_SERVICE: 180, MINOR_SERVICE: 90, INSPECTION: 60 }[item.maintenanceType];
+            const nextDue = new Date(cursorDate.getTime() + nextDueDays * 24 * 3600 * 1000)
+              .toISOString().split("T")[0];
+
+            await db.execute(sql`
+              INSERT INTO maintenance_events
+                (equipment_id, maintenance_date, maintenance_type, event_source,
+                 description, cost, next_due_date)
+              VALUES (
+                ${equip.id}, ${dateStr}, ${item.maintenanceType}, 'SCHEDULED_PM',
+                ${description}, ${cost}, ${nextDue}
+              )
+            `);
+
+            createdTypes.push(item.maintenanceType);
+            totalCreated++;
+          }
+
+          if (createdTypes.length > 0) {
+            summary.push({ equipmentId: equip.id, name: equip.name ?? '', types: createdTypes, date: dateStr });
+          }
+        }
+      }
+
+      // Advance cursor
+      const newCursorStr = cursorDate.toISOString().split("T")[0];
+      const newTotal = (stateRows[0]?.total_days_run || 0) + days;
+      await db.execute(sql`
+        UPDATE simulation_state SET cursor_date = ${newCursorStr}, total_days_run = ${newTotal} WHERE id = 1
+      `);
+
+      res.json({
+        message: `PM simulation: ${days} day(s) advanced, ${totalCreated} maintenance event(s) created`,
+        daysAdvanced: days,
+        cursorDate: newCursorStr,
+        totalDaysRun: newTotal,
+        eventsCreated: totalCreated,
+        summary,
+      });
+    } catch (e: any) {
+      console.error("[SIMULATE-PM]", e);
+      res.status(500).json({ message: "PM simulation failed", error: e.message });
     }
   });
 

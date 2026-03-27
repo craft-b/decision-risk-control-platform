@@ -12,6 +12,7 @@ import { db } from "./db";
 import { equipment, equipmentFailurePredictions } from "@shared/schema";
 import { desc, sql } from "drizzle-orm";
 import { enhancedFeatureService } from "./services/feature-engineering-enhanced";
+import { evaluatePMSchedule, generatePMDescription, samplePMCost, MaintenanceTypeKey } from "./services/pm-scheduler";
 
 const app = express();
 const httpServer = createServer(app);
@@ -238,6 +239,129 @@ async function runDriftRescore() {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// DAILY PM SIMULATION CRON
+// Advances the simulation clock by PM_ADVANCE_DAYS (default 7) each real day
+// and auto-logs SCHEDULED_PM events for equipment whose feature-driven
+// maintenance interval has elapsed.
+//
+// Runs at 06:00 real time (offset from midnight drift rescore to spread load).
+// Non-blocking — failures are logged, never crash server.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const PM_ADVANCE_DAYS = parseInt(process.env.PM_ADVANCE_DAYS || "7", 10);
+
+async function runPMSimulation() {
+  log(`[PM-CRON] Starting PM simulation — advancing ${PM_ADVANCE_DAYS} simulation day(s)`, "cron");
+
+  try {
+    const [stateRows] = await db.execute(
+      sql`SELECT cursor_date, total_days_run FROM simulation_state WHERE id = 1`
+    ) as any;
+    let cursorDate: Date = stateRows[0]?.cursor_date
+      ? new Date(stateRows[0].cursor_date)
+      : new Date();
+
+    const allEquipment = await db.select({
+      id: equipment.id,
+      name: equipment.name,
+      category: equipment.category,
+    }).from(equipment);
+
+    let totalCreated = 0;
+
+    for (let d = 0; d < PM_ADVANCE_DAYS; d++) {
+      cursorDate = new Date(cursorDate.getTime() + 24 * 3600 * 1000);
+      const dateStr = cursorDate.toISOString().split("T")[0];
+
+      for (const equip of allEquipment) {
+        const category = equip.category || "Excavator";
+
+        let snapshot: any;
+        try {
+          snapshot = await enhancedFeatureService.generateSnapshot(equip.id, cursorDate);
+        } catch {
+          continue;
+        }
+
+        const [lastPMRows] = await db.execute(sql`
+          SELECT maintenance_type, DATEDIFF(${dateStr}, MAX(maintenance_date)) AS days_since
+          FROM maintenance_events
+          WHERE equipment_id = ${equip.id}
+            AND maintenance_date <= ${dateStr}
+          GROUP BY maintenance_type
+        `) as any;
+
+        const lastPMByType: Record<MaintenanceTypeKey, number | null> = {
+          INSPECTION:    null,
+          MINOR_SERVICE: null,
+          MAJOR_SERVICE: null,
+        };
+        for (const row of (lastPMRows as any[]) ?? []) {
+          const t = row.maintenance_type as MaintenanceTypeKey;
+          if (t in lastPMByType) {
+            lastPMByType[t] = row.days_since != null ? Number(row.days_since) : null;
+          }
+        }
+
+        const triggered = evaluatePMSchedule(category, snapshot, lastPMByType);
+
+        for (const item of triggered) {
+          const description = generatePMDescription(item.maintenanceType, item, category);
+          const cost = samplePMCost(category, item.maintenanceType);
+          const nextDueDays = { MAJOR_SERVICE: 180, MINOR_SERVICE: 90, INSPECTION: 60 }[item.maintenanceType];
+          const nextDue = new Date(cursorDate.getTime() + nextDueDays * 24 * 3600 * 1000)
+            .toISOString().split("T")[0];
+
+          try {
+            await db.execute(sql`
+              INSERT INTO maintenance_events
+                (equipment_id, maintenance_date, maintenance_type, event_source,
+                 description, cost, next_due_date)
+              VALUES (
+                ${equip.id}, ${dateStr}, ${item.maintenanceType}, 'SCHEDULED_PM',
+                ${description}, ${cost}, ${nextDue}
+              )
+            `);
+            totalCreated++;
+          } catch (insertErr: any) {
+            log(`[PM-CRON] Insert failed for EQ-${equip.id} ${item.maintenanceType}: ${insertErr.message}`, "cron");
+          }
+        }
+      }
+    }
+
+    const newCursorStr = cursorDate.toISOString().split("T")[0];
+    const newTotal = (stateRows[0]?.total_days_run || 0) + PM_ADVANCE_DAYS;
+    await db.execute(sql`
+      UPDATE simulation_state SET cursor_date = ${newCursorStr}, total_days_run = ${newTotal} WHERE id = 1
+    `);
+
+    log(`[PM-CRON] Complete — cursor → ${newCursorStr}, ${totalCreated} PM event(s) created`, "cron");
+  } catch (err: any) {
+    log(`[PM-CRON] FATAL: ${err.message}`, "cron");
+  }
+}
+
+function scheduleDailyPM() {
+  // Fire at 06:00 real time (offset 6h from midnight drift rescore)
+  const now = new Date();
+  const next6am = new Date(now);
+  next6am.setHours(6, 0, 0, 0);
+  if (next6am <= now) next6am.setDate(next6am.getDate() + 1);
+  const msUntil6am = next6am.getTime() - now.getTime();
+
+  log(
+    `[PM-CRON] Daily PM simulation scheduled — first run in ${Math.round(msUntil6am / 60000)} minutes`,
+    "cron"
+  );
+
+  setTimeout(() => {
+    runPMSimulation();
+    setInterval(runPMSimulation, 24 * 60 * 60 * 1000);
+  }, msUntil6am);
+}
+
 // Schedule nightly at midnight using setInterval
 // Calculates ms until next midnight and fires then, then repeats every 24h
 function scheduleNightlyRescore() {
@@ -285,5 +409,7 @@ function scheduleNightlyRescore() {
     log(`serving on port ${port}`);
     // Start nightly drift rescore after server is listening
     scheduleNightlyRescore();
+    // Start daily PM simulation (runs at 06:00, advances simulation + logs PM events)
+    scheduleDailyPM();
   });
 })();
