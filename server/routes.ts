@@ -1241,80 +1241,60 @@ export async function registerRoutes(
         GROUP BY DATE_FORMAT(predicted_at, '%Y-%m') ORDER BY month DESC LIMIT 12
       `);
 
+      const featureLabels: Record<string, string> = {
+        asset_age_years: 'Equipment Age', log_maintenance_cost_180d: 'Maintenance Cost 180d (log)',
+        wear_rate_velocity: 'Wear Rate Velocity', log_total_hours_lifetime: 'Lifetime Hours (log)',
+        log_mean_time_between_failures: 'MTBF (log)', mechanical_wear_score: 'Mechanical Wear Score',
+        neglect_score: 'Maintenance Neglect Score', aging_factor: 'Aging Factor',
+        log_cost_per_event: 'Cost Per Event (log)', days_since_last_maintenance: 'Days Since Last Service',
+        wear_rate: 'Wear Rate', maintenance_events_90d: 'Maintenance Events 90d',
+        category_encoded: 'Equipment Category', abuse_score: 'Operational Stress Score',
+        vendor_reliability_score: 'Vendor Reliability Score', jobsite_risk_score: 'Job Site Risk Score',
+        usage_trend: 'Usage Trend', usage_intensity: 'Usage Intensity',
+        maint_frequency_trend: 'Maintenance Frequency Trend', cost_trend: 'Cost Trend',
+        hours_velocity: 'Hours Velocity', neglect_acceleration: 'Neglect Acceleration',
+        sensor_degradation_rate: 'Sensor Degradation Rate',
+      };
+      const featureDescriptions: Record<string, string> = {
+        asset_age_years: 'Years since manufacture', log_maintenance_cost_180d: 'Log maintenance cost trajectory',
+        log_total_hours_lifetime: 'Log cumulative operating hours',
+        log_mean_time_between_failures: 'Log mean time between failures', mechanical_wear_score: 'Composite wear indicator (0-10)',
+        neglect_score: 'Maintenance neglect composite (0-10)', days_since_last_maintenance: 'Days since last service',
+        wear_rate: 'Rate of mechanical wear accumulation', vendor_reliability_score: 'Vendor failure frequency score (0-1)',
+        jobsite_risk_score: 'Site utilization intensity risk (0-1)', usage_trend: 'Usage trajectory vs historical baseline',
+        usage_intensity: 'Daily hours relative to equipment class', wear_rate_velocity: 'Rate of change in wear accumulation',
+        maint_frequency_trend: 'Trending maintenance frequency', cost_trend: 'Trending maintenance cost',
+        hours_velocity: 'Rate of change in operating hours', neglect_acceleration: 'Accelerating neglect signal',
+        sensor_degradation_rate: 'Sensor signal quality degradation rate',
+      };
       let featureImportance: { feature: string; importance: number; description: string }[] = [];
+      let hyperparameters = { algorithm: 'Random Forest (calibrated)', nEstimators: 200, maxDepth: 12, minSamplesSplit: 5, classWeight: 'balanced' };
       try {
-        const fs = await import('fs');
-        const path = await import('path');
-        const registryPath = path.join(process.cwd(), 'ml-service', 'registry');
-        const files = fs.readdirSync(registryPath).filter((f: string) => f.startsWith('feature_importance_'));
-        if (files.length > 0) {
-          const latest = files.sort().reverse()[0];
-          const raw = JSON.parse(fs.readFileSync(path.join(registryPath, latest), 'utf-8'));
-          const featureLabels: Record<string, string> = {
-            asset_age_years: 'Equipment Age', log_maintenance_cost_180d: 'Maintenance Cost 180d (log)',
-            wear_rate_velocity: 'Wear Rate Velocity', log_total_hours_lifetime: 'Lifetime Hours (log)',
-            log_mean_time_between_failures: 'MTBF (log)', mechanical_wear_score: 'Mechanical Wear Score',
-            neglect_score: 'Maintenance Neglect Score', aging_factor: 'Aging Factor',
-            log_cost_per_event: 'Cost Per Event (log)', days_since_last_maintenance: 'Days Since Last Service',
-            wear_rate: 'Wear Rate', maintenance_events_90d: 'Maintenance Events 90d',
-            category_encoded: 'Equipment Category', abuse_score: 'Operational Stress Score',
-            vendor_reliability_score: 'Vendor Reliability Score', jobsite_risk_score: 'Job Site Risk Score',
-            usage_trend: 'Usage Trend', usage_intensity: 'Usage Intensity',
-            maint_frequency_trend: 'Maintenance Frequency Trend', cost_trend: 'Cost Trend',
-            hours_velocity: 'Hours Velocity', neglect_acceleration: 'Neglect Acceleration',
-            sensor_degradation_rate: 'Sensor Degradation Rate',
-          };
-          const featureDescriptions: Record<string, string> = {
-            asset_age_years: 'Years since manufacture', log_maintenance_cost_180d: 'Log maintenance cost trajectory',
-            log_total_hours_lifetime: 'Log cumulative operating hours',
-            log_mean_time_between_failures: 'Log mean time between failures', mechanical_wear_score: 'Composite wear indicator (0-10)',
-            neglect_score: 'Maintenance neglect composite (0-10)', days_since_last_maintenance: 'Days since last service',
-            wear_rate: 'Rate of mechanical wear accumulation', vendor_reliability_score: 'Vendor failure frequency score (0-1)',
-            jobsite_risk_score: 'Site utilization intensity risk (0-1)', usage_trend: 'Usage trajectory vs historical baseline',
-            usage_intensity: 'Daily hours relative to equipment class', wear_rate_velocity: 'Rate of change in wear accumulation',
-            maint_frequency_trend: 'Trending maintenance frequency', cost_trend: 'Trending maintenance cost',
-            hours_velocity: 'Rate of change in operating hours', neglect_acceleration: 'Accelerating neglect signal',
-            sensor_degradation_rate: 'Sensor signal quality degradation rate',
-          };
-          featureImportance = Object.entries(raw)
-            .filter(([, v]) => (v as number) > 0.005)
-            .sort(([, a], [, b]) => (b as number) - (a as number))
+        const fiRes = await fetch(ML_SERVICE_URL + '/models/feature-importance');
+        if (fiRes.ok) {
+          const fiData = await fiRes.json() as { feature_importance: Record<string, number>; hyperparameters: Record<string, any> };
+          featureImportance = Object.entries(fiData.feature_importance)
+            .filter(([, v]) => v > 0.005)
+            .sort(([, a], [, b]) => b - a)
             .slice(0, 10)
             .map(([key, importance]) => ({
               feature: featureLabels[key] || key,
-              importance: importance as number,
+              importance,
               description: featureDescriptions[key] || key,
             }));
-        }
-      } catch (e) {
-        featureImportance = [
-          { feature: 'Equipment Age', importance: 0.21, description: 'Years since manufacture' },
-          { feature: 'Maintenance Cost 180d (log)', importance: 0.16, description: 'Log maintenance cost trajectory' },
-          { feature: 'Wear Rate Velocity', importance: 0.14, description: 'Rate of change in wear accumulation' },
-          { feature: 'Lifetime Hours (log)', importance: 0.12, description: 'Log cumulative operating hours' },
-          { feature: 'MTBF (log)', importance: 0.12, description: 'Log mean time between failures' },
-        ];
-      }
-
-      let hyperparameters = { algorithm: 'Random Forest (calibrated)', nEstimators: 200, maxDepth: 12, minSamplesSplit: 5, classWeight: 'balanced' };
-      try {
-        const fs = await import('fs');
-        const path = await import('path');
-        const registryPath = path.join(process.cwd(), 'ml-service', 'registry');
-        const metaFiles = fs.readdirSync(registryPath).filter((f: string) => f.startsWith('metadata_30d_') && f.endsWith('.json'));
-        if (metaFiles.length > 0) {
-          const meta = JSON.parse(fs.readFileSync(path.join(registryPath, metaFiles.sort().reverse()[0]), 'utf-8'));
-          if (meta.hyperparameters) {
+          if (fiData.hyperparameters && Object.keys(fiData.hyperparameters).length > 0) {
             hyperparameters = {
-              algorithm: meta.hyperparameters.algorithm ?? 'Random Forest (calibrated)',
-              nEstimators: meta.hyperparameters.n_estimators ?? 200,
-              maxDepth: meta.hyperparameters.max_depth ?? 12,
-              minSamplesSplit: meta.hyperparameters.min_samples_split ?? 5,
-              classWeight: meta.hyperparameters.class_weight ?? 'balanced',
+              algorithm: fiData.hyperparameters.algorithm ?? 'Random Forest (calibrated)',
+              nEstimators: fiData.hyperparameters.n_estimators ?? 200,
+              maxDepth: fiData.hyperparameters.max_depth ?? 12,
+              minSamplesSplit: fiData.hyperparameters.min_samples_split ?? 5,
+              classWeight: fiData.hyperparameters.class_weight ?? 'balanced',
             };
           }
         }
-      } catch (e) { /* use defaults */ }
+      } catch (e) {
+        // ML service unavailable — use defaults
+      }
 
       res.json({
         version: latestMetrics.modelVersion,

@@ -116,6 +116,14 @@ class MultiHorizonPredictor:
             else:
                 self.feature_importance[h] = {}
 
+        # Hyperparameters from 30d metadata
+        self.hyperparameters: dict = {}
+        meta_files = sorted(REGISTRY.glob("metadata_30d_*.json"), key=_version_key, reverse=True)
+        if meta_files:
+            with open(meta_files[0]) as f:
+                meta = json.load(f)
+                self.hyperparameters = meta.get("hyperparameters", {})
+
         print(f"[MH-PREDICTOR] Ready — horizons: {HORIZONS}d, version: {self.version}")
     
     
