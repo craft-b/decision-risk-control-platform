@@ -166,6 +166,18 @@ async def project_failure_trajectory(snapshot: SnapshotInput):
         raise HTTPException(status_code=500, detail=f"Projection failed: {str(e)}")
 
 
+@app.get("/models/feature-importance", tags=["Model"])
+async def feature_importance():
+    """Returns feature importance and hyperparameters for the 30d model (canonical horizon)."""
+    if not mh_predictor:
+        raise HTTPException(status_code=503, detail="Multi-horizon model not loaded")
+    return {
+        "horizon": 30,
+        "feature_importance": mh_predictor.feature_importance.get(30, {}),
+        "hyperparameters": mh_predictor.hyperparameters,
+    }
+
+
 @app.get("/models/multi-horizon/info", tags=["Model"])
 async def multi_horizon_model_info():
     """Returns loaded model versions and performance metrics per horizon."""
