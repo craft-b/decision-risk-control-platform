@@ -4,6 +4,10 @@ import {
   useComputeDriftReference,
   usePredictionDrift,
   useBiasDrift,
+  useModelRegistry,
+  useChampionChallengerCompare,
+  usePromoteChallenger,
+  type HorizonMetrics,
 } from "@/hooks/use-predictive-maintenance";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -37,8 +41,13 @@ import {
   RefreshCw,
   ListChecks,
   ArrowRight,
+  Trophy,
+  Swords,
+  Crown,
+  Clock,
 } from "lucide-react";
 import { Link } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 
 const PSI_THRESHOLDS = { WARNING: 0.1, ALERT: 0.2 };
 
@@ -367,6 +376,162 @@ function BiasDriftCard() {
               Alerts when any category's HIGH% deviates &gt;15pp from its training baseline —
               indicates the model may be systematically mis-scoring a specific asset type.
             </p>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── Champion-Challenger Card ──────────────────────────────────────────────────
+
+function MetricCell({ label, value }: { label: string; value: number | null | undefined }) {
+  if (value == null) return <span className="text-muted-foreground text-xs">—</span>;
+  const pct = value <= 1 ? (value * 100).toFixed(1) + "%" : value.toFixed(3);
+  return (
+    <div className="text-center">
+      <div className="text-sm font-semibold">{pct}</div>
+      <div className="text-xs text-muted-foreground">{label}</div>
+    </div>
+  );
+}
+
+function HorizonRow({
+  horizon,
+  champ,
+  chal,
+}: {
+  horizon: string;
+  champ: HorizonMetrics | undefined;
+  chal:  HorizonMetrics | undefined;
+}) {
+  const delta = (champ?.roc_auc != null && chal?.roc_auc != null)
+    ? chal.roc_auc - champ.roc_auc
+    : null;
+
+  return (
+    <div className="grid grid-cols-[5rem_1fr_1fr_6rem] gap-2 items-center py-2 border-b last:border-0">
+      <span className="text-sm font-medium text-center">{horizon}</span>
+      <div className="flex justify-around">
+        <MetricCell label="ROC-AUC"  value={champ?.roc_auc} />
+        <MetricCell label="Recall"   value={champ?.recall_fail} />
+        <MetricCell label="PR-AUC"   value={champ?.pr_auc} />
+      </div>
+      <div className="flex justify-around">
+        <MetricCell label="ROC-AUC"  value={chal?.roc_auc} />
+        <MetricCell label="Recall"   value={chal?.recall_fail} />
+        <MetricCell label="PR-AUC"   value={chal?.pr_auc} />
+      </div>
+      <div className="text-center text-xs font-mono">
+        {delta != null ? (
+          <span className={delta > 0.005 ? "text-green-600 font-semibold" : delta < -0.005 ? "text-red-500 font-semibold" : "text-muted-foreground"}>
+            {delta > 0 ? "+" : ""}{(delta * 100).toFixed(1)}pp
+          </span>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ChampionChallengerCard() {
+  const { data: compare, isLoading } = useChampionChallengerCompare();
+  const { data: registry }           = useModelRegistry();
+  const promote                      = usePromoteChallenger();
+  const { data: authData }           = useQuery({ queryKey: ["/api/auth/me"] } as any) as any;
+  const isAdmin = authData?.role === "ADMINISTRATOR";
+
+  if (isLoading) {
+    return (
+      <Card>
+        <CardHeader><CardTitle className="flex items-center gap-2"><Swords className="h-5 w-5" />Champion vs Challenger</CardTitle></CardHeader>
+        <CardContent><Loader2 className="h-5 w-5 animate-spin" /></CardContent>
+      </Card>
+    );
+  }
+
+  if (!compare) return null;
+
+  const horizons = ["10d", "30d", "60d"];
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-start justify-between">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <Swords className="h-5 w-5 text-purple-600" />
+              Champion vs Challenger
+            </CardTitle>
+            <CardDescription className="mt-1">
+              Challenger runs in{" "}
+              <span className="font-medium text-amber-600">shadow mode</span>{" "}
+              — scores every batch but predictions are not persisted until promoted.
+            </CardDescription>
+          </div>
+          {compare.challenger && isAdmin && (
+            <button
+              onClick={() => promote.mutate()}
+              disabled={promote.isPending}
+              className="inline-flex items-center gap-2 rounded-lg bg-purple-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-purple-700 disabled:opacity-50 transition-colors"
+            >
+              {promote.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Crown className="h-4 w-4" />
+              )}
+              Promote Challenger
+            </button>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {/* Version badges */}
+        <div className="grid grid-cols-[5rem_1fr_1fr_6rem] gap-2 items-center">
+          <span />
+          <div className="flex items-center gap-2 justify-center">
+            <Trophy className="h-4 w-4 text-yellow-500" />
+            <span className="font-semibold text-sm">{compare.champion.version ?? "—"}</span>
+            <Badge className="bg-yellow-100 text-yellow-800 border-yellow-300 text-xs">champion</Badge>
+          </div>
+          <div className="flex items-center gap-2 justify-center">
+            <Swords className="h-4 w-4 text-purple-500" />
+            <span className="font-semibold text-sm">{compare.challenger?.version ?? "—"}</span>
+            {compare.challenger ? (
+              <Badge className="bg-purple-100 text-purple-800 border-purple-300 text-xs">challenger</Badge>
+            ) : (
+              <span className="text-xs text-muted-foreground italic">no challenger</span>
+            )}
+          </div>
+          <div className="text-center text-xs text-muted-foreground font-medium">Δ ROC-AUC</div>
+        </div>
+
+        {/* Per-horizon rows */}
+        <div>
+          {horizons.map((h) => (
+            <HorizonRow
+              key={h}
+              horizon={h}
+              champ={compare.champion.metrics?.[h]}
+              chal={compare.challenger?.metrics?.[h]}
+            />
+          ))}
+        </div>
+
+        {/* History */}
+        {registry && registry.history.length > 0 && (
+          <div className="space-y-1 pt-2">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Promotion history</p>
+            {registry.history.slice(-4).reverse().map((ev, i) => (
+              <div key={i} className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Clock className="h-3 w-3 shrink-0" />
+                <span className="font-mono">{ev.version ?? (ev as any).new_champion ?? "—"}</span>
+                <span className="capitalize">{ev.event.replace(/_/g, " ")}</span>
+                {ev.role && <Badge variant="outline" className="text-[10px] px-1 py-0">{ev.role}</Badge>}
+                <span className="ml-auto">{new Date(ev.timestamp).toLocaleDateString()}</span>
+              </div>
+            ))}
           </div>
         )}
       </CardContent>
@@ -860,6 +1025,12 @@ export default function MLPerformanceDashboard() {
         <DriftMonitorCard />
         <PredictionDriftCard />
         <BiasDriftCard />
+      </div>
+
+      {/* Champion-Challenger */}
+      <div className="space-y-4">
+        <h2 className="text-lg font-semibold text-slate-800">Model Governance</h2>
+        <ChampionChallengerCard />
       </div>
 
       {/* Key Insights */}

@@ -1851,6 +1851,40 @@ export async function registerRoutes(
     }
   });
 
+  // ── CHAMPION-CHALLENGER ───────────────────────────────────────────────────
+  app.get("/api/ml/models/registry", requireAuth, async (req, res) => {
+    try {
+      const mlRes = await fetch(ML_SERVICE_URL + "/models/registry");
+      if (!mlRes.ok) return res.status(mlRes.status).json({ message: "Registry unavailable" });
+      res.json(await mlRes.json());
+    } catch (e: any) {
+      res.status(500).json({ message: "ML service unreachable", error: e.message });
+    }
+  });
+
+  app.get("/api/ml/models/compare", requireAuth, async (req, res) => {
+    try {
+      const mlRes = await fetch(ML_SERVICE_URL + "/models/champion-challenger/compare");
+      if (!mlRes.ok) return res.status(mlRes.status).json({ message: "Compare unavailable" });
+      res.json(await mlRes.json());
+    } catch (e: any) {
+      res.status(500).json({ message: "ML service unreachable", error: e.message });
+    }
+  });
+
+  app.post("/api/ml/models/promote", requireAdmin, async (req, res) => {
+    try {
+      const mlRes = await fetch(ML_SERVICE_URL + "/models/promote", { method: "POST" });
+      if (!mlRes.ok) {
+        const err = await mlRes.json().catch(() => ({}));
+        return res.status(mlRes.status).json(err);
+      }
+      res.json(await mlRes.json());
+    } catch (e: any) {
+      res.status(500).json({ message: "ML service unreachable", error: e.message });
+    }
+  });
+
   // ── MAINTENANCE DUE SOON ──────────────────────────────────────────────────
   app.get('/api/maintenance/due-soon', requireAuth, async (req, res) => {
     try {

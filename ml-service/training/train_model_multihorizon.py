@@ -845,6 +845,14 @@ def main():
         mlflow.end_run()
         print(f"[MLFLOW] Run complete — ID: {run.info.run_id}")
 
+    # 7. Register with champion-challenger registry
+    try:
+        from engine.model_registry import register_new_version
+        reg = register_new_version(model_version)
+        print(f"[REGISTRY] {model_version} registered as {reg['role']}")
+    except Exception as re:
+        print(f"[REGISTRY] Warning: could not update registry ({re}) — continuing")
+
     result = {
         'success':       True,
         'model_version': model_version,
