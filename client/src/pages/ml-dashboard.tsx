@@ -591,33 +591,53 @@ export default function MLPerformanceDashboard() {
           <CardTitle className="text-blue-900">Key Model Insights</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3 text-sm text-blue-900">
+          {/* LOW risk */}
           <div className="flex items-start gap-2">
-            <CheckCircle2 className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
-            <div>
-              <strong>Strong LOW risk detection:</strong> {lowPrecision}% precision and {lowRecall}% recall
-              indicates reliable identification of equipment in good condition, minimizing unnecessary maintenance.
-            </div>
-          </div>
-          <div className="flex items-start gap-2">
-            <CheckCircle2 className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
-            <div>
-              <strong>High recall for HIGH risk ({highRecall}%):</strong> The model successfully catches most
-              critical failure cases, which is crucial for safety and preventing downtime.
-            </div>
-          </div>
-          <div className="flex items-start gap-2">
-            {parseFloat(mediumRecall) >= 80
+            {parseFloat(lowPrecision) >= 70 && parseFloat(lowRecall) >= 70
               ? <CheckCircle2 className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
               : <AlertCircle  className="h-5 w-5 text-orange-600 mt-0.5 flex-shrink-0" />
             }
             <div>
-              <strong>MEDIUM class recall ({mediumRecall}%):</strong>{" "}
-              {parseFloat(mediumRecall) >= 80
-                ? "Good coverage of medium-risk equipment across the fleet."
-                : "Some MEDIUM risk equipment may be misclassified. Consider collecting more training data in this range."
+              <strong>LOW risk detection:</strong> {lowPrecision}% precision and {lowRecall}% recall.{" "}
+              {parseFloat(lowPrecision) >= 70 && parseFloat(lowRecall) >= 70
+                ? "Reliable identification of equipment in good condition, minimizing unnecessary maintenance."
+                : parseFloat(lowRecall) < 30
+                  ? "Low recall indicates the model may be collapsing to a single class — more labeled failure examples needed."
+                  : "Precision or recall below target — consider advancing the simulation to generate more failure events."
               }
             </div>
           </div>
+          {/* HIGH risk */}
+          <div className="flex items-start gap-2">
+            {parseFloat(highRecall) >= 70
+              ? <CheckCircle2 className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
+              : <AlertCircle  className="h-5 w-5 text-orange-600 mt-0.5 flex-shrink-0" />
+            }
+            <div>
+              <strong>HIGH risk recall ({highRecall}%):</strong>{" "}
+              {parseFloat(highRecall) >= 70
+                ? "Model successfully catches most critical failure cases, crucial for safety and preventing downtime."
+                : parseFloat(highRecall) === 0
+                  ? "Model is not detecting HIGH risk units — training data has too few failure examples. Advance simulation and retrain."
+                  : "Partial HIGH risk coverage. More failure events in training data will improve detection."
+              }
+            </div>
+          </div>
+          {/* MEDIUM risk */}
+          <div className="flex items-start gap-2">
+            {parseFloat(mediumRecall) >= 70
+              ? <CheckCircle2 className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
+              : <AlertCircle  className="h-5 w-5 text-orange-600 mt-0.5 flex-shrink-0" />
+            }
+            <div>
+              <strong>MEDIUM risk recall ({mediumRecall}%):</strong>{" "}
+              {parseFloat(mediumRecall) >= 70
+                ? "Good coverage of medium-risk equipment across the fleet."
+                : "MEDIUM risk units being misclassified — class imbalance likely. Advance simulation to generate more labeled samples."
+              }
+            </div>
+          </div>
+          {/* Top features */}
           <div className="flex items-start gap-2">
             <TrendingUp className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
             <div>
