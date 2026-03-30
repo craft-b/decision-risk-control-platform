@@ -24,7 +24,8 @@ import {
   Line,
   Cell,
 } from "recharts";
-import { DollarSign, TrendingUp, Percent, AlertCircle, Calendar, AlertTriangle } from "lucide-react";
+import { DollarSign, TrendingUp, Percent, AlertCircle, Calendar, AlertTriangle, Truck, Wrench, BarChart3, ChevronRight } from "lucide-react";
+import { useAuth } from "@/hooks/use-auth";
 import { format, startOfWeek, addDays, isSameDay, startOfMonth, subMonths, differenceInDays } from "date-fns";
 import { useQuery } from "@tanstack/react-query";
 import { useSimulationState } from "@/hooks/use-predictive-maintenance";
@@ -138,6 +139,46 @@ export default function Dashboard() {
           <span>Week of {format(weekStart, 'MMM d, yyyy')}</span>
         </div>
       </div>
+
+      {/* Empty-state banner — shown when no equipment has been added yet */}
+      {equipment !== undefined && equipment.length === 0 && (
+        <div className="rounded-xl border-2 border-dashed border-muted-foreground/25 bg-muted/30 p-8 text-center space-y-4">
+          <div className="flex justify-center gap-4 text-muted-foreground/40">
+            <Truck className="h-12 w-12" />
+            <BarChart3 className="h-12 w-12" />
+            <Wrench className="h-12 w-12" />
+          </div>
+          <div>
+            <h3 className="text-xl font-semibold">No equipment yet</h3>
+            <p className="text-muted-foreground mt-1">
+              Add your first piece of equipment to start tracking revenue, utilization, and maintenance.
+            </p>
+          </div>
+          <div className="flex flex-wrap justify-center gap-3 pt-2">
+            <Link href="/equipment/new">
+              <a className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors">
+                <Truck className="h-4 w-4" />
+                Add Equipment
+                <ChevronRight className="h-4 w-4" />
+              </a>
+            </Link>
+            <Link href="/ml-dashboard">
+              <a className="inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium hover:bg-muted transition-colors">
+                <BarChart3 className="h-4 w-4" />
+                Explore ML Features
+                <ChevronRight className="h-4 w-4" />
+              </a>
+            </Link>
+            <Link href="/maintenance">
+              <a className="inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium hover:bg-muted transition-colors">
+                <Wrench className="h-4 w-4" />
+                Maintenance Planner
+                <ChevronRight className="h-4 w-4" />
+              </a>
+            </Link>
+          </div>
+        </div>
+      )}
 
       {/* Key Financial Metrics */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">

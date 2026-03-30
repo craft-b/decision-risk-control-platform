@@ -773,7 +773,11 @@ export default function PredictiveMaintenanceDashboard() {
         <Card>
           <CardHeader>
             <CardTitle>ML Pipeline Controls</CardTitle>
-            <CardDescription>Administrative controls for the predictive maintenance pipeline</CardDescription>
+            <CardDescription>
+              Administrative controls for the predictive maintenance pipeline.{" "}
+              <span className="font-medium text-amber-600">Simulation controls are demo/dev tools</span>{" "}
+              — in production, sensor data accumulates from live equipment telemetry.
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex items-start gap-4 p-4 border rounded-lg">
