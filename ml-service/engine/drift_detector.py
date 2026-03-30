@@ -1,22 +1,29 @@
 # ml-service/engine/drift_detector.py
-# PSI (Population Stability Index) drift detection on monitored features.
 #
-# Design rationale:
-#   PSI is computed on RAW feature values (pre-transformation), matching the
-#   input space that operators and domain experts can reason about. Log-
-#   transformed variants are model-internal — PSI on them conflates model
-#   preprocessing with real-world distribution shift.
+# Three-layer drift monitoring:
 #
-# PSI interpretation:
+#   1. DATA DRIFT      — PSI on input feature distributions (covariate shift).
+#                        Detects when the live fleet looks different from the
+#                        training population, which degrades model relevance.
+#
+#   2. PREDICTION DRIFT — PSI on output score distributions per horizon.
+#                        Detects when the model's confidence profile shifts
+#                        (e.g., suddenly predicting more HIGH-risk) regardless
+#                        of whether inputs changed — can indicate concept drift
+#                        or a distribution mismatch that slipped past feature PSI.
+#
+#   3. BIAS DRIFT      — Per-category HIGH-risk rate vs. training baseline.
+#                        Detects systematic over/under-prediction for specific
+#                        equipment categories (Crane, Excavator, Generator…),
+#                        which would be invisible in aggregate metrics.
+#
+# PSI interpretation (shared across all three layers):
 #   < 0.10  STABLE  — no action needed
 #   < 0.20  WARNING — monitor; consider scheduled retrain
 #   ≥ 0.20  ALERT   — significant shift; investigate and likely retrain
 #
-# Reference distribution:
-#   Saved as drift_reference_<version>.json in registry/ after each training
-#   run (sampled from the full training dataset at label time). Loaded at
-#   predictor startup. Bootstrap via POST /drift/compute-reference if no
-#   retrain has been run yet.
+# Bias drift threshold:
+#   |current_HIGH% - reference_HIGH%| > 0.15 for any category → ALERT
 
 import json
 import numpy as np
@@ -26,35 +33,43 @@ from typing import Optional
 
 REGISTRY = Path(__file__).parent.parent / "registry"
 
-# Features to monitor — chosen for: (a) high model importance, (b) most
-# likely to shift as the simulated fleet ages or usage patterns change.
-# Features to monitor — requirements for PSI:
-#   (a) non-degenerate distribution in training data (p25 ≠ p75)
-#   (b) no severe zero-inflation (would collapse quantile bins)
-#   (c) meaningful covariate to monitor for operational shift
+# ─────────────────────────────────────────────────────────────────────────────
+# FEATURE DRIFT — monitored input features
+# ─────────────────────────────────────────────────────────────────────────────
+# Selection criteria:
+#   (a) non-degenerate distribution in seeded training data (p25 ≠ p75)
+#   (b) no severe zero-inflation
+#   (c) high model importance or known sensitivity to operational change
 #
-# Excluded due to simulation-data artifacts:
-#   asset_age_years         — 52% negative values (computed vs. a future date in sim)
-#   days_since_last_maintenance — 100% zero in training sample (default on initialization)
-#   total_hours_lifetime    — 72% zero in training sample
-#   jobsite_risk_score      — constant 0.30 in training (all jobs assigned same default)
-#   vendor_reliability_score — bi-modal at {0.40, 0.95} only; works but low signal
-#   wear_rate_velocity      — 72% zero
-#
-# In production: reference distribution would be built from a stable live-traffic
-# window rather than from initialization-heavy training snapshots.
+# Excluded:
+#   asset_age_years         — negative values in sim (computed vs. future date)
+#   days_since_last_maintenance — 100% zero on initialization
+#   total_hours_lifetime    — 72% zero in early training data
+#   jobsite_risk_score      — constant 0.30 default
+#   wear_rate_velocity      — 72% zero in early training data
 MONITORED_FEATURES = [
     "mean_time_between_failures",   # reliability signal — shifts as fleet ages
     "vendor_reliability_score",     # external dependency — shifts if vendor mix changes
+    "mechanical_wear_score",        # composite 0-10 — rises with cumulative wear
+    "neglect_score",                # composite 0-10 — rises with maintenance neglect
+    "hours_used_90d",               # usage intensity proxy — shifts with rental activity
 ]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PREDICTION DRIFT — monitored output horizons
+# ─────────────────────────────────────────────────────────────────────────────
+HORIZONS = [10, 30, 60]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BIAS DRIFT — per-category threshold
+# ─────────────────────────────────────────────────────────────────────────────
+# Flag if a category's HIGH% deviates more than this from its training baseline.
+BIAS_ALERT_THRESHOLD = 0.15
 
 PSI_WARNING_THRESHOLD = 0.10
 PSI_ALERT_THRESHOLD   = 0.20
-# Bin count: PSI requires ≥5 observations/bin to be reliable.
-# For fleet-scale batches (~68 items), 5 bins gives adequate coverage.
-# The thresholds 0.1/0.2 are calibrated for these bin counts.
 N_BINS         = 5
-MIN_BATCH_SIZE = 20  # PSI is unreliable below this
+MIN_BATCH_SIZE = 20
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -64,24 +79,16 @@ MIN_BATCH_SIZE = 20  # PSI is unreliable below this
 def compute_psi(reference: np.ndarray, current: np.ndarray, n_bins: int = N_BINS) -> float:
     """
     PSI between reference (training) and current (inference) distributions.
-
-    Bins are defined by reference quantiles so that each bin has roughly equal
-    expected mass — this is more robust than fixed-width bins for skewed
-    features like total_hours_lifetime.
+    Bins are defined by reference quantiles for robustness with skewed features.
     """
-    # Principled smoothing: one phantom observation per distribution.
-    # 1e-6 would make log(cur/ref) ≈ 13 whenever a bin is empty — inflating
-    # PSI badly on skewed distributions with small batches. 1/n is more
-    # principled: empty bins contribute at most ~log(n) per bin.
     smooth = 1.0 / min(len(reference), len(current))
 
-    # Build bin edges from reference quantiles
     breaks = np.nanquantile(reference, np.linspace(0, 1, n_bins + 1))
     breaks[0]  -= smooth
     breaks[-1] += smooth
-    breaks = np.unique(breaks)   # deduplicate (can happen with low-variance features)
+    breaks = np.unique(breaks)
     if len(breaks) < 3:
-        return 0.0               # can't compute meaningful PSI
+        return 0.0
 
     ref_counts, _ = np.histogram(reference, bins=breaks)
     cur_counts, _ = np.histogram(current,   bins=breaks)
@@ -89,12 +96,11 @@ def compute_psi(reference: np.ndarray, current: np.ndarray, n_bins: int = N_BINS
     ref_pct = ref_counts / max(len(reference), 1)
     cur_pct = cur_counts / max(len(current),   1)
 
-    # Additive smoothing — prevents log(0), keeps magnitude bounded
     ref_pct = np.where(ref_pct == 0, smooth, ref_pct)
     cur_pct = np.where(cur_pct == 0, smooth, cur_pct)
 
     psi = float(np.sum((cur_pct - ref_pct) * np.log(cur_pct / ref_pct)))
-    return round(max(psi, 0.0), 6)   # PSI is non-negative by construction
+    return round(max(psi, 0.0), 6)
 
 
 def _psi_status(psi: float) -> str:
@@ -106,21 +112,23 @@ def _psi_status(psi: float) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DETECTOR
+# DRIFT DETECTOR
 # ─────────────────────────────────────────────────────────────────────────────
 
 class DriftDetector:
     """
-    Loads reference distributions at startup and computes PSI post-batch-
-    prediction. Results are written to the drift_metrics table so the ops
-    team can query trend over time.
+    Three-layer drift detector: feature PSI, prediction score PSI, bias by category.
+    Loads reference distributions at startup and checks post-batch-prediction.
+    All results persisted to MySQL for trend analysis.
     """
 
     def __init__(self):
         self.reference: dict[str, np.ndarray] = {}
+        self.pred_reference: dict[int, dict]  = {}   # horizon → {scores, high_pct, medium_pct, low_pct}
+        self.bias_reference: dict[str, dict]  = {}   # category → {high_pct, mean_score}
         self.ref_model_version: Optional[str] = None
         self._load_reference()
-        self._ensure_table()
+        self._ensure_tables()
 
     # ── Startup ──────────────────────────────────────────────────────────────
 
@@ -128,10 +136,9 @@ class DriftDetector:
         def _mtime(p: Path): return p.stat().st_mtime
 
         ref_files = sorted(REGISTRY.glob("drift_reference_*.json"), key=_mtime, reverse=True)
-        # Also check unversioned fallback (written by compute_reference_from_db)
         fallback  = REGISTRY / "drift_reference.json"
+        target    = ref_files[0] if ref_files else (fallback if fallback.exists() else None)
 
-        target = ref_files[0] if ref_files else (fallback if fallback.exists() else None)
         if target is None:
             print("[DRIFT] No reference file found — drift detection inactive. "
                   "Call POST /drift/compute-reference to bootstrap.")
@@ -140,21 +147,39 @@ class DriftDetector:
         with open(target) as f:
             data = json.load(f)
 
+        # Feature reference
         for feat, values in data.get("features", {}).items():
             arr = np.array(values, dtype=float)
             if len(arr) >= MIN_BATCH_SIZE:
                 self.reference[feat] = arr
 
-        self.ref_model_version = data.get("model_version")
-        print(f"[DRIFT] Reference loaded — {len(self.reference)} features, "
-              f"n={data.get('n_samples','?')}, model={self.ref_model_version}")
+        # Prediction score reference
+        for h_str, pref in data.get("predictions", {}).items():
+            h = int(h_str)
+            scores = pref.get("scores", [])
+            if len(scores) >= MIN_BATCH_SIZE:
+                self.pred_reference[h] = {
+                    "scores":     np.array(scores, dtype=float),
+                    "high_pct":   pref.get("high_pct", 0.0),
+                    "medium_pct": pref.get("medium_pct", 0.0),
+                    "low_pct":    pref.get("low_pct",  1.0),
+                }
 
-    def _ensure_table(self):
-        """Auto-provision drift_metrics if it doesn't exist."""
+        # Bias reference
+        self.bias_reference = data.get("bias", {})
+
+        self.ref_model_version = data.get("model_version")
+        print(f"[DRIFT] Reference loaded — {len(self.reference)} feature refs, "
+              f"{len(self.pred_reference)} prediction refs, "
+              f"{len(self.bias_reference)} category bias refs, "
+              f"model={self.ref_model_version}")
+
+    def _ensure_tables(self):
         try:
             from sqlalchemy import text as sqla_text
             engine = self._get_engine()
             with engine.connect() as conn:
+                # Feature drift table (existing)
                 conn.execute(sqla_text("""
                     CREATE TABLE IF NOT EXISTS drift_metrics (
                         id            BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -172,19 +197,59 @@ class DriftDetector:
                         INDEX idx_feature    (feature)
                     )
                 """))
+
+                # Prediction drift table
+                conn.execute(sqla_text("""
+                    CREATE TABLE IF NOT EXISTS prediction_drift_metrics (
+                        id             BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                        checked_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        model_version  VARCHAR(50),
+                        batch_size     INT NOT NULL,
+                        horizon        SMALLINT NOT NULL,
+                        score_psi      DECIMAL(10, 6) NOT NULL,
+                        score_status   ENUM('STABLE','WARNING','ALERT') NOT NULL,
+                        high_pct       DECIMAL(5, 4),
+                        medium_pct     DECIMAL(5, 4),
+                        low_pct        DECIMAL(5, 4),
+                        ref_high_pct   DECIMAL(5, 4),
+                        ref_medium_pct DECIMAL(5, 4),
+                        ref_low_pct    DECIMAL(5, 4),
+                        INDEX idx_checked_at (checked_at),
+                        INDEX idx_horizon    (horizon)
+                    )
+                """))
+
+                # Bias drift table
+                conn.execute(sqla_text("""
+                    CREATE TABLE IF NOT EXISTS bias_drift_metrics (
+                        id           BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                        checked_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        model_version VARCHAR(50),
+                        batch_size   INT NOT NULL,
+                        category     VARCHAR(100) NOT NULL,
+                        horizon      SMALLINT NOT NULL,
+                        mean_score   DECIMAL(8, 6),
+                        high_pct     DECIMAL(5, 4),
+                        ref_high_pct DECIMAL(5, 4),
+                        deviation    DECIMAL(5, 4),
+                        alert        TINYINT(1) DEFAULT 0,
+                        INDEX idx_checked_at (checked_at),
+                        INDEX idx_category   (category)
+                    )
+                """))
+
                 conn.commit()
             engine.dispose()
-            print("[DRIFT] drift_metrics table ready")
+            print("[DRIFT] All drift tables ready")
         except Exception as e:
             print(f"[DRIFT] Table init warning: {e}")
 
-    # ── Public API ────────────────────────────────────────────────────────────
+    # ── Public API — Feature Drift ────────────────────────────────────────────
 
     def check(self, snapshots: list, model_version: str = "unknown") -> dict:
         """
-        Compute PSI for each monitored feature against the training reference.
-        Persists results to drift_metrics.
-        Returns a summary dict — safe to include in the batch prediction response.
+        Feature drift: PSI on input feature distributions.
+        Returns summary dict — safe to include in batch prediction response.
         """
         if not self.reference:
             return {"status": "inactive", "reason": "no reference distribution loaded"}
@@ -227,11 +292,11 @@ class DriftDetector:
         )
 
         if alerts:
-            print(f"[DRIFT] ALERT — significant shift detected in: {alerts}")
+            print(f"[DRIFT] Feature ALERT — shift in: {alerts}")
         else:
-            print(f"[DRIFT] {overall} (batch_size={len(snapshots)})")
+            print(f"[DRIFT] Feature {overall} (batch_size={len(snapshots)})")
 
-        self._persist(results, len(snapshots), model_version)
+        self._persist_feature(results, len(snapshots), model_version)
 
         return {
             "status":        overall,
@@ -241,8 +306,167 @@ class DriftDetector:
             "features":      results,
         }
 
+    # ── Public API — Prediction Drift ─────────────────────────────────────────
+
+    def check_prediction_drift(self, results: list, model_version: str = "unknown") -> dict:
+        """
+        Prediction drift: PSI on output score distributions per horizon.
+        Also tracks HIGH/MEDIUM/LOW label ratio shift.
+        `results` is the list returned by predict_multi_horizon_batch.
+        """
+        if not self.pred_reference:
+            return {"status": "inactive", "reason": "no prediction reference loaded"}
+        if len(results) < MIN_BATCH_SIZE:
+            return {"status": "skipped",
+                    "reason": f"batch too small ({len(results)} < {MIN_BATCH_SIZE})"}
+
+        horizon_results: dict[int, dict] = {}
+        alerts: list[int] = []
+
+        for h in HORIZONS:
+            if h not in self.pred_reference:
+                continue
+
+            h_key = f"{h}d"
+            cur_scores = np.array([
+                r["predictions"][h_key]["failure_probability"]
+                for r in results
+                if h_key in r.get("predictions", {})
+            ], dtype=float)
+
+            if len(cur_scores) < 5:
+                continue
+
+            cur_labels = [
+                r["predictions"][h_key]["risk_level"]
+                for r in results
+                if h_key in r.get("predictions", {})
+            ]
+
+            n = len(cur_labels)
+            cur_high_pct   = sum(1 for l in cur_labels if l == "HIGH")   / n
+            cur_medium_pct = sum(1 for l in cur_labels if l == "MEDIUM") / n
+            cur_low_pct    = sum(1 for l in cur_labels if l == "LOW")    / n
+
+            ref      = self.pred_reference[h]
+            ref_arr  = ref["scores"]
+            psi      = compute_psi(ref_arr, cur_scores)
+            status   = _psi_status(psi)
+
+            if status == "ALERT":
+                alerts.append(h)
+
+            horizon_results[h] = {
+                "score_psi":      psi,
+                "score_status":   status,
+                "high_pct":       round(cur_high_pct,   4),
+                "medium_pct":     round(cur_medium_pct, 4),
+                "low_pct":        round(cur_low_pct,    4),
+                "ref_high_pct":   round(ref.get("high_pct",   0.0), 4),
+                "ref_medium_pct": round(ref.get("medium_pct", 0.0), 4),
+                "ref_low_pct":    round(ref.get("low_pct",    1.0), 4),
+            }
+
+        overall = (
+            "ALERT"   if alerts else
+            "WARNING" if any(v["score_status"] == "WARNING" for v in horizon_results.values()) else
+            "STABLE"  if horizon_results else
+            "NO_DATA"
+        )
+
+        if alerts:
+            print(f"[DRIFT] Prediction ALERT — score shift in horizons: {alerts}d")
+        else:
+            print(f"[DRIFT] Prediction {overall}")
+
+        self._persist_prediction(horizon_results, len(results), model_version)
+
+        return {
+            "status":        overall,
+            "batch_size":    len(results),
+            "model_version": model_version,
+            "alerts":        [f"{h}d" for h in alerts],
+            "horizons":      horizon_results,
+        }
+
+    # ── Public API — Bias Drift ───────────────────────────────────────────────
+
+    def check_bias_drift(self, results: list, snapshots: list, model_version: str = "unknown") -> dict:
+        """
+        Bias drift: per-category HIGH-risk rate vs training baseline.
+        Uses 30d horizon as the canonical horizon for bias assessment.
+        """
+        if len(results) < MIN_BATCH_SIZE:
+            return {"status": "skipped",
+                    "reason": f"batch too small ({len(results)} < {MIN_BATCH_SIZE})"}
+
+        # Build category → 30d scores/labels mapping
+        cat_data: dict[str, list] = {}
+        for r, s in zip(results, snapshots):
+            cat = s.get("category", "Unknown")
+            pred_30d = r.get("predictions", {}).get("30d", {})
+            if not pred_30d:
+                continue
+            if cat not in cat_data:
+                cat_data[cat] = []
+            cat_data[cat].append({
+                "prob":  pred_30d.get("failure_probability", 0.0),
+                "label": pred_30d.get("risk_level", "LOW"),
+            })
+
+        category_results: dict[str, dict] = {}
+        alerts: list[str] = []
+
+        for cat, items in cat_data.items():
+            if len(items) < 3:      # too few to be meaningful
+                continue
+
+            n         = len(items)
+            high_pct  = sum(1 for i in items if i["label"] == "HIGH") / n
+            mean_score = float(np.mean([i["prob"] for i in items]))
+
+            ref_high_pct = self.bias_reference.get(cat, {}).get("high_pct", None)
+            if ref_high_pct is None:
+                # No reference for this category — use overall HIGH% as fallback
+                all_high = sum(1 for r in results
+                               if r.get("predictions", {}).get("30d", {}).get("risk_level") == "HIGH")
+                ref_high_pct = all_high / max(len(results), 1)
+
+            deviation  = abs(high_pct - ref_high_pct)
+            is_alert   = deviation > BIAS_ALERT_THRESHOLD
+
+            if is_alert:
+                alerts.append(cat)
+
+            category_results[cat] = {
+                "n":             n,
+                "mean_score":    round(mean_score, 4),
+                "high_pct":      round(high_pct,     4),
+                "ref_high_pct":  round(ref_high_pct, 4),
+                "deviation":     round(deviation,    4),
+                "alert":         is_alert,
+            }
+
+        overall = "ALERT" if alerts else "STABLE"
+
+        if alerts:
+            print(f"[DRIFT] Bias ALERT — category shift in: {alerts}")
+        else:
+            print(f"[DRIFT] Bias {overall} ({len(category_results)} categories)")
+
+        self._persist_bias(category_results, len(results), model_version)
+
+        return {
+            "status":     overall,
+            "batch_size": len(results),
+            "alerts":     alerts,
+            "categories": category_results,
+        }
+
+    # ── Public API — Getters ──────────────────────────────────────────────────
+
     def get_latest(self) -> list[dict]:
-        """Return the single most recent PSI row per monitored feature."""
+        """Most recent PSI row per monitored feature (data drift)."""
         if not MONITORED_FEATURES:
             return []
         try:
@@ -268,36 +492,139 @@ class DriftDetector:
             print(f"[DRIFT] get_latest error: {e}")
             return []
 
+    def get_latest_prediction_drift(self) -> list[dict]:
+        """Most recent prediction drift row per horizon."""
+        try:
+            from sqlalchemy import text as sqla_text
+            engine = self._get_engine()
+            with engine.connect() as conn:
+                rows = conn.execute(sqla_text("""
+                    SELECT p1.*
+                    FROM prediction_drift_metrics p1
+                    INNER JOIN (
+                        SELECT horizon, MAX(id) AS latest_id
+                        FROM prediction_drift_metrics
+                        GROUP BY horizon
+                    ) p2 ON p1.id = p2.latest_id
+                    ORDER BY p1.horizon
+                """)).fetchall()
+            engine.dispose()
+            return [dict(r._mapping) for r in rows]
+        except Exception as e:
+            print(f"[DRIFT] get_latest_prediction_drift error: {e}")
+            return []
+
+    def get_latest_bias_drift(self) -> list[dict]:
+        """Most recent bias drift row per category."""
+        try:
+            from sqlalchemy import text as sqla_text
+            engine = self._get_engine()
+            with engine.connect() as conn:
+                rows = conn.execute(sqla_text("""
+                    SELECT b1.*
+                    FROM bias_drift_metrics b1
+                    INNER JOIN (
+                        SELECT category, horizon, MAX(id) AS latest_id
+                        FROM bias_drift_metrics
+                        WHERE horizon = 30
+                        GROUP BY category, horizon
+                    ) b2 ON b1.id = b2.latest_id
+                    ORDER BY b1.deviation DESC
+                """)).fetchall()
+            engine.dispose()
+            return [dict(r._mapping) for r in rows]
+        except Exception as e:
+            print(f"[DRIFT] get_latest_bias_drift error: {e}")
+            return []
+
+    # ── Reference Bootstrap ───────────────────────────────────────────────────
+
     def compute_reference_from_db(self, model_version: str = "bootstrap") -> dict:
         """
-        Build reference distribution directly from asset_feature_snapshots.
-        Used to bootstrap drift detection without triggering a full retrain.
+        Build all three reference distributions from current DB state.
+        - Feature reference from asset_feature_snapshots
+        - Prediction score + label distribution from asset_risk_predictions
+        - Bias reference from asset_risk_predictions joined with equipment
         Saves drift_reference.json to registry/.
         """
         try:
             from sqlalchemy import text as sqla_text
             engine = self._get_engine()
-            cols   = ", ".join(MONITORED_FEATURES)
-            df = pd.read_sql(
-                f"SELECT {cols} FROM asset_feature_snapshots ORDER BY snapshot_ts",
+
+            # ── Feature reference ─────────────────────────────────────────────
+            feat_cols = ", ".join(MONITORED_FEATURES)
+            df_feat = pd.read_sql(
+                f"SELECT {feat_cols} FROM asset_feature_snapshots ORDER BY snapshot_ts",
                 engine
             )
+
+            # ── Prediction reference from asset_risk_predictions ──────────────
+            df_pred = pd.read_sql(
+                """SELECT arp.failure_probability, arp.risk_band, e.category
+                   FROM asset_risk_predictions arp
+                   JOIN equipment e ON e.id = arp.equipment_id
+                   ORDER BY arp.predicted_at""",
+                engine
+            )
+
             engine.dispose()
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-        sample = df.sample(min(5000, len(df)), random_state=42)
+        # Feature reference
+        feat_sample = df_feat.sample(min(5000, len(df_feat)), random_state=42)
         features = {}
         for feat in MONITORED_FEATURES:
-            if feat in sample.columns:
-                vals = pd.to_numeric(sample[feat], errors="coerce").dropna().tolist()
-                features[feat] = [round(v, 6) for v in vals]
-                self.reference[feat] = np.array(features[feat])
+            if feat in feat_sample.columns:
+                vals = pd.to_numeric(feat_sample[feat], errors="coerce").dropna().tolist()
+                if len(vals) >= MIN_BATCH_SIZE:
+                    features[feat] = [round(v, 6) for v in vals]
+                    self.reference[feat] = np.array(features[feat])
+
+        # Prediction reference (use failure_probability as proxy for all horizons
+        # since DB only stores one prediction per equipment — treat as 30d canonical)
+        pred_ref: dict[str, dict] = {}
+        if len(df_pred) >= MIN_BATCH_SIZE:
+            scores = pd.to_numeric(df_pred["failure_probability"], errors="coerce").dropna().tolist()
+            n      = len(scores)
+            labels = df_pred["risk_band"].tolist()
+            pred_ref_entry = {
+                "scores":     [round(s, 6) for s in scores],
+                "high_pct":   round(sum(1 for l in labels if l == "HIGH")   / n, 4),
+                "medium_pct": round(sum(1 for l in labels if l == "MEDIUM") / n, 4),
+                "low_pct":    round(sum(1 for l in labels if l == "LOW")    / n, 4),
+            }
+            # Use same distribution as proxy for all horizons
+            for h in HORIZONS:
+                pred_ref[str(h)] = pred_ref_entry
+                self.pred_reference[h] = {
+                    "scores":     np.array(pred_ref_entry["scores"], dtype=float),
+                    "high_pct":   pred_ref_entry["high_pct"],
+                    "medium_pct": pred_ref_entry["medium_pct"],
+                    "low_pct":    pred_ref_entry["low_pct"],
+                }
+
+        # Bias reference — per-category HIGH%
+        bias_ref: dict[str, dict] = {}
+        if "category" in df_pred.columns and len(df_pred) >= MIN_BATCH_SIZE:
+            df_pred["is_high"] = df_pred["risk_band"] == "HIGH"
+            df_pred["prob_num"] = pd.to_numeric(df_pred["failure_probability"], errors="coerce")
+            for cat, grp in df_pred.groupby("category"):
+                if len(grp) < 3:
+                    continue
+                bias_ref[cat] = {
+                    "high_pct":   round(float(grp["is_high"].mean()), 4),
+                    "mean_score": round(float(grp["prob_num"].mean()), 4),
+                    "n":          len(grp),
+                }
+            self.bias_reference = bias_ref
 
         ref_data = {
             "model_version": model_version,
-            "n_samples":     len(sample),
+            "n_samples":     len(feat_sample),
             "features":      features,
+            "predictions":   pred_ref,
+            "bias":          bias_ref,
             "saved_at":      pd.Timestamp.now().isoformat(),
         }
 
@@ -306,17 +633,24 @@ class DriftDetector:
             json.dump(ref_data, f, indent=2)
 
         self.ref_model_version = model_version
-        print(f"[DRIFT] Reference computed from DB — {len(features)} features, n={len(sample)}")
+        print(f"[DRIFT] Reference computed — {len(features)} feature refs, "
+              f"{len(pred_ref)} pred refs, {len(bias_ref)} category bias refs, "
+              f"n={len(feat_sample)}")
 
-        # Immediately run a drift check against the new reference so drift_metrics
-        # is updated and the dashboard reflects STABLE instead of stale ALERT rows.
+        # Post-reset feature drift check
         try:
-            check_result = self.check(sample.to_dict("records"), model_version)
-            print(f"[DRIFT] Post-reset check: {check_result.get('status')}")
+            check_result = self.check(feat_sample.to_dict("records"), model_version)
+            print(f"[DRIFT] Post-reset feature check: {check_result.get('status')}")
         except Exception as e:
             print(f"[DRIFT] Post-reset check warning (non-fatal): {e}")
 
-        return {"success": True, "n_samples": len(sample), "features": list(features.keys())}
+        return {
+            "success":    True,
+            "n_samples":  len(feat_sample),
+            "features":   list(features.keys()),
+            "pred_horizons": list(pred_ref.keys()),
+            "bias_categories": list(bias_ref.keys()),
+        }
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
@@ -333,7 +667,7 @@ class DriftDetector:
         )
         return create_engine(url, pool_pre_ping=True)
 
-    def _persist(self, results: dict, batch_size: int, model_version: str):
+    def _persist_feature(self, results: dict, batch_size: int, model_version: str):
         try:
             from sqlalchemy import text as sqla_text
             engine = self._get_engine()
@@ -359,4 +693,64 @@ class DriftDetector:
                 conn.commit()
             engine.dispose()
         except Exception as e:
-            print(f"[DRIFT] DB persist warning: {e}")
+            print(f"[DRIFT] Feature persist warning: {e}")
+
+    def _persist_prediction(self, horizon_results: dict, batch_size: int, model_version: str):
+        try:
+            from sqlalchemy import text as sqla_text
+            engine = self._get_engine()
+            with engine.connect() as conn:
+                for h, r in horizon_results.items():
+                    conn.execute(sqla_text("""
+                        INSERT INTO prediction_drift_metrics
+                            (model_version, batch_size, horizon, score_psi, score_status,
+                             high_pct, medium_pct, low_pct,
+                             ref_high_pct, ref_medium_pct, ref_low_pct)
+                        VALUES
+                            (:mv, :bs, :h, :psi, :status,
+                             :hp, :mp, :lp, :rhp, :rmp, :rlp)
+                    """), {
+                        "mv":     model_version,
+                        "bs":     batch_size,
+                        "h":      h,
+                        "psi":    r["score_psi"],
+                        "status": r["score_status"],
+                        "hp":     r["high_pct"],
+                        "mp":     r["medium_pct"],
+                        "lp":     r["low_pct"],
+                        "rhp":    r["ref_high_pct"],
+                        "rmp":    r["ref_medium_pct"],
+                        "rlp":    r["ref_low_pct"],
+                    })
+                conn.commit()
+            engine.dispose()
+        except Exception as e:
+            print(f"[DRIFT] Prediction persist warning: {e}")
+
+    def _persist_bias(self, category_results: dict, batch_size: int, model_version: str):
+        try:
+            from sqlalchemy import text as sqla_text
+            engine = self._get_engine()
+            with engine.connect() as conn:
+                for cat, r in category_results.items():
+                    conn.execute(sqla_text("""
+                        INSERT INTO bias_drift_metrics
+                            (model_version, batch_size, category, horizon,
+                             mean_score, high_pct, ref_high_pct, deviation, alert)
+                        VALUES
+                            (:mv, :bs, :cat, 30,
+                             :ms, :hp, :rhp, :dev, :alert)
+                    """), {
+                        "mv":    model_version,
+                        "bs":    batch_size,
+                        "cat":   cat,
+                        "ms":    r["mean_score"],
+                        "hp":    r["high_pct"],
+                        "rhp":   r["ref_high_pct"],
+                        "dev":   r["deviation"],
+                        "alert": 1 if r["alert"] else 0,
+                    })
+                conn.commit()
+            engine.dispose()
+        except Exception as e:
+            print(f"[DRIFT] Bias persist warning: {e}")

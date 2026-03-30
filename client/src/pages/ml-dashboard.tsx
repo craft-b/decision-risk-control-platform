@@ -1,4 +1,10 @@
-import { useModelMetrics, useDriftStatus, useComputeDriftReference } from "@/hooks/use-predictive-maintenance";
+import {
+  useModelMetrics,
+  useDriftStatus,
+  useComputeDriftReference,
+  usePredictionDrift,
+  useBiasDrift,
+} from "@/hooks/use-predictive-maintenance";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -35,8 +41,31 @@ const PSI_THRESHOLDS = { WARNING: 0.1, ALERT: 0.2 };
 
 const FEATURE_LABELS: Record<string, string> = {
   mean_time_between_failures: "Mean Time Between Failures",
-  vendor_reliability_score: "Vendor Reliability Score",
+  vendor_reliability_score:   "Vendor Reliability Score",
+  mechanical_wear_score:      "Mechanical Wear Score",
+  neglect_score:              "Neglect Score",
+  hours_used_90d:             "Hours Used (90d)",
 };
+
+function statusBadgeClass(status: string) {
+  return status === "ALERT"   ? "bg-red-100 text-red-800 border-red-300" :
+         status === "WARNING" ? "bg-yellow-100 text-yellow-800 border-yellow-300" :
+                                "bg-green-100 text-green-800 border-green-300";
+}
+
+function statusBorderClass(status: string) {
+  return status === "ALERT"   ? "border-red-500 bg-red-50" :
+         status === "WARNING" ? "border-yellow-500 bg-yellow-50" :
+         status === "STABLE"  ? "border-green-500 bg-green-50" :
+                                "border-slate-200";
+}
+
+function statusTextClass(status: string) {
+  return status === "ALERT"   ? "text-red-700" :
+         status === "WARNING" ? "text-yellow-700" :
+         status === "STABLE"  ? "text-green-700" :
+                                "text-slate-500";
+}
 
 function DriftMonitorCard() {
   const { data: drift, isLoading, error } = useDriftStatus();
@@ -44,17 +73,8 @@ function DriftMonitorCard() {
   const { user } = useAuth();
   const isAdmin = (user as any)?.role === "ADMINISTRATOR";
 
-  const overallColor =
-    drift?.overall === "ALERT"   ? "border-red-500 bg-red-50" :
-    drift?.overall === "WARNING" ? "border-yellow-500 bg-yellow-50" :
-    drift?.overall === "STABLE"  ? "border-green-500 bg-green-50" :
-                                   "border-slate-200";
-
-  const overallTextColor =
-    drift?.overall === "ALERT"   ? "text-red-700" :
-    drift?.overall === "WARNING" ? "text-yellow-700" :
-    drift?.overall === "STABLE"  ? "text-green-700" :
-                                   "text-slate-500";
+  const overallColor     = statusBorderClass(drift?.overall ?? "");
+  const overallTextColor = statusTextClass(drift?.overall ?? "");
 
   return (
     <Card className={`border-l-4 ${overallColor}`}>
@@ -103,13 +123,7 @@ function DriftMonitorCard() {
             {/* Overall status */}
             <div className="flex items-center gap-2">
               <span className="text-sm text-muted-foreground">Overall status:</span>
-              <Badge
-                className={
-                  drift.overall === "ALERT"   ? "bg-red-100 text-red-800 border-red-300" :
-                  drift.overall === "WARNING" ? "bg-yellow-100 text-yellow-800 border-yellow-300" :
-                                               "bg-green-100 text-green-800 border-green-300"
-                }
-              >
+              <Badge className={statusBadgeClass(drift.overall)}>
                 {drift.overall}
               </Badge>
               {drift.features[0] && (
@@ -166,6 +180,190 @@ function DriftMonitorCard() {
               <span><span className="font-medium text-yellow-600">Warning</span> 0.10 – 0.20</span>
               <span><span className="font-medium text-red-600">Alert</span> &gt; 0.20 → retrain recommended</span>
             </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── Prediction Drift Card ─────────────────────────────────────────────────────
+
+function PredictionDriftCard() {
+  const { data, isLoading } = usePredictionDrift();
+
+  const overall     = data?.overall ?? "NO_DATA";
+  const borderClass = statusBorderClass(overall);
+  const textClass   = statusTextClass(overall);
+
+  return (
+    <Card className={`border-l-4 ${borderClass}`}>
+      <CardHeader className="pb-3">
+        <div className="flex items-center gap-2">
+          <TrendingUp className={`h-5 w-5 ${textClass}`} />
+          <div>
+            <CardTitle>Prediction Drift Monitor</CardTitle>
+            <CardDescription>
+              Output score distribution shift per horizon — detects confidence profile changes
+            </CardDescription>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {isLoading && (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading prediction drift…
+          </div>
+        )}
+        {!isLoading && overall === "NO_DATA" && (
+          <Alert className="border-slate-200">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription className="text-sm">
+              No prediction drift data yet — run a batch prediction to populate.
+            </AlertDescription>
+          </Alert>
+        )}
+        {data && overall !== "NO_DATA" && (
+          <div className="space-y-4">
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">Overall:</span>
+              <Badge className={statusBadgeClass(overall)}>{overall}</Badge>
+              {data.horizons[0] && (
+                <span className="text-xs text-muted-foreground ml-auto">
+                  Last checked {new Date(data.horizons[0].checked_at).toLocaleString()}
+                </span>
+              )}
+            </div>
+
+            <div className="space-y-3">
+              {data.horizons.map((h) => {
+                const psiPct   = Math.min(h.score_psi / 0.20, 1);
+                const barColor = h.score_status === "ALERT"   ? "bg-red-500" :
+                                 h.score_status === "WARNING" ? "bg-yellow-400" :
+                                                               "bg-green-500";
+                const highDelta  = ((h.high_pct   - h.ref_high_pct)   * 100).toFixed(1);
+                const highArrow  = h.high_pct > h.ref_high_pct ? "↑" : h.high_pct < h.ref_high_pct ? "↓" : "–";
+                return (
+                  <div key={h.horizon} className="space-y-1">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="font-medium">{h.horizon}d horizon</span>
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <span className="font-mono">PSI {h.score_psi.toFixed(4)}</span>
+                        <Badge variant="outline" className={statusBadgeClass(h.score_status)}>
+                          {h.score_status}
+                        </Badge>
+                      </div>
+                    </div>
+                    <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
+                      <div className={`h-full rounded-full transition-all ${barColor}`}
+                           style={{ width: `${psiPct * 100}%` }} />
+                    </div>
+                    <div className="flex gap-3 text-xs text-muted-foreground">
+                      <span>HIGH: {(h.high_pct * 100).toFixed(1)}% (ref {(h.ref_high_pct * 100).toFixed(1)}%) {highArrow}{Math.abs(parseFloat(highDelta))}pp</span>
+                      <span>MED: {(h.medium_pct * 100).toFixed(1)}%</span>
+                      <span>LOW: {(h.low_pct * 100).toFixed(1)}%</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="flex gap-4 text-xs text-muted-foreground pt-1">
+              <span><span className="font-medium text-green-600">Stable</span> PSI &lt; 0.10</span>
+              <span><span className="font-medium text-yellow-600">Warning</span> 0.10 – 0.20</span>
+              <span><span className="font-medium text-red-600">Alert</span> &gt; 0.20 → investigate</span>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── Bias Drift Card ───────────────────────────────────────────────────────────
+
+function BiasDriftCard() {
+  const { data, isLoading } = useBiasDrift();
+
+  const overall     = data?.overall ?? "NO_DATA";
+  const borderClass = statusBorderClass(overall);
+  const textClass   = statusTextClass(overall);
+
+  return (
+    <Card className={`border-l-4 ${borderClass}`}>
+      <CardHeader className="pb-3">
+        <div className="flex items-center gap-2">
+          <Target className={`h-5 w-5 ${textClass}`} />
+          <div>
+            <CardTitle>Bias Drift Monitor</CardTitle>
+            <CardDescription>
+              Per-category HIGH-risk rate vs. training baseline (30d horizon)
+            </CardDescription>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {isLoading && (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading bias metrics…
+          </div>
+        )}
+        {!isLoading && overall === "NO_DATA" && (
+          <Alert className="border-slate-200">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription className="text-sm">
+              No bias data yet — run a batch prediction to populate.
+            </AlertDescription>
+          </Alert>
+        )}
+        {data && overall !== "NO_DATA" && (
+          <div className="space-y-4">
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">Overall:</span>
+              <Badge className={statusBadgeClass(overall)}>{overall}</Badge>
+              <span className="text-xs text-muted-foreground ml-auto">
+                Threshold: ±15pp deviation
+              </span>
+            </div>
+
+            <div className="space-y-2">
+              {data.categories.map((c) => {
+                const isAlert   = Boolean(c.alert);
+                const deviationPct = (c.deviation * 100).toFixed(1);
+                const highPct      = (c.high_pct * 100).toFixed(1);
+                const refPct       = (c.ref_high_pct * 100).toFixed(1);
+                const direction    = c.high_pct > c.ref_high_pct ? "over-predicting" : "under-predicting";
+                return (
+                  <div
+                    key={c.category}
+                    className={`flex items-center justify-between rounded-md px-3 py-2 text-sm ${
+                      isAlert ? "bg-red-50 border border-red-200" : "bg-slate-50"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      {isAlert
+                        ? <AlertCircle className="h-4 w-4 text-red-500 shrink-0" />
+                        : <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />}
+                      <span className="font-medium">{c.category}</span>
+                    </div>
+                    <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                      <span>HIGH: {highPct}% (ref {refPct}%)</span>
+                      <Badge
+                        variant="outline"
+                        className={isAlert ? "text-red-700 border-red-300" : "text-green-700 border-green-300"}
+                      >
+                        {isAlert ? `${direction} by ${deviationPct}pp` : `±${deviationPct}pp`}
+                      </Badge>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+              Alerts when any category's HIGH% deviates &gt;15pp from its training baseline —
+              indicates the model may be systematically mis-scoring a specific asset type.
+            </p>
           </div>
         )}
       </CardContent>
@@ -582,8 +780,13 @@ export default function MLPerformanceDashboard() {
         </Card>
       </div>
 
-      {/* Drift Monitor */}
-      <DriftMonitorCard />
+      {/* Drift Monitoring — three layers */}
+      <div className="space-y-4">
+        <h2 className="text-lg font-semibold text-slate-800">Drift Monitoring</h2>
+        <DriftMonitorCard />
+        <PredictionDriftCard />
+        <BiasDriftCard />
+      </div>
 
       {/* Key Insights */}
       <Card className="border-blue-200 bg-blue-50">
