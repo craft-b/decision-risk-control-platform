@@ -167,6 +167,13 @@ export async function registerRoutes(
           `);
           totalInserted++;
 
+          // Advance equipment hours (currentMileage tracks cumulative operating hours)
+          if (operatingHours > 0) {
+            await db.execute(sql`
+              UPDATE equipment SET current_mileage = current_mileage + ${operatingHours} WHERE id = ${equip.id}
+            `);
+          }
+
           const purchaseDate  = equip.purchaseDate ? new Date(equip.purchaseDate) : new Date('2020-01-01');
           const ageYears      = (cursorDate.getTime() - purchaseDate.getTime()) / (365.25 * 24 * 3600 * 1000);
 
@@ -317,6 +324,18 @@ export async function registerRoutes(
 
         for (const equip of allEquipment) {
           const category = equip.category || "Excavator";
+
+          // Advance equipment hours — category-specific daily ranges
+          const isIdle = Math.random() < 0.15;
+          if (!isIdle) {
+            const [dailyMin, dailyMax]: [number, number] = (
+              { Compressor: [10, 20], Generator: [12, 22], Hauler: [7, 11], Loader: [7, 11] } as Record<string, [number, number]>
+            )[category] ?? [5, 9];
+            const dailyHours = parseFloat((dailyMin + Math.random() * (dailyMax - dailyMin)).toFixed(2));
+            await db.execute(sql`
+              UPDATE equipment SET current_mileage = current_mileage + ${dailyHours} WHERE id = ${equip.id}
+            `);
+          }
 
           // Get latest feature snapshot for this equipment
           let snapshot: any;

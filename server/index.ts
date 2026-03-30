@@ -277,6 +277,18 @@ async function runPMSimulation() {
       for (const equip of allEquipment) {
         const category = equip.category || "Excavator";
 
+        // Advance equipment hours — category-specific daily ranges, 15% idle chance
+        const isIdle = Math.random() < 0.15;
+        if (!isIdle) {
+          const [dailyMin, dailyMax]: [number, number] = (
+            { Compressor: [10, 20], Generator: [12, 22], Hauler: [7, 11], Loader: [7, 11] } as Record<string, [number, number]>
+          )[category] ?? [5, 9];
+          const dailyHours = parseFloat((dailyMin + Math.random() * (dailyMax - dailyMin)).toFixed(2));
+          await db.execute(sql`
+            UPDATE equipment SET current_mileage = current_mileage + ${dailyHours} WHERE id = ${equip.id}
+          `);
+        }
+
         let snapshot: any;
         try {
           snapshot = await enhancedFeatureService.generateSnapshot(equip.id, cursorDate);
