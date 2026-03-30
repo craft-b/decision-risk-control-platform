@@ -25,24 +25,55 @@ from engine.genai_advisor import generate_recommendation, is_available, LLM_PROV
 from engine.predictor_multihorizon import MultiHorizonPredictor
 from engine.projector import project as project_trajectory
 from engine.drift_detector import DriftDetector
+from engine.model_registry import (
+    get_state as registry_get_state,
+    register_new_version,
+    promote_challenger,
+    get_champion_version,
+    get_challenger_version,
+    get_metrics_for_version,
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STARTUP / SHUTDOWN
 # ─────────────────────────────────────────────────────────────────────────────
 
-mh_predictor: MultiHorizonPredictor = None  # type: ignore
-drift_detector: DriftDetector = None         # type: ignore
+mh_predictor: MultiHorizonPredictor = None   # champion
+challenger_predictor: MultiHorizonPredictor = None  # challenger (shadow)
+drift_detector: DriftDetector = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global mh_predictor, drift_detector
+    global mh_predictor, challenger_predictor, drift_detector
     print("[STARTUP] Loading ML artifacts...")
+
+    # Bootstrap registry then load champion and challenger predictors
     try:
-        mh_predictor = MultiHorizonPredictor()
-        print(f"[STARTUP] Multi-horizon models ready — version {mh_predictor.version}")
+        state = registry_get_state()
+        champion_v    = state.get("champion")
+        challenger_v  = state.get("challenger")
+
+        if champion_v:
+            mh_predictor = MultiHorizonPredictor(pin_version=champion_v)
+            print(f"[STARTUP] Champion: {champion_v}")
+        else:
+            # Fallback: load latest available version (handles pre-registry installs)
+            mh_predictor = MultiHorizonPredictor()
+            # Register it as champion so registry stays in sync
+            if mh_predictor:
+                register_new_version(mh_predictor.version)
+                print(f"[STARTUP] Auto-registered {mh_predictor.version} as champion")
+
+        if challenger_v:
+            try:
+                challenger_predictor = MultiHorizonPredictor(pin_version=challenger_v)
+                print(f"[STARTUP] Challenger: {challenger_v} (shadow mode)")
+            except Exception as ce:
+                print(f"[STARTUP] Challenger load failed ({ce}) — shadow disabled")
     except Exception as e:
         print(f"[STARTUP] No trained models found ({e}). Service will start without predictor — train via /train endpoint.")
+
     try:
         drift_detector = DriftDetector()
     except Exception as e:
@@ -148,12 +179,38 @@ async def predict_multi_horizon_batch(batch: BatchInput):
             except Exception as de:
                 print(f"[DRIFT] bias check error (non-fatal): {de}")
 
+        # ── Shadow scoring: run challenger in parallel, log score delta ─────
+        # Results are NOT written to DB — purely for comparison metrics.
+        shadow_summary = None
+        if challenger_predictor:
+            try:
+                challenger_results = challenger_predictor.predict_multi_horizon_batch(snapshots)
+                # Compare 30d risk scores as a representative horizon
+                champ_scores = [r["30d"]["risk_score"] for r in results if "30d" in r]
+                chal_scores  = [r["30d"]["risk_score"] for r in challenger_results if "30d" in r]
+                if champ_scores and chal_scores:
+                    import numpy as _np
+                    deltas = [c - ch for c, ch in zip(chal_scores, champ_scores)]
+                    shadow_summary = {
+                        "challenger_version": challenger_predictor.version,
+                        "n_scored":           len(deltas),
+                        "mean_score_delta_30d": round(float(_np.mean(deltas)), 3),
+                        "pct_higher_risk":    round(sum(d > 5 for d in deltas) / len(deltas) * 100, 1),
+                        "pct_lower_risk":     round(sum(d < -5 for d in deltas) / len(deltas) * 100, 1),
+                        "note": "Challenger scores are not persisted — shadow mode only",
+                    }
+                    print(f"[SHADOW] Challenger {challenger_predictor.version}: "
+                          f"mean Δ30d={shadow_summary['mean_score_delta_30d']:+.1f}")
+            except Exception as se:
+                print(f"[SHADOW] Challenger scoring failed (non-fatal): {se}")
+
         return {
             "predictions":      results,
             "total":            len(results),
             "drift":            feature_drift,
             "prediction_drift": prediction_drift,
             "bias_drift":       bias_drift,
+            "shadow":           shadow_summary,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Batch prediction failed: {str(e)}")
@@ -339,6 +396,113 @@ async def drift_summary():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# CHAMPION-CHALLENGER
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/models/registry", tags=["Champion-Challenger"])
+async def models_registry():
+    """
+    Returns current champion/challenger state and the full promotion history.
+    Champion = production model whose predictions are written to the DB.
+    Challenger = shadow model running on every batch for comparison only.
+    """
+    state = registry_get_state()
+    return {
+        "champion":   state.get("champion"),
+        "challenger": state.get("challenger"),
+        "retired":    state.get("retired", []),
+        "history":    state.get("history", [])[-10:],  # last 10 events
+        "champion_loaded":    mh_predictor is not None,
+        "challenger_loaded":  challenger_predictor is not None,
+    }
+
+
+@app.get("/models/champion-challenger/compare", tags=["Champion-Challenger"])
+async def champion_challenger_compare():
+    """
+    Side-by-side metric comparison between champion and challenger.
+    Uses stored metadata from training (holdout ROC-AUC, recall, PR-AUC per horizon).
+    Returns null challenger metrics when no challenger is registered.
+    """
+    state = registry_get_state()
+    champion_v   = state.get("champion")
+    challenger_v = state.get("challenger")
+
+    champion_metrics   = get_metrics_for_version(champion_v)   if champion_v   else {}
+    challenger_metrics = get_metrics_for_version(challenger_v) if challenger_v else {}
+
+    def _summary(metrics: dict) -> dict:
+        """Flatten per-horizon metadata into a compact comparison shape."""
+        summary = {}
+        for horizon_key, m in metrics.items():
+            h = horizon_key  # e.g. "30d"
+            pc = m.get("per_class", {})
+            summary[h] = {
+                "roc_auc":       m.get("roc_auc"),
+                "pr_auc":        m.get("pr_auc"),
+                "recall_fail":   pc.get("failure", {}).get("recall"),
+                "precision_fail": pc.get("failure", {}).get("precision"),
+                "f1_fail":       pc.get("failure", {}).get("f1"),
+                "samples_test":  m.get("samples_test"),
+                "positive_rate": m.get("positive_rate"),
+                "trained_at":    m.get("trained_at"),
+            }
+        return summary
+
+    return {
+        "champion": {
+            "version": champion_v,
+            "metrics": _summary(champion_metrics),
+        },
+        "challenger": {
+            "version": challenger_v,
+            "metrics": _summary(challenger_metrics),
+        } if challenger_v else None,
+        "shadow_mode": challenger_predictor is not None,
+        "note": (
+            "Challenger runs on every batch in shadow mode — "
+            "its predictions are logged but not persisted to DB. "
+            "Promote via POST /models/promote when you're satisfied with performance."
+        ),
+    }
+
+
+@app.post("/models/promote", tags=["Champion-Challenger"])
+async def promote_challenger_endpoint():
+    """
+    Promote the current challenger to champion.
+    - Old champion is retired (artifacts preserved in registry/).
+    - Challenger predictor becomes the new production predictor.
+    - Next batch will serve predictions from the promoted model.
+
+    Returns 409 if no challenger is registered.
+    """
+    global mh_predictor, challenger_predictor
+
+    if not challenger_predictor:
+        raise HTTPException(
+            status_code=409,
+            detail="No challenger loaded. Train a new model first."
+        )
+    try:
+        result = promote_challenger()
+
+        # Swap in-memory predictors
+        mh_predictor        = challenger_predictor
+        challenger_predictor = None
+
+        print(f"[PROMOTE] {result['promoted']} is now champion — live immediately")
+        return {
+            "success":      True,
+            "new_champion": result["new_champion"],
+            "retired":      result["retired"],
+            "message":      f"Model {result['new_champion']} is now serving production traffic.",
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # TRAINING
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -356,7 +520,7 @@ async def trigger_training(background_tasks: BackgroundTasks):
         raise HTTPException(status_code=409, detail="Training already in progress")
 
     async def run_training():
-        global _training_status, mh_predictor
+        global _training_status, mh_predictor, challenger_predictor
 
         _training_status["running"] = True
         _training_status["log"] = ["[JOB] Starting training pipeline..."]
@@ -406,10 +570,27 @@ async def trigger_training(background_tasks: BackgroundTasks):
 
             if success:
                 try:
-                    mh_predictor = MultiHorizonPredictor()
-                    _training_status["log"].append(
-                        f"[JOB] Models reloaded — version {mh_predictor.version}"
-                    )
+                    # Load the newly trained version as challenger (not champion).
+                    # It runs in shadow mode until explicitly promoted.
+                    # If no champion exists yet (first train), it becomes champion.
+                    new_predictor = MultiHorizonPredictor()  # loads latest
+                    new_version   = new_predictor.version
+                    reg_result    = register_new_version(new_version)
+
+                    if reg_result["role"] == "champion":
+                        # First ever model — becomes champion directly
+                        mh_predictor = new_predictor
+                        _training_status["log"].append(
+                            f"[JOB] First model — {new_version} is now champion"
+                        )
+                    else:
+                        # Challenger: load into shadow slot, champion unchanged
+                        challenger_predictor = new_predictor
+                        _training_status["log"].append(
+                            f"[JOB] {new_version} registered as challenger (shadow mode). "
+                            f"Champion remains {mh_predictor.version if mh_predictor else 'none'}. "
+                            f"Promote via POST /models/promote when ready."
+                        )
                 except Exception as reload_err:
                     _training_status["log"].append(
                         f"[JOB] Warning: model reload failed: {reload_err}"

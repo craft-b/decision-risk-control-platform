@@ -40,23 +40,36 @@ class MultiHorizonPredictor:
     """
     Loads all three horizon models at startup.
     Serves predictions with risk levels for 10d, 30d, 60d windows.
+
+    Supports loading a specific model version for champion-challenger routing.
+    When pin_version is None, loads the latest available version (legacy behavior).
     """
 
-    def __init__(self):
+    def __init__(self, pin_version: Optional[str] = None):
+        self._pin_version = pin_version
         self._load_artifacts()
 
     def _load_artifacts(self):
+        import re
+
         self.models = {}
         self.versions = {}
         self.shap_explainers = {}
 
-        for h in HORIZONS:
-            def _version_key(p):
-                import re
-                m = re.search(r'v(\d+)\.(\d+)', p.stem)
-                return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+        def _version_key(p):
+            m = re.search(r'v(\d+)\.(\d+)', p.stem)
+            return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
 
-            model_files = sorted(REGISTRY.glob(f"rf_{h}d_*.pkl"), key=_version_key, reverse=True)
+        for h in HORIZONS:
+            if self._pin_version:
+                model_path = REGISTRY / f"rf_{h}d_{self._pin_version}.pkl"
+                if not model_path.exists():
+                    raise FileNotFoundError(
+                        f"Pinned version {self._pin_version} not found: {model_path}"
+                    )
+                model_files = [model_path]
+            else:
+                model_files = sorted(REGISTRY.glob(f"rf_{h}d_*.pkl"), key=_version_key, reverse=True)
             if not model_files:
                 raise FileNotFoundError(f"No {h}d model found in {REGISTRY}. Run train_model_multihorizon.py first.")
             model_data = joblib.load(model_files[0])

@@ -488,6 +488,90 @@ export function useBiasDrift() {
   });
 }
 
+// ── Champion-Challenger ──────────────────────────────────────────────────────
+
+export interface HorizonMetrics {
+  roc_auc:        number | null;
+  pr_auc:         number | null;
+  recall_fail:    number | null;
+  precision_fail: number | null;
+  f1_fail:        number | null;
+  samples_test:   number | null;
+  positive_rate:  number | null;
+  trained_at:     string | null;
+}
+
+export interface ModelEntry {
+  version:  string | null;
+  metrics:  Record<string, HorizonMetrics>;
+}
+
+export interface ChampionChallengerStatus {
+  champion:    ModelEntry;
+  challenger:  ModelEntry | null;
+  shadow_mode: boolean;
+  note:        string;
+}
+
+export interface RegistryState {
+  champion:          string | null;
+  challenger:        string | null;
+  retired:           string[];
+  history:           Array<{ event: string; version?: string; role?: string; timestamp: string }>;
+  champion_loaded:   boolean;
+  challenger_loaded: boolean;
+}
+
+export function useModelRegistry() {
+  return useQuery({
+    queryKey: ["/api/ml/models/registry"],
+    queryFn: async () => {
+      const res = await fetch("/api/ml/models/registry", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch model registry");
+      return res.json() as Promise<RegistryState>;
+    },
+    staleTime: 10_000,
+  });
+}
+
+export function useChampionChallengerCompare() {
+  return useQuery({
+    queryKey: ["/api/ml/models/compare"],
+    queryFn: async () => {
+      const res = await fetch("/api/ml/models/compare", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch comparison");
+      return res.json() as Promise<ChampionChallengerStatus>;
+    },
+    staleTime: 10_000,
+  });
+}
+
+export function usePromoteChallenger() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  return useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/ml/models/promote", {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as any).detail || "Promotion failed");
+      }
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ml/models/registry"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ml/models/compare"] });
+      toast({ title: "Challenger promoted", description: `${data.new_champion} is now serving production traffic.` });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Promotion failed", description: err.message, variant: "destructive" });
+    },
+  });
+}
+
 export function useTrainingStatus(enabled: boolean) {
   return useQuery({
     queryKey: ["/api/ml/train/status"],
