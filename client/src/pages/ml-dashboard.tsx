@@ -35,7 +35,10 @@ import {
   Loader2,
   ShieldAlert,
   RefreshCw,
+  ListChecks,
+  ArrowRight,
 } from "lucide-react";
+import { Link } from "wouter";
 
 const PSI_THRESHOLDS = { WARNING: 0.1, ALERT: 0.2 };
 
@@ -386,14 +389,85 @@ export default function MLPerformanceDashboard() {
   }
 
   if (error || !modelMetrics) {
+    const steps = [
+      {
+        done: true,
+        label: "System initialized",
+        detail: "Database ready and schema applied",
+      },
+      {
+        done: false,
+        label: "Add equipment",
+        detail: "At least one asset is required to generate sensor data",
+        href: "/equipment/new",
+        action: "Add Equipment",
+      },
+      {
+        done: false,
+        label: "Run demo seed (or accumulate live data)",
+        detail: "Load Demo Data on the Setup page to populate historical snapshots and failure events",
+        href: "/setup",
+        action: "Go to Setup",
+      },
+      {
+        done: false,
+        label: "Train the model",
+        detail: "Once ≥100 labeled snapshots exist, trigger training from the Predictive Maintenance page",
+        href: "/predictive-maintenance",
+        action: "Predictive Maintenance",
+      },
+    ];
+
     return (
-      <div className="flex items-center justify-center min-h-screen">
-        <Alert className="max-w-md border-red-200 bg-red-50">
-          <AlertCircle className="h-4 w-4 text-red-600" />
-          <AlertDescription className="text-red-800">
-            Failed to load model metrics. Please try again later.
-          </AlertDescription>
-        </Alert>
+      <div className="space-y-8 animate-in fade-in duration-500 max-w-2xl mx-auto py-16 px-4">
+        <div className="text-center space-y-3">
+          <div className="flex justify-center">
+            <div className="rounded-full bg-blue-100 p-4">
+              <Brain className="h-10 w-10 text-blue-600" />
+            </div>
+          </div>
+          <h2 className="text-2xl font-bold">ML Dashboard isn't ready yet</h2>
+          <p className="text-muted-foreground">
+            Complete the steps below to train your first predictive maintenance model.
+          </p>
+        </div>
+
+        <div className="space-y-3">
+          {steps.map((step, i) => (
+            <div
+              key={i}
+              className={`flex items-start gap-4 rounded-lg border p-4 ${
+                step.done ? "bg-green-50 border-green-200" : "bg-card"
+              }`}
+            >
+              <div className="mt-0.5 shrink-0">
+                {step.done ? (
+                  <CheckCircle2 className="h-5 w-5 text-green-600" />
+                ) : (
+                  <div className="h-5 w-5 rounded-full border-2 border-muted-foreground/40 flex items-center justify-center text-xs font-bold text-muted-foreground">
+                    {i + 1}
+                  </div>
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className={`font-medium ${step.done ? "text-green-800" : ""}`}>{step.label}</p>
+                <p className="text-sm text-muted-foreground mt-0.5">{step.detail}</p>
+              </div>
+              {!step.done && step.href && (
+                <Link href={step.href}>
+                  <a className="shrink-0 inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors">
+                    {step.action}
+                    <ArrowRight className="h-3 w-3" />
+                  </a>
+                </Link>
+              )}
+            </div>
+          ))}
+        </div>
+
+        <p className="text-center text-xs text-muted-foreground">
+          Once training completes this page will populate automatically.
+        </p>
       </div>
     );
   }
