@@ -1821,6 +1821,36 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/ml/drift/prediction", requireAuth, async (req, res) => {
+    try {
+      const mlRes = await fetch(ML_SERVICE_URL + "/drift/prediction");
+      if (!mlRes.ok) return res.status(mlRes.status).json({ message: "Prediction drift data unavailable" });
+      res.json(await mlRes.json());
+    } catch (e: any) {
+      res.status(500).json({ message: "ML service unreachable", error: e.message });
+    }
+  });
+
+  app.get("/api/ml/drift/bias", requireAuth, async (req, res) => {
+    try {
+      const mlRes = await fetch(ML_SERVICE_URL + "/drift/bias");
+      if (!mlRes.ok) return res.status(mlRes.status).json({ message: "Bias drift data unavailable" });
+      res.json(await mlRes.json());
+    } catch (e: any) {
+      res.status(500).json({ message: "ML service unreachable", error: e.message });
+    }
+  });
+
+  app.get("/api/ml/drift/summary", requireAuth, async (req, res) => {
+    try {
+      const mlRes = await fetch(ML_SERVICE_URL + "/drift/summary");
+      if (!mlRes.ok) return res.status(mlRes.status).json({ message: "Drift summary unavailable" });
+      res.json(await mlRes.json());
+    } catch (e: any) {
+      res.status(500).json({ message: "ML service unreachable", error: e.message });
+    }
+  });
+
   // ── MAINTENANCE DUE SOON ──────────────────────────────────────────────────
   app.get('/api/maintenance/due-soon', requireAuth, async (req, res) => {
     try {

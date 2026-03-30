@@ -415,11 +415,76 @@ export function useComputeDriftReference() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/ml/drift/latest"] });
-      toast({ title: "Reference updated", description: "Drift baseline recomputed from current training data." });
+      queryClient.invalidateQueries({ queryKey: ["/api/ml/drift/prediction"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ml/drift/bias"] });
+      toast({ title: "Reference updated", description: "All drift baselines recomputed from current training data." });
     },
     onError: (e: any) => {
       toast({ title: "Failed to update reference", description: e.message, variant: "destructive" });
     },
+  });
+}
+
+// ── Prediction drift ──────────────────────────────────────────────────────────
+
+export interface PredictionDriftHorizon {
+  horizon: number;
+  score_psi: number;
+  score_status: "STABLE" | "WARNING" | "ALERT";
+  high_pct: number;
+  medium_pct: number;
+  low_pct: number;
+  ref_high_pct: number;
+  ref_medium_pct: number;
+  ref_low_pct: number;
+  checked_at: string;
+}
+
+export interface PredictionDriftStatus {
+  overall: "STABLE" | "WARNING" | "ALERT" | "NO_DATA";
+  horizons: PredictionDriftHorizon[];
+}
+
+export function usePredictionDrift() {
+  return useQuery<PredictionDriftStatus>({
+    queryKey: ["/api/ml/drift/prediction"],
+    queryFn: async () => {
+      const res = await fetch("/api/ml/drift/prediction", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch prediction drift");
+      return res.json();
+    },
+    staleTime: 2 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
+}
+
+// ── Bias drift ────────────────────────────────────────────────────────────────
+
+export interface BiasDriftCategory {
+  category: string;
+  mean_score: number;
+  high_pct: number;
+  ref_high_pct: number;
+  deviation: number;
+  alert: number | boolean;
+  checked_at: string;
+}
+
+export interface BiasDriftStatus {
+  overall: "STABLE" | "ALERT" | "NO_DATA";
+  categories: BiasDriftCategory[];
+}
+
+export function useBiasDrift() {
+  return useQuery<BiasDriftStatus>({
+    queryKey: ["/api/ml/drift/bias"],
+    queryFn: async () => {
+      const res = await fetch("/api/ml/drift/bias", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch bias drift");
+      return res.json();
+    },
+    staleTime: 2 * 60 * 1000,
+    refetchOnWindowFocus: false,
   });
 }
 
