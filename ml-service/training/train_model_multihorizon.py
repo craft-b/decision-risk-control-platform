@@ -64,6 +64,52 @@ import warnings
 warnings.filterwarnings('ignore')
 from datetime import datetime
 
+# ── Class imbalance — SMOTE oversampling ──────────────────────────────────────
+# Predictive maintenance datasets are inherently imbalanced: failures are rare
+# by design (good maintenance programs). With <5% positive rate, even
+# class_weight='balanced' struggles because:
+#   (a) With very few positives (<10), TimeSeriesSplit folds often contain 0-1
+#       positives and get skipped → model trains on near-zero positives.
+#   (b) RF with balanced weights upweights the few positives but can't learn
+#       generalizable patterns from 3-4 examples.
+#
+# SMOTE (Synthetic Minority Oversampling TEchnique) addresses this by
+# interpolating new synthetic minority samples between existing positives in
+# feature space — not just duplicating them. This gives the model richer signal.
+#
+# Critical implementation detail: SMOTE is applied ONLY to the training fold,
+# never to validation or test sets. Applying it to val/test would inflate
+# recall metrics and give falsely optimistic evaluation.
+#
+# k_neighbors is set to min(5, n_positives-1) to handle tiny positive sets
+# without crashing (SMOTE requires at least k_neighbors+1 minority samples).
+try:
+    from imblearn.over_sampling import SMOTE
+    _SMOTE_AVAILABLE = True
+except ImportError:
+    _SMOTE_AVAILABLE = False
+    print("[SMOTE] imbalanced-learn not installed — SMOTE disabled. Install with: pip install imbalanced-learn")
+
+def apply_smote(X_train, y_train, random_state=42):
+    """
+    Apply SMOTE to the training set if imbalanced-learn is available and
+    there are enough minority samples to interpolate from (≥2 positives).
+    Returns (X_resampled, y_resampled, applied: bool).
+    """
+    if not _SMOTE_AVAILABLE:
+        return X_train, y_train, False
+    n_pos = int(y_train.sum())
+    if n_pos < 2:
+        return X_train, y_train, False
+    k = min(5, n_pos - 1)
+    try:
+        sm = SMOTE(random_state=random_state, k_neighbors=k)
+        X_res, y_res = sm.fit_resample(X_train, y_train)
+        return X_res, y_res, True
+    except Exception as e:
+        print(f"[SMOTE] Warning — skipping: {e}")
+        return X_train, y_train, False
+
 # ── Reproducibility ───────────────────────────────────────────────────────────
 # Single seed applied to numpy and every RF estimator — guarantees bit-for-bit
 # reproducible training runs given the same data and sklearn version.
@@ -353,7 +399,14 @@ def train_horizon_model(X: pd.DataFrame, y: pd.Series, horizon_days: int):
             print(f"{fold:<6} {len(X_fold_train):>8,} {len(X_fold_val):>8,} {'single class':>9} {'skip':>9} {'skip':>8}")
             continue
 
-        base_rf.fit(X_fold_train, y_fold_train)
+        X_fold_train_s, y_fold_train_s, smote_applied = apply_smote(
+            X_fold_train, y_fold_train, random_state=RANDOM_SEED
+        )
+        if smote_applied:
+            print(f"  [SMOTE] fold {fold}: {len(X_fold_train)} → {len(X_fold_train_s)} samples "
+                  f"({int(y_fold_train.sum())} → {int(y_fold_train_s.sum())} positives)")
+
+        base_rf.fit(X_fold_train_s, y_fold_train_s)
 
         # Guard: predict_proba returns 1 column if model only saw one class
         proba = base_rf.predict_proba(X_fold_val)
@@ -412,8 +465,16 @@ def train_horizon_model(X: pd.DataFrame, y: pd.Series, horizon_days: int):
         random_state=RANDOM_SEED,
         n_jobs=-1,
     )
+    # Apply SMOTE to dev set before final training.
+    # CalibratedClassifierCV internally splits for calibration — applying SMOTE
+    # before it slightly over-represents synthetic samples in calibration folds,
+    # but the effect is minor and preferable to training on a nearly all-negative set.
+    X_dev_s, y_dev_s, smote_final = apply_smote(X_dev, y_dev, random_state=RANDOM_SEED)
+    if smote_final:
+        print(f"[SMOTE] Final model: {len(X_dev)} → {len(X_dev_s)} samples "
+              f"({int(y_dev.sum())} → {int(y_dev_s.sum())} positives)")
     model = CalibratedClassifierCV(final_rf, method=calibration_method, cv=3)
-    model.fit(X_dev, y_dev)
+    model.fit(X_dev_s, y_dev_s)
 
     # ─────────────────────────────────────────────────────────────────
     # HOLDOUT EVALUATION
@@ -709,6 +770,7 @@ def main():
             "min_samples_leaf":   3,
             "max_features":       "sqrt",
             "class_weight":       "balanced",
+            "smote_enabled":      _SMOTE_AVAILABLE,
             "tscv_n_splits":      5,
             "horizons":           str(HORIZONS),
             "dataset_size":       len(df),

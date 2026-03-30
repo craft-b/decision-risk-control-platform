@@ -57,8 +57,8 @@ const STEP_NAMES = [
   "Vendors",
   "Equipment & maintenance config",
   "Rentals",
-  "Historical sensor data",
-  "Feature snapshots",
+  "Historical sensor data & failure events",
+  "Feature snapshots (backfill)",
   "Label snapshots",
   "Train model",
   "Batch predictions",
@@ -163,16 +163,32 @@ async function runSeedPipeline() {
     await seedRentals(equipmentIds, jobSiteIds, vendorIds, cursorDate);
     setStep(3, "completed", "15 historical rentals");
 
-    // ── Step 4: Historical sensor data ─────────────────────────────────────
+    // ── Step 4: Historical sensor data + failure events ────────────────────
     setStep(4, "running");
+    const seedStart = new Date(cursorDate.getTime() - 90 * 24 * 3600 * 1000);
     const sensorCount = await seedSensorData(equipmentIds, cursorDate, 90);
-    setStep(4, "completed", `${sensorCount} sensor readings (90 days)`);
+    const failureCount = await seedFailureEvents(equipmentIds, seedStart, cursorDate);
+    setStep(4, "completed", `${sensorCount} sensor readings, ${failureCount} failure events`);
 
-    // ── Step 5: Feature snapshots ──────────────────────────────────────────
+    // ── Step 5: Feature snapshots (backfill weekly + current) ──────────────
     setStep(5, "running");
-    const snapshots = await featureEngineeringService.generateSnapshotsForAllEquipment(cursorDate);
-    for (const snap of snapshots) await featureEngineeringService.saveSnapshot(snap);
-    setStep(5, "completed", `${snapshots.length} snapshots`);
+    // Backfill snapshots at weekly intervals from day 7 to day 29 after seedStart.
+    // Only snapshots older than (cursor - 60d) can be fully labeled (all three horizons).
+    // cursor - 60d = 2026-02-01; seedStart = 2026-01-01 → backfill 2026-01-08 to 2026-01-29.
+    const labelableCutoff = new Date(cursorDate.getTime() - 61 * 24 * 3600 * 1000);
+    let totalSnapshots = 0;
+    let backfillDate = new Date(seedStart.getTime() + 7 * 24 * 3600 * 1000);
+    while (backfillDate <= labelableCutoff) {
+      const snaps = await featureEngineeringService.generateSnapshotsForAllEquipment(backfillDate);
+      for (const snap of snaps) await featureEngineeringService.saveSnapshot(snap);
+      totalSnapshots += snaps.length;
+      backfillDate = new Date(backfillDate.getTime() + 7 * 24 * 3600 * 1000);
+    }
+    // Current-date snapshot (for live predictions — won't be labeled yet)
+    const currentSnaps = await featureEngineeringService.generateSnapshotsForAllEquipment(cursorDate);
+    for (const snap of currentSnaps) await featureEngineeringService.saveSnapshot(snap);
+    totalSnapshots += currentSnaps.length;
+    setStep(5, "completed", `${totalSnapshots} snapshots (${totalSnapshots - currentSnaps.length} backfill + ${currentSnaps.length} current)`);
 
     // ── Step 6: Label snapshots ────────────────────────────────────────────
     setStep(6, "running");
@@ -336,6 +352,79 @@ async function seedSensorData(
     }
   }
   return count;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FAILURE EVENT SEED — injects REACTIVE_REPAIR / MAJOR_SERVICE events so the
+// labeling step finds positives and training data has a realistic failure rate.
+//
+// Approach: age-weighted failure count per equipment over the seeding window.
+// Failures are deliberately spread across the window (not clustered) so that
+// backfilled snapshots at different dates get diverse label distributions.
+//
+// Target positive rates (30d horizon):
+//   Age 10+ years  → 3-5 failures in 90d  → ~20-35% of snapshots labeled positive
+//   Age 5-10 years → 1-3 failures in 90d  → ~10-20%
+//   Age 2-5 years  → 0-1 failures in 90d  → ~0-10%
+//   Age < 2 years  → 0 failures            → 0%
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function seedFailureEvents(
+  equipmentIds: number[],
+  startDate: Date,
+  endDate: Date,
+): Promise<number> {
+  const windowDays = Math.floor((endDate.getTime() - startDate.getTime()) / (24 * 3600 * 1000));
+  const cursorYear = endDate.getFullYear();
+
+  const [rows] = await db.execute(sql`
+    SELECT id, year_manufactured FROM equipment
+    WHERE id IN (${sql.join(equipmentIds.map(id => sql`${id}`), sql`, `)})
+  `) as any;
+
+  let inserted = 0;
+
+  for (const row of rows) {
+    const ageYears = cursorYear - (Number(row.year_manufactured) || 2020);
+
+    // Determine failure count for this equipment
+    let targetFailures: number;
+    if      (ageYears >= 10) targetFailures = 3 + Math.floor(Math.random() * 3); // 3-5
+    else if (ageYears >=  6) targetFailures = 1 + Math.floor(Math.random() * 3); // 1-3
+    else if (ageYears >=  2) targetFailures = Math.floor(Math.random() * 2);     // 0-1
+    else                     targetFailures = 0;
+
+    // Spread failures evenly across the window to avoid temporal clustering.
+    // Slice the window into equal segments and place one failure per segment.
+    const segmentSize = windowDays / Math.max(targetFailures, 1);
+
+    for (let f = 0; f < targetFailures; f++) {
+      const segStart   = Math.floor(f * segmentSize);
+      const segEnd     = Math.floor((f + 1) * segmentSize);
+      const dayOffset  = segStart + Math.floor(Math.random() * (segEnd - segStart));
+      const failDate   = new Date(startDate.getTime() + Math.max(1, dayOffset) * 24 * 3600 * 1000);
+      const failStr    = failDate.toISOString().split("T")[0];
+      const nextDueStr = new Date(failDate.getTime() + 180 * 24 * 3600 * 1000).toISOString().split("T")[0];
+      const cost       = (800 + Math.random() * 1200).toFixed(2);
+
+      try {
+        await db.execute(sql`
+          INSERT INTO maintenance_events
+            (equipment_id, maintenance_date, maintenance_type, cost, description, next_due_date, event_source)
+          VALUES (
+            ${row.id}, ${failStr}, 'MAJOR_SERVICE', ${cost},
+            ${"Seeded failure event — age-based hazard (training data)"},
+            ${nextDueStr}, 'REACTIVE_REPAIR'
+          )
+        `);
+        inserted++;
+      } catch {
+        // Duplicate date — skip
+      }
+    }
+  }
+
+  return inserted;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
