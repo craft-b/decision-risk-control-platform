@@ -87,6 +87,10 @@ SCRIPT_DIR = Path(__file__).parent.parent  # ml-service root
 MODEL_DIR  = SCRIPT_DIR / "registry"
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
+# Add ml-service root to path so engine.* imports resolve regardless of cwd
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
 HORIZONS = [10, 30, 60]  # days
 
 FEATURE_COLS = [
@@ -619,8 +623,6 @@ def save_drift_reference(df_raw: pd.DataFrame, model_version: str):
     not the log-transformed model-internal space.
     """
     from engine.drift_detector import MONITORED_FEATURES
-    import sys
-    sys.path.insert(0, str(SCRIPT_DIR))
 
     sample = df_raw.sample(min(5000, len(df_raw)), random_state=RANDOM_SEED)
     features = {}
