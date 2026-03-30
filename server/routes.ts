@@ -485,7 +485,16 @@ export async function registerRoutes(
   });
 
   app.post(api.equipment.create.path, requireAdmin, async (req, res) => {
-    res.status(201).json(await storage.createEquipment(api.equipment.create.input.parse(sanitizeEquipmentBody(req.body))));
+    try {
+      const parsed = api.equipment.create.input.parse(sanitizeEquipmentBody(req.body));
+      res.status(201).json(await storage.createEquipment(parsed));
+    } catch (error: any) {
+      if (error?.name === 'ZodError') {
+        return res.status(400).json({ message: 'Validation error', errors: error.errors });
+      }
+      console.error('Create equipment error:', error);
+      res.status(500).json({ message: error?.message ?? 'Failed to create equipment' });
+    }
   });
 
   app.put('/api/equipment/:id', requireAdmin, async (req, res) => {

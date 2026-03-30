@@ -217,17 +217,27 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createEquipment(equip: InsertEquipment): Promise<Equipment> {
-    // Auto-generate equipmentId if not provided (e.g. EQ-009)
-    if (!equip.equipmentId) {
+    const insertData: any = { ...equip };
+
+    // Convert purchaseDate string → Date (same as updateEquipment)
+    if (insertData.purchaseDate && typeof insertData.purchaseDate === 'string') {
+      insertData.purchaseDate = new Date(insertData.purchaseDate);
+    }
+
+    // Auto-generate equipmentId if not provided — use numeric-only max to
+    // avoid collision with replacement IDs like EQ-R5-2032
+    if (!insertData.equipmentId) {
       const [last] = await db
         .select({ equipmentId: equipment.equipmentId })
         .from(equipment)
-        .orderBy(sql`id DESC`)
+        .where(sql`equipment_id REGEXP '^EQ-[0-9]+$'`)
+        .orderBy(sql`CAST(SUBSTRING(equipment_id, 4) AS UNSIGNED) DESC`)
         .limit(1);
-      const lastNum = last ? parseInt(last.equipmentId.replace(/\D/g, ""), 10) : 0;
-      (equip as any).equipmentId = `EQ-${String((isNaN(lastNum) ? 0 : lastNum) + 1).padStart(3, "0")}`;
+      const lastNum = last ? parseInt(last.equipmentId.replace('EQ-', ''), 10) : 0;
+      insertData.equipmentId = `EQ-${String((isNaN(lastNum) ? 0 : lastNum) + 1).padStart(3, '0')}`;
     }
-    const result = await db.insert(equipment).values(equip);
+
+    const result = await db.insert(equipment).values(insertData);
     const [newEquip] = await db.select().from(equipment).where(eq(equipment.id, result[0].insertId));
     return newEquip!;
   }
