@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { AuthProvider, useAuth } from "@/hooks/use-auth";
 import { LayoutShell } from "@/components/layout-shell";
 import { Loader2 } from "lucide-react";
+import { useSystemStatus } from "@/hooks/use-system-status";
 
 import Login from "@/pages/login";
 import Dashboard from "@/pages/dashboard";
@@ -17,13 +18,15 @@ import VendorsList from '@/pages/vendors-list';
 import PredictiveMaintenanceDashboard from '@/pages/predictive-maintenance-dashboard';
 import MLPerformanceDashboard from "./pages/ml-dashboard";
 import MaintenanceCostReport from "@/pages/maintenance-cost-report";
+import SetupPage from "@/pages/setup";
 
 
-// Protected Route Wrapper
+// Protected Route Wrapper — also redirects to /setup when system is empty
 function ProtectedRoute({ component: Component }: { component: React.ComponentType }) {
   const { user, isLoading } = useAuth();
+  const { data: systemStatus, isLoading: statusLoading } = useSystemStatus();
 
-  if (isLoading) {
+  if (isLoading || (user && statusLoading)) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -33,6 +36,11 @@ function ProtectedRoute({ component: Component }: { component: React.ComponentTy
 
   if (!user) {
     return <Redirect to="/login" />;
+  }
+
+  // Redirect to setup when the system has no data yet
+  if (systemStatus && !systemStatus.seeded) {
+    return <Redirect to="/setup" />;
   }
 
   return (
@@ -46,7 +54,8 @@ function Router() {
   return (
     <Switch>
       <Route path="/login" component={Login} />
-      
+      <Route path="/setup" component={SetupPage} />
+
       {/* Protected Routes */}
       <Route path="/">
         <ProtectedRoute component={Dashboard} />

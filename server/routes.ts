@@ -16,6 +16,7 @@ import { featureEngineeringService } from './services/feature-engineering';
 import { assetRiskPredictions } from "@shared/schema";
 import { enhancedFeatureService } from "./services/feature-engineering-enhanced";
 import { evaluatePMSchedule, generatePMDescription, samplePMCost, MaintenanceTypeKey } from "./services/pm-scheduler";
+import { startSeedJob, getSeedStatus, getSystemStatus, resetSystem } from "./services/seed-orchestrator";
 
 declare module "express-session" {
   interface SessionData {
@@ -2098,6 +2099,65 @@ export async function registerRoutes(
       error: "Unknown action",
       allowed_actions: ["retrain", "compute_drift_reference"],
     });
+  });
+
+  // ── Admin / Onboarding Routes ───────────────────────────────────────────────
+
+  // GET /api/admin/system-status — is the system seeded?
+  app.get("/api/admin/system-status", requireAuth, async (req, res) => {
+    try {
+      const raw = await getSystemStatus();
+      res.json({
+        seeded: raw.isSeeded,
+        fullyInitialized: raw.isFullyInitialized,
+        equipmentCount: raw.equipmentCount,
+        snapshotCount: raw.snapshotCount,
+        modelTrained: raw.modelTrained,
+        predictionCount: raw.predictionCount,
+        cursorDate: raw.cursorDate,
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // POST /api/admin/seed — kick off background seed job
+  app.post("/api/admin/seed", requireAuth, async (req, res) => {
+    try {
+      const result = await startSeedJob();
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // GET /api/admin/seed/status — poll progress
+  app.get("/api/admin/seed/status", requireAuth, async (req, res) => {
+    try {
+      const raw = getSeedStatus();
+      const completedCount = raw.steps.filter(s => s.status === "completed").length;
+      const runningStep = raw.steps.find(s => s.status === "running");
+      res.json({
+        state: raw.status,
+        currentStep: completedCount,
+        totalSteps: raw.steps.length,
+        stepLabel: runningStep?.name ?? (raw.status === "completed" ? "All done" : "Waiting…"),
+        log: raw.steps.filter(s => s.detail).map(s => `[${s.name}] ${s.detail}`),
+        error: raw.error,
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // POST /api/admin/reset — wipe all data, reset cursor
+  app.post("/api/admin/reset", requireAdmin, async (req, res) => {
+    try {
+      const result = await resetSystem();
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   return httpServer;
