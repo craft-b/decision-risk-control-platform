@@ -396,6 +396,41 @@ async def drift_summary():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# DATA QUALITY
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/data-quality/report", tags=["Data Quality"])
+async def data_quality_report():
+    """
+    Run data quality checks against the current labeled training dataset in DB.
+    Returns a structured report with per-check status (PASS / WARN / FAIL) and
+    an overall training readiness verdict.
+
+    Useful for:
+    - Pre-flight check before triggering a retrain
+    - Dashboard status card showing data health at a glance
+    - Diagnosing why a training run failed
+
+    Does NOT trigger training — read-only DB query.
+    """
+    try:
+        import sys
+        from pathlib import Path as _Path
+        _ml_root = str(_Path(__file__).parent.parent)
+        if _ml_root not in sys.path:
+            sys.path.insert(0, _ml_root)
+
+        from training.train_model_multihorizon import load_training_data
+        from engine.data_quality import run as dq_run
+
+        df = load_training_data()
+        report = dq_run(df)
+        return report
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Data quality check failed: {str(e)}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # CHAMPION-CHALLENGER
 # ─────────────────────────────────────────────────────────────────────────────
 

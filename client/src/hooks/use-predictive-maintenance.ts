@@ -572,6 +572,40 @@ export function usePromoteChallenger() {
   });
 }
 
+// ── Data Quality ─────────────────────────────────────────────────────────────
+
+export interface DQCheck {
+  check:   string;
+  status:  "PASS" | "WARN" | "FAIL";
+  message: string;
+  detail:  Record<string, any>;
+}
+
+export interface DataQualityReport {
+  overall:    "PASS" | "WARN" | "FAIL";
+  fail_count: number;
+  warn_count: number;
+  pass_count: number;
+  total_rows: number;
+  checked_at: string;
+  checks:     DQCheck[];
+  can_train:  boolean;
+  summary:    string;
+}
+
+export function useDataQualityReport() {
+  return useQuery({
+    queryKey: ["/api/ml/data-quality/report"],
+    queryFn: async () => {
+      const res = await fetch("/api/ml/data-quality/report", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch data quality report");
+      return res.json() as Promise<DataQualityReport>;
+    },
+    staleTime: 60_000,
+    retry: false,
+  });
+}
+
 export function useTrainingStatus(enabled: boolean) {
   return useQuery({
     queryKey: ["/api/ml/train/status"],

@@ -746,8 +746,25 @@ def main():
 
     # 1. Load data once — shared across all horizons
     df = load_training_data()
-    if len(df) < 500:
-        raise ValueError(f"Insufficient samples: {len(df)} (minimum 500 required)")
+
+    # ── Data quality gate ────────────────────────────────────────────────────
+    # Runs before feature engineering so checks operate on raw labeled data.
+    # Blocks on FAIL to prevent a bad model from entering the registry.
+    from engine.data_quality import run as dq_run
+    dq_report = dq_run(df)
+    print(f"\n[DQ] Data quality: {dq_report['overall']} "
+          f"({dq_report['pass_count']} pass, {dq_report['warn_count']} warn, "
+          f"{dq_report['fail_count']} fail)")
+    for c in dq_report["checks"]:
+        icon = "✅" if c["status"] == "PASS" else "⚠️ " if c["status"] == "WARN" else "❌"
+        print(f"  {icon} [{c['check']}] {c['message']}")
+    if dq_report["overall"] == "FAIL":
+        raise ValueError(
+            f"[DQ] Training blocked — {dq_report['fail_count']} data quality check(s) failed. "
+            f"Fix the issues above and retrain. {dq_report['summary']}"
+        )
+    if dq_report["overall"] == "WARN":
+        print(f"[DQ] ⚠️  Proceeding with warnings — review before promoting to production.")
 
     # 2. Save drift reference BEFORE feature engineering (raw input space)
     save_drift_reference(df, model_version)

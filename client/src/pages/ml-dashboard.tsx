@@ -7,7 +7,9 @@ import {
   useModelRegistry,
   useChampionChallengerCompare,
   usePromoteChallenger,
+  useDataQualityReport,
   type HorizonMetrics,
+  type DQCheck,
 } from "@/hooks/use-predictive-maintenance";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -45,6 +47,8 @@ import {
   Swords,
   Crown,
   Clock,
+  ShieldCheck,
+  XCircle,
 } from "lucide-react";
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
@@ -376,6 +380,92 @@ function BiasDriftCard() {
               Alerts when any category's HIGH% deviates &gt;15pp from its training baseline —
               indicates the model may be systematically mis-scoring a specific asset type.
             </p>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── Data Quality Card ─────────────────────────────────────────────────────────
+
+function dqStatusIcon(status: DQCheck["status"]) {
+  if (status === "PASS") return <CheckCircle2 className="h-4 w-4 text-green-600 shrink-0 mt-0.5" />;
+  if (status === "WARN") return <AlertCircle  className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />;
+  return <XCircle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />;
+}
+
+function DataQualityCard() {
+  const { data: report, isLoading, error, refetch, isFetching } = useDataQualityReport();
+
+  const overallColor =
+    !report            ? "border-slate-200" :
+    report.overall === "PASS" ? "border-green-200 bg-green-50/40" :
+    report.overall === "WARN" ? "border-amber-200 bg-amber-50/40" :
+                                "border-red-200 bg-red-50/40";
+
+  const overallBadge =
+    !report            ? null :
+    report.overall === "PASS" ? "bg-green-100 text-green-800 border-green-300" :
+    report.overall === "WARN" ? "bg-amber-100 text-amber-800 border-amber-300" :
+                                "bg-red-100 text-red-800 border-red-300";
+
+  return (
+    <Card className={overallColor}>
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="h-5 w-5 text-slate-600" />
+            <CardTitle>Training Data Quality</CardTitle>
+            {report && (
+              <Badge className={`text-xs border ${overallBadge}`}>{report.overall}</Badge>
+            )}
+          </div>
+          <button
+            onClick={() => refetch()}
+            disabled={isFetching}
+            className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium hover:bg-muted transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className={`h-3 w-3 ${isFetching ? "animate-spin" : ""}`} />
+            Refresh
+          </button>
+        </div>
+        <CardDescription>
+          Runs before every training job — blocks on FAIL, warns on WARN.
+          {report && (
+            <span className="ml-1">
+              {report.pass_count}✓ {report.warn_count > 0 && `${report.warn_count}⚠ `}{report.fail_count > 0 && `${report.fail_count}✗ `}
+              · {report.total_rows.toLocaleString()} labeled rows
+            </span>
+          )}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {isLoading && (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" /> Running checks…
+          </div>
+        )}
+        {error && (
+          <p className="text-sm text-muted-foreground">
+            Could not run quality checks — ML service may be offline or no training data exists yet.
+          </p>
+        )}
+        {report && (
+          <div className="space-y-1.5">
+            <p className="text-sm text-muted-foreground mb-3">{report.summary}</p>
+            {report.checks.map((c) => (
+              <div key={c.check} className="flex items-start gap-2 text-sm">
+                {dqStatusIcon(c.status)}
+                <div className="min-w-0">
+                  <span className="font-mono text-xs text-muted-foreground mr-2">{c.check}</span>
+                  <span className={
+                    c.status === "FAIL" ? "text-red-700" :
+                    c.status === "WARN" ? "text-amber-700" : "text-slate-700"
+                  }>{c.message}</span>
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </CardContent>
@@ -1027,9 +1117,10 @@ export default function MLPerformanceDashboard() {
         <BiasDriftCard />
       </div>
 
-      {/* Champion-Challenger */}
+      {/* Model Governance */}
       <div className="space-y-4">
         <h2 className="text-lg font-semibold text-slate-800">Model Governance</h2>
+        <DataQualityCard />
         <ChampionChallengerCard />
       </div>
 
