@@ -1851,6 +1851,17 @@ export async function registerRoutes(
     }
   });
 
+  // ── DATA QUALITY ─────────────────────────────────────────────────────────
+  app.get("/api/ml/data-quality/report", requireAuth, async (req, res) => {
+    try {
+      const mlRes = await fetch(ML_SERVICE_URL + "/data-quality/report");
+      if (!mlRes.ok) return res.status(mlRes.status).json({ message: "Data quality report unavailable" });
+      res.json(await mlRes.json());
+    } catch (e: any) {
+      res.status(500).json({ message: "ML service unreachable", error: e.message });
+    }
+  });
+
   // ── CHAMPION-CHALLENGER ───────────────────────────────────────────────────
   app.get("/api/ml/models/registry", requireAuth, async (req, res) => {
     try {
