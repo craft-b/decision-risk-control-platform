@@ -11,10 +11,13 @@ Usage:
     python monitor.py --loop 3600            # run every 3600s (1 hour)
     python monitor.py --loop 21600 --wait    # run every 6h, wait for retrain
     python monitor.py --json                 # dump raw health JSON and exit
+    python monitor.py --no-slack             # suppress Slack alerts for this run
 
 Environment variables:
-    AGENT_API_KEY   — required; must match NODE_URL server's AGENT_API_KEY
-    NODE_URL        — default http://localhost:5000
+    AGENT_API_KEY       — required; must match NODE_URL server's AGENT_API_KEY
+    NODE_URL            — default http://localhost:5000
+    SLACK_WEBHOOK_URL   — optional; post alerts to Slack when action triggered
+                          or any drift layer reaches ALERT status
 
 Cron example (every 6 hours, nightly retrain window):
     0 */6 * * * cd /path/to/project && AGENT_API_KEY=your-key \\
@@ -53,9 +56,10 @@ def _load_env():
 
 _load_env()
 
-BASE_URL = os.environ.get("NODE_URL", "http://localhost:5000")
-API_KEY  = os.environ.get("AGENT_API_KEY", "")
-HEADERS  = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
+BASE_URL          = os.environ.get("NODE_URL", "http://localhost:5000")
+API_KEY           = os.environ.get("AGENT_API_KEY", "")
+HEADERS           = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
+SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL", "")
 
 # Actions this monitor is allowed to trigger autonomously.
 # Remove an entry to make it advisory-only for that action.
@@ -84,6 +88,75 @@ def _status_icon(status: str) -> str:
 def _psi_bar(psi: float, alert: float = 0.20, width: int = 20) -> str:
     filled = min(int(psi / alert * width), width)
     return "█" * filled + "░" * (width - filled)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SLACK
+# ─────────────────────────────────────────────────────────────────────────────
+
+def notify_slack(blocks: list, no_slack: bool = False):
+    """POST a Block Kit message to SLACK_WEBHOOK_URL. Silent no-op if not configured."""
+    if no_slack or not SLACK_WEBHOOK_URL:
+        return
+    try:
+        res = requests.post(SLACK_WEBHOOK_URL, json={"blocks": blocks}, timeout=10)
+        if not res.ok:
+            log(f"Slack webhook returned {res.status_code}: {res.text[:120]}", "WARN")
+    except Exception as e:
+        log(f"Slack notify failed: {e}", "WARN")
+
+
+def build_slack_alert(health: dict, drift_summary: dict, action: str, triggered: bool) -> list:
+    """Build a Slack Block Kit payload summarising the alert."""
+    action_icon = "🔴" if action != "none" else "🟢"
+    header_text = (
+        f"{action_icon} *Enterprise Asset Intelligence — ML Alert*"
+        if action != "none"
+        else "⚠️ *Enterprise Asset Intelligence — Drift Alert*"
+    )
+
+    blocks = [
+        {"type": "section", "text": {"type": "mrkdwn", "text": header_text}},
+        {"type": "divider"},
+    ]
+
+    # Recommended action + reasoning
+    reasoning = health.get("reasoning", "")
+    action_label = "none" if action == "none" else action.upper()
+    status_label = "triggered" if triggered else "advisory (not in AUTO_ACTIONS)"
+    blocks.append({
+        "type": "section",
+        "fields": [
+            {"type": "mrkdwn", "text": f"*Action:*\n{action_label}"},
+            {"type": "mrkdwn", "text": f"*Status:*\n{status_label}"},
+            {"type": "mrkdwn", "text": f"*Reasoning:*\n{reasoning or '—'}"},
+            {"type": "mrkdwn", "text": f"*Time:*\n{ts()}"},
+        ],
+    })
+
+    # Drift summary — only ALERT/WARNING layers
+    drift_lines = []
+    for layer_key, label in [
+        ("data_drift", "Feature drift"),
+        ("prediction_drift", "Prediction drift"),
+        ("bias_drift", "Bias drift"),
+    ]:
+        layer = drift_summary.get(layer_key, {})
+        status = layer.get("overall", layer.get("status", ""))
+        if status in ("ALERT", "WARNING"):
+            drift_lines.append(f"{_status_icon(status)} *{label}*: {status}")
+
+    if drift_lines:
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": "\n".join(drift_lines)},
+        })
+
+    blocks.append({"type": "context", "elements": [
+        {"type": "mrkdwn", "text": f"Source: `monitor.py` → `{BASE_URL}`"},
+    ]})
+
+    return blocks
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -264,20 +337,36 @@ def poll_training(timeout_s: int = 300):
 # MAIN
 # ─────────────────────────────────────────────────────────────────────────────
 
-def run_once(dry_run: bool, wait: bool) -> int:
+def run_once(dry_run: bool, wait: bool, no_slack: bool = False) -> int:
     """Single monitoring cycle. Returns 0 if healthy, 1 if action was needed."""
     health        = get_health()
     drift_summary = get_drift_summary()
     report(health, drift_summary)
 
     action = health.get("recommended_action", "none")
-    if action == "none":
+
+    # Fire Slack alert if action is needed OR any drift layer is ALERT/WARNING
+    any_drift_alert = any(
+        (drift_summary.get(k, {}).get("overall") or drift_summary.get(k, {}).get("status", ""))
+        in ("ALERT", "WARNING")
+        for k in ("data_drift", "prediction_drift", "bias_drift")
+    )
+
+    if action == "none" and not any_drift_alert:
         log("No action required — system healthy")
         return 0
 
-    triggered = act(action, dry_run)
-    if triggered and action == "retrain" and wait and not dry_run:
-        poll_training()
+    triggered = False
+    if action != "none":
+        triggered = act(action, dry_run)
+        if triggered and action == "retrain" and wait and not dry_run:
+            poll_training()
+
+    blocks = build_slack_alert(health, drift_summary, action, triggered)
+    notify_slack(blocks, no_slack=no_slack)
+    if SLACK_WEBHOOK_URL and not no_slack:
+        log("Slack alert sent")
+
     return 1
 
 
@@ -292,6 +381,7 @@ def main():
               python monitor.py --loop 3600            # run every hour
               python monitor.py --loop 21600 --wait    # every 6h, wait for retrain
               python monitor.py --json                 # raw JSON dump
+              python monitor.py --no-slack             # suppress Slack for this run
         """),
     )
     parser.add_argument("--dry-run", action="store_true",
@@ -302,6 +392,8 @@ def main():
                         help="After triggering retrain, block until complete")
     parser.add_argument("--json", action="store_true",
                         help="Dump raw health JSON and exit (no actions)")
+    parser.add_argument("--no-slack", action="store_true",
+                        help="Suppress Slack alerts for this run")
     args = parser.parse_args()
 
     if args.json:
@@ -313,7 +405,7 @@ def main():
         log(f"Loop mode — every {args.loop}s (Ctrl+C to stop)")
         while True:
             try:
-                run_once(dry_run=args.dry_run, wait=args.wait)
+                run_once(dry_run=args.dry_run, wait=args.wait, no_slack=args.no_slack)
             except KeyboardInterrupt:
                 log("Stopped by user")
                 sys.exit(0)
@@ -322,7 +414,7 @@ def main():
             log(f"Sleeping {args.loop}s…")
             time.sleep(args.loop)
     else:
-        code = run_once(dry_run=args.dry_run, wait=args.wait)
+        code = run_once(dry_run=args.dry_run, wait=args.wait, no_slack=args.no_slack)
         sys.exit(code)
 
 

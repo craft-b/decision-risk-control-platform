@@ -164,24 +164,56 @@ Version is auto-incremented from the last DB record. No version string appears i
 
 ### Drift Detection
 
-PSI (Population Stability Index) is computed post-batch-prediction on two monitored features: `mean_time_between_failures` and `vendor_reliability_score`. These were selected for (a) high model importance and (b) non-degenerate distributions in the training data (other features are zero-inflated simulation artifacts).
+Three-layer drift detection runs post-batch:
 
-**Implementation details:**
-- 5 quantile bins (fleet-scale, ~68 assets gives adequate bin coverage)
-- 1/n additive smoothing (prevents log(0) and bounds PSI magnitude better than fixed epsilon)
-- Results persisted to `drift_metrics` table with `feature`, `psi`, `status`, `ref_mean`, `cur_mean`, `ref_std`, `cur_std`
-- Reference distribution bootstrappable via `POST /drift/compute-reference` — writes `drift_reference.json` to registry and immediately runs a post-reset PSI check so the dashboard reflects the new baseline
+**Layer 1 — Data drift (PSI):** Population Stability Index computed on two monitored features: `mean_time_between_failures` and `vendor_reliability_score`. 5 quantile bins, 1/n additive smoothing, persisted to `drift_metrics` table with `feature`, `psi`, `status`, `ref_mean`, `cur_mean`, `ref_std`, `cur_std`. PSI thresholds: `< 0.10` STABLE · `0.10–0.20` WARNING · `≥ 0.20` ALERT.
 
-**PSI thresholds:** `< 0.10` STABLE · `0.10–0.20` WARNING · `≥ 0.20` ALERT → retrain recommended
+**Layer 2 — Prediction drift:** Distribution of 30d output scores compared to reference via KL divergence and mean shift. Detects when the model's output distribution changes even if input features look stable — can indicate label drift or silent model degradation.
+
+**Layer 3 — Bias drift:** HIGH-risk rate per equipment category compared across periods. Detects disparate impact — e.g., if a new fleet cohort is systematically scored higher/lower than the reference period for that category. Surfaced as percentage-point disparity per category.
+
+Reference distribution bootstrappable via `POST /drift/compute-reference` — writes `drift_reference.json` to registry and immediately runs a post-reset check so the dashboard reflects the new baseline.
+
+### Champion-Challenger Model Governance
+
+Each completed training run calls `register_new_version(version)` in `engine/model_registry.py`:
+
+- **First version** → becomes champion immediately; loaded by `mh_predictor` at startup
+- **Subsequent versions** → enter as challenger; loaded by `challenger_predictor` in shadow mode
+- **Shadow scoring:** Challenger runs alongside champion on every batch inference call. Results are NOT persisted to DB — shadow output is returned in `shadow_summary` (mean Δ30d score) for monitoring only
+- **Promotion:** `POST /api/ml/models/promote` (admin only) swaps `mh_predictor = challenger_predictor` in memory — zero-downtime, no restart required; old champion moved to `retired`
+- **Registry:** `registry/model_registry.json` tracks champion, challenger, retired list, and full audit history (register/promote events with timestamps)
+- **Numeric version sort:** `_version_key()` extracts (major, minor) tuple; `v1.12 > v1.9` regardless of string sort
+
+### Pre-Training Data Quality Gate
+
+`engine/data_quality.py` runs 8 checks before any training begins:
+
+| Check | FAIL threshold | WARN threshold |
+|-------|---------------|----------------|
+| Row count | < 500 rows | < 1,000 rows |
+| Label completeness | Any horizon has no positive labels | < 10 positives per horizon |
+| Class balance | < 10 positives per horizon | < 30 positives |
+| Null rate | > 20% nulls in any feature | > 5% |
+| Physical bounds | Any negative age/hours | — |
+| Required non-zero | All snapshots have zero hours | — |
+| Temporal spread | Date span < 60 days | < 180 days |
+| Duplicate snapshots | (warning only) | > 5% duplicates |
+
+FAIL → raises `ValueError`, training aborted. WARN → logs message, training proceeds. The report is also surfaced via `GET /api/ml/data-quality/report` in the ML dashboard.
+
+### SMOTE Oversampling
+
+Applied per-horizon on the training fold minority class (failures) before RF fitting. Uses `imblearn.over_sampling.SMOTE` with `k_neighbors=min(5, pos_count-1)`. Improves recall on the failure class across all horizons, particularly at 60d where the minority class is smallest in early folds.
 
 ### Agent API & Monitoring
 
 The agent API provides bearer-token authenticated access to model health for programmatic consumers (scripts, LLM agents, CI/CD):
 
-- `GET /api/agent/model-health` — returns model version, pipeline stats, drift status, and a machine-readable `recommended_action` (`none` / `retrain` / `compute_drift_reference`) with a `reasoning` string
+- `GET /api/agent/model-health` — returns model version, pipeline stats, drift status (all three layers), and a machine-readable `recommended_action` (`none` / `retrain` / `compute_drift_reference`) with a `reasoning` string
 - `POST /api/agent/actions` — triggers `retrain` or `compute_drift_reference` without a browser session
 
-`monitor.py` is a local cron script that calls `GET /api/agent/model-health`, logs drift per feature, and triggers the recommended action automatically. Suitable for scheduling via cron, Airflow, or any task runner.
+`monitor.py` is a local cron script that calls `GET /api/agent/model-health`, logs three-layer drift per feature, triggers the recommended action automatically, and fires a Slack webhook alert (Block Kit payload) when action is needed or any drift layer hits WARNING/ALERT. Run once or continuously with `--loop`. `SLACK_WEBHOOK_URL` env var opt-in — safe no-op if unset. `--no-slack` flag suppresses alerts for a single run. Suitable for scheduling via cron, Airflow, or any task runner.
 
 ### Inference
 
@@ -389,6 +421,14 @@ The predictor loads models at startup by globbing the registry for the latest ve
 | v1.6-M | Feedback loop card — predictive intervention rate (flagged HIGH → acted on) | ✅ Complete |
 | v1.6-N | Agent API — bearer token auth, model-health endpoint, actions endpoint | ✅ Complete |
 | v1.6-O | monitor.py — local cron script for automated drift/retrain loop | ✅ Complete |
+| v1.6-P | Three-layer drift detection — data (PSI), prediction (KL/mean shift), bias (category disparity) | ✅ Complete |
+| v1.6-Q | Champion-challenger model registry — shadow scoring, zero-downtime promotion, audit history | ✅ Complete |
+| v1.6-R | Pre-training data quality gate — 8 checks, PASS/WARN/FAIL, blocks training on FAIL | ✅ Complete |
+| v1.6-S | SMOTE oversampling — per-horizon minority class resampling before RF fit | ✅ Complete |
+| v1.6-T | CI pipeline — GitHub Actions lint/smoke-test/typecheck on ml-service/** changes | ✅ Complete |
+| v1.6-U | Test suite — 115 tests across 4 files (engine, training, data quality, registry) | ✅ Complete |
+| v1.6-V | Slack alerting — monitor.py fires Block Kit webhook on action needed or ALERT/WARNING drift | ✅ Complete |
+| v1.6-W | Railway e2e — ML_SERVICE_URL wired, Node→ML service verified end-to-end in prod | ✅ Complete |
 
 ---
 
@@ -407,7 +447,7 @@ The forward projection engine holds maintenance constant — it does not model s
 The `days` parameter in `POST /api/simulate/day` is capped at 30 regardless of the slider value. Cosmetic bug — does not affect data quality, only throughput of the simulation step.
 
 **5. Model version display**
-The `modelStatus` field in `/api/ml/pipeline-status` uses alphabetic sort on registry filenames (`v1.9 > v1.12` alphabetically). Cosmetic — the predictor itself uses correct numeric version sorting. Fixed in the next maintenance cycle.
+The `modelStatus` field in `/api/ml/pipeline-status` uses alphabetic sort on registry filenames (`v1.9 > v1.12` alphabetically). Cosmetic — the predictor and model registry both use correct numeric version sorting (`_version_key` regex-based tuple sort). Display-only fix deferred.
 
 ---
 
@@ -422,15 +462,20 @@ The `modelStatus` field in `/api/ml/pipeline-status` uses alphabetic sort on reg
 | Models | Random Forest (scikit-learn), CalibratedClassifierCV | 3 models × version in registry |
 | Experiment Tracking | MLflow 2.16 | Opt-in via `MLFLOW_TRACKING_URI`; logs hyperparams, per-horizon metrics, CV fold scores, artifacts |
 | Explainability | SHAP 0.51, TreeExplainer | Per-prediction top-5 feature attribution at inference time |
-| Drift Detection | PSI (Population Stability Index) | 5-bin quantile scheme, 1/n smoothing, persisted to `drift_metrics` table |
+| Drift Detection | Three-layer: PSI (data), KL divergence (prediction), category disparity (bias) | 5-bin quantile, 1/n smoothing, persisted to `drift_metrics` |
+| Model Governance | Champion-challenger registry, shadow scoring, zero-downtime promotion | `engine/model_registry.py`, `registry/model_registry.json` |
+| Data Quality Gate | 8-check validator before training | `engine/data_quality.py`; FAIL blocks training |
+| Class Balancing | SMOTE oversampling (imblearn) | Per-horizon, applied on training fold only |
+| CI | GitHub Actions | lint (ruff), smoke-test, typecheck (tsc --noEmit) on `ml-service/**` |
+| Test Coverage | 115 tests across 4 files | engine inference, training pipeline, data quality, model registry |
 | Agent API | Bearer token auth | `GET /api/agent/model-health`, `POST /api/agent/actions` |
-| Monitoring | `monitor.py` cron script | Polls agent API, auto-triggers retrain or reference recompute |
+| Monitoring | `monitor.py` cron script | Three-layer drift logging, auto-triggers retrain, Slack webhook alerts; `--loop` mode |
 | Simulation | Custom discrete-event engine, Weibull hazard function, fleet renewal | 2,900+ simulated days (2024–2032) |
 | Model Registry | Filesystem (pkl + json), glob-based version resolution | `ml-service/registry/` |
 | LLM | Groq (llama-3.1-8b-instant) | Maintenance recommendations |
 
 ---
 
-*Last updated: v1.14 + v1.6 MLOps tracks — MLflow, SHAP, drift detection, agent API, monitoring*
+*Last updated: v1.14 + v1.6 MLOps tracks — MLflow, SHAP, three-layer drift, champion-challenger, DQ gate, SMOTE, CI, 115 tests, Slack alerting, Railway deployment*
 *Training script: `ml-service/training/train_model_multihorizon.py`*  
 *Model registry: `ml-service/registry/`*
