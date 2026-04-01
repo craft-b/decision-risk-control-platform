@@ -267,6 +267,7 @@ DB_PASSWORD=yourpassword
 DB_NAME=asset_inventory
 SESSION_SECRET=<openssl rand -hex 32>
 GROQ_API_KEY=gsk_...
+AGENT_API_KEY=<python -c "import secrets; print(secrets.token_hex(32))">
 ```
 
 ### 2. Install and migrate
@@ -288,23 +289,20 @@ pip install -r requirements.txt
 uvicorn api.main:app --reload --port 8000
 ```
 
-### 4. Train models (first time)
+### 4. First-time setup (onboarding screen)
 
-```bash
-cd ml-service
-python training/train_model_multihorizon.py
-```
+On first login, the app automatically redirects to `/setup`. Choose one of two paths:
 
-Or use the **Retrain** button in the admin panel after seeding simulation data.
+**Load Demo Data** — recommended for evaluation and interviews. Runs the full seed pipeline in the background (~60–90 seconds) and streams live progress. Seeds:
+- 10 heavy equipment units across four categories
+- 90 days of sensor readings per asset
+- Maintenance history with realistic failure events
+- Trained multi-horizon ML model (10d / 30d / 60d)
+- SHAP attribution, MLflow run, drift reference baseline
 
-### 5. Seed simulation data
+**Start Fresh** — skip demo data and build the dataset manually with real equipment and operational records. The dashboard surfaces guided empty states that walk you through adding equipment, logging maintenance, running the ML pipeline, and generating predictions in the right order.
 
-From the admin panel (ADMINISTRATOR role):
-1. **Simulate** — run 30 days to generate sensor data
-2. **Generate Snapshots** — backfill feature vectors
-3. **Label** — mark failure outcomes
-4. **Retrain** — train models on labeled data
-5. **Run Predictions** — score the fleet
+> The onboarding screen re-appears any time the system is reset via `POST /api/admin/reset` (ADMINISTRATOR role only).
 
 ---
 
