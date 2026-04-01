@@ -14,11 +14,14 @@ Predictive maintenance platform for heavy construction equipment rental fleets. 
 - **ML pipeline** — Full automated pipeline: feature snapshot generation → failure labeling → model training → inference, all triggerable from the admin UI
 - **MLflow experiment tracking** — Every training run logs hyperparameters, per-horizon metrics (ROC-AUC, PR-AUC, recall, F1), per-fold CV scores, model artifacts, and feature importance JSONs under the `equipment-failure-multihorizon` experiment
 - **SHAP explainability** — `TreeExplainer` runs at inference time; top 5 features by |SHAP value| are returned with every prediction for per-asset attribution
-- **PSI drift detection** — Population Stability Index computed post-batch on monitored features; results persisted to `drift_metrics` table; dashboard surfaces per-feature PSI with STABLE / WARNING / ALERT status
+- **Three-layer drift detection** — Data drift (PSI on monitored features), prediction drift (distribution shift in 30d output scores), and bias drift (disparity in HIGH-rate across equipment categories); all persisted to `drift_metrics` table; dashboard surfaces per-feature PSI with STABLE / WARNING / ALERT status
+- **Champion-challenger model governance** — Newly trained models enter registry as challengers; shadow-score every batch alongside champion without persisting results; admin promotes challenger to champion via `POST /api/ml/models/promote` with zero downtime (in-memory hot-swap); full audit history in `model_registry.json`
+- **Pre-training data quality gate** — 8-check validator (row count, label completeness, class balance, null rates, physical bounds, non-zero required features, temporal spread, duplicate snapshots) blocks training on FAIL, warns on marginal data, PASS/WARN/FAIL summary in training log
+- **SMOTE oversampling** — Applied per-horizon on training fold minority class to address class imbalance before RF fitting; improves recall on failure class
 - **Agent API** — Bearer-token authenticated endpoints (`GET /api/agent/model-health`, `POST /api/agent/actions`) for programmatic and LLM agent access; returns consolidated health snapshot with machine-readable `recommended_action`
-- **Automated monitoring** — `monitor.py` cron script polls model health and auto-triggers retraining or reference recomputation based on drift state
+- **Automated monitoring** — `monitor.py` cron script polls model health, logs three-layer drift per feature, auto-triggers retraining or reference recomputation based on drift state, and fires Slack webhook alerts when action is needed or any drift layer reaches WARNING/ALERT; supports `--loop` mode for continuous polling
 - **GenAI recommendations** — Groq LLM turns risk scores into plain-English maintenance actions per asset
-- **ML metrics dashboard** — Live feature importance, confusion matrix, per-class precision/recall/F1, prediction distribution over time, hyperparameter display, and drift monitor card
+- **ML metrics dashboard** — Live feature importance, confusion matrix, per-class precision/recall/F1, prediction distribution over time, hyperparameter display, drift monitor card, champion-challenger comparison table, and data quality report card
 
 ---
 
@@ -51,6 +54,10 @@ React SPA (Vite, port 5173)
 | Database | MySQL 8 |
 | Experiment Tracking | MLflow 2.16 |
 | Explainability | SHAP 0.51 (TreeExplainer) |
+| Drift Detection | PSI (data), output distribution (prediction), category disparity (bias) |
+| Model Governance | Champion-challenger registry, shadow scoring, zero-downtime promotion |
+| Data Quality | 8-check pre-training gate (row count, balance, nulls, bounds, temporal spread) |
+| CI | GitHub Actions — lint (ruff), smoke-test, typecheck (tsc) |
 | LLM | Groq (llama-3.1-8b-instant) |
 
 ---
@@ -155,11 +162,18 @@ A discrete-event simulator advances a cursor date day by day:
 │   │   └── main.py                # FastAPI app — inference, drift, training endpoints
 │   ├── engine/
 │   │   ├── predictor_multihorizon.py  # Multi-horizon inference + SHAP attribution
-│   │   ├── drift_detector.py          # PSI drift detection + drift_metrics persistence
+│   │   ├── model_registry.py          # Champion-challenger registry — JSON-backed, numeric sort
+│   │   ├── data_quality.py            # 8-check pre-training data quality gate
+│   │   ├── drift_detector.py          # Three-layer drift detection (data/prediction/bias)
 │   │   ├── projector.py               # 60-day forward projection engine
 │   │   └── genai_advisor.py           # Groq recommendation generation
 │   ├── training/
-│   │   └── train_model_multihorizon.py  # Training pipeline — TimeSeriesSplit CV + MLflow logging
+│   │   └── train_model_multihorizon.py  # Training pipeline — TimeSeriesSplit CV + MLflow logging + DQ gate
+│   ├── tests/
+│   │   ├── test_ml_engine.py          # 26 tests — inference, monotonicity, risk ordering, batch, schema
+│   │   ├── test_train_smoke.py        # 25 tests — full training pipeline on synthetic data
+│   │   ├── test_data_quality.py       # 47 tests — all 8 DQ checks + report structure
+│   │   └── test_model_registry.py     # 27 tests — champion/challenger/promote/metrics (in-memory)
 │   └── registry/                  # Versioned model artifacts
 │       ├── rf_{h}d_v1.14.pkl
 │       ├── clip_thresholds_v1.14.json
@@ -167,7 +181,8 @@ A discrete-event simulator advances a cursor date day by day:
 │       ├── metadata_{h}d_v1.14.json
 │       └── feature_importance_{h}d_v1.14.json
 │
-├── monitor.py                     # Local cron script — polls agent API, auto-triggers retrain
+├── monitor.py                     # Local cron script — polls agent API, auto-triggers retrain; --loop mode
+├── .github/workflows/ml-ci.yml   # CI: lint (ruff), smoke-test, typecheck (tsc)
 └── shared/
     ├── schema.ts                  # Drizzle table definitions (source of truth)
     └── routes.ts                  # Shared API route/type definitions
@@ -204,6 +219,15 @@ Full interactive docs at **http://localhost:8000/docs** when running.
 |---|---|---|
 | `GET` | `/api/ml/drift/latest` | Most recent PSI per monitored feature |
 | `POST` | `/api/ml/drift/compute-reference` | Recompute reference baseline from training data |
+
+### Model Governance
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/ml/models/registry` | Champion, challenger, retired versions + audit history |
+| `GET` | `/api/ml/models/compare` | Per-horizon metric comparison (champion vs challenger) |
+| `POST` | `/api/ml/models/promote` | Promote challenger to champion (admin only) |
+| `GET` | `/api/ml/data-quality/report` | Latest pre-training data quality report (8 checks) |
 
 ### Agent API
 
@@ -295,6 +319,7 @@ From the admin panel (ADMINISTRATOR role):
 | `GROQ_MODEL` | — | Groq model ID (default: `llama-3.1-8b-instant`) |
 | `LLM_PROVIDER` | — | `groq` or `ollama` (default: `groq`) |
 | `MLFLOW_TRACKING_URI` | — | MLflow server URI. If unset, MLflow logging is skipped (safe no-op). |
+| `SLACK_WEBHOOK_URL` | — | Incoming webhook URL for `monitor.py` alerts. If unset, Slack notifications are silently skipped. |
 | `PYTHONIOENCODING` | — | Set to `utf-8` on Windows to avoid codec errors |
 
 ---
