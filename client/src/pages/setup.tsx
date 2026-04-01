@@ -9,7 +9,6 @@ import { useAuth } from "@/hooks/use-auth";
 import {
   Database,
   Play,
-  RotateCcw,
   CheckCircle2,
   XCircle,
   Loader2,
@@ -25,18 +24,19 @@ export default function SetupPage() {
   const queryClient = useQueryClient();
 
   const [seedingStarted, setSeedingStarted] = useState(false);
-  const [mode, setMode] = useState<"choose" | "seeding" | "done">("choose");
+  const [mode, setMode] = useState<"choose" | "active" | "seeding" | "done">("choose");
+  const [confirmReset, setConfirmReset] = useState(false);
 
-  const { data: systemStatus, refetch: refetchStatus } = useSystemStatus();
+  const { data: systemStatus } = useSystemStatus();
 
   const { data: seedJob } = useSeedStatus(seedingStarted && mode === "seeding");
 
-  // Redirect if already seeded
+  // Show "active" state when system is already seeded and user navigates here directly
   useEffect(() => {
     if (systemStatus?.seeded && mode === "choose") {
-      setLocation("/");
+      setMode("active");
     }
-  }, [systemStatus, mode, setLocation]);
+  }, [systemStatus, mode]);
 
   // Detect completion/failure
   useEffect(() => {
@@ -66,12 +66,91 @@ export default function SetupPage() {
     },
   });
 
+  const resetMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/admin/reset", {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    onSuccess: () => {
+      setConfirmReset(false);
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/system-status"] });
+      setMode("choose");
+    },
+  });
+
   const isAdmin = user?.role === "ADMINISTRATOR";
 
   const progressPct =
     seedJob && seedJob.totalSteps > 0
       ? Math.round((seedJob.currentStep / seedJob.totalSteps) * 100)
       : 0;
+
+  if (mode === "active") {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+        <Card className="w-full max-w-md text-center">
+          <CardHeader>
+            <div className="mx-auto mb-3 h-12 w-12 rounded-full bg-green-100 flex items-center justify-center">
+              <CheckCircle2 className="h-7 w-7 text-green-600" />
+            </div>
+            <CardTitle>System is Active</CardTitle>
+            <CardDescription>
+              {systemStatus?.equipmentCount ?? 0} equipment units · {systemStatus?.snapshotCount ?? 0} snapshots
+              {systemStatus?.modelTrained ? " · ML model trained" : ""}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <Button className="w-full" onClick={() => setLocation("/")}>
+              Go to Dashboard <ChevronRight className="ml-2 h-4 w-4" />
+            </Button>
+            {isAdmin && (
+              <div className="pt-2 border-t">
+                {!confirmReset ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-slate-400 hover:text-red-600 w-full"
+                    onClick={() => setConfirmReset(true)}
+                  >
+                    Reset system &amp; re-run setup
+                  </Button>
+                ) : (
+                  <div className="space-y-2">
+                    <p className="text-xs text-red-600 font-medium">
+                      This will wipe all equipment, sensors, maintenance history, and predictions. Are you sure?
+                    </p>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="flex-1"
+                        onClick={() => setConfirmReset(false)}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        className="flex-1"
+                        onClick={() => resetMutation.mutate()}
+                        disabled={resetMutation.isPending}
+                      >
+                        {resetMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Yes, Reset"}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   if (mode === "seeding") {
     return (
