@@ -375,7 +375,9 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateMaintenanceEvent(id: number, data: Partial<InsertMaintenanceEvent>): Promise<MaintenanceEvent> {
-    await db.update(maintenanceEvents).set(data).where(eq(maintenanceEvents.id, id));
+    // maintenanceDate is deliberately kept as a 'YYYY-MM-DD' string (see createMaintenanceEvent
+    // above) to avoid timezone-offset shifts — Drizzle's inferred update type expects Date|SQL.
+    await db.update(maintenanceEvents).set(data as any).where(eq(maintenanceEvents.id, id));
     const [updated] = await db.select().from(maintenanceEvents).where(eq(maintenanceEvents.id, id));
     return updated!;
   }

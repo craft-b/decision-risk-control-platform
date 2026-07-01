@@ -176,13 +176,13 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
       ...data,
       buyRent: "RENT",
       receiveDate: formatDate(data.receiveDate) || getTodayDate(),
-      returnDate: formatDate(data.returnDate),
+      returnDate: formatDate(data.returnDate) ?? undefined,
       operatorName: data.operatorName || null,
     };
 
     if (isEditing && initialData?.id) {
       updateMutation.mutate(
-        { id: initialData.id, data: payload },
+        { id: initialData.id, data: payload as any },
         { onSuccess }
       );
     } else {

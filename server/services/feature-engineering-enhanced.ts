@@ -73,6 +73,52 @@ export interface EnhancedFeatureSnapshot {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// PURE DERIVED-FEATURE FORMULAS
+// Extracted so the core scoring math can be unit tested without a DB.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function computeWearRateVelocity(wearRate: number, wearRate90dAgo: number): number {
+  return (wearRate - wearRate90dAgo) * 30; // per month
+}
+
+export function computeMaintFrequencyTrend(maintRate30d: number, maintRate90d: number): number {
+  return maintRate90d > 0 ? maintRate30d / maintRate90d : 1.0;
+}
+
+export function computeCostTrend(avgCostRecent: number, avgCostPrior: number): number {
+  return avgCostPrior > 0 ? avgCostRecent / avgCostPrior : 1.0;
+}
+
+export function computeHoursVelocity(hoursPerDay30d: number, hoursPerDay90d: number): number {
+  return hoursPerDay90d > 0 ? hoursPerDay30d / hoursPerDay90d : 1.0;
+}
+
+export function computeMechanicalWearScore(totalHoursLifetime: number, assetAgeYears: number): number {
+  const hoursFactor = Math.min(totalHoursLifetime / 5000, 1);
+  const ageFactor = Math.min(assetAgeYears / 8, 1);
+  return Math.min(hoursFactor * 5 + ageFactor * 5, 10);
+}
+
+export function computeAbuseScore(usageIntensity: number, usageTrend: number): number {
+  const intensityFactor = Math.min(usageIntensity / 10, 1);
+  const trendFactor = Math.max(0, Math.min((usageTrend - 1) / 0.5, 1));
+  return Math.min(intensityFactor * 6 + trendFactor * 4, 10);
+}
+
+export function computeNeglectScore(daysSinceLastMaintenance: number | null, maintOverdue: number): number {
+  const neglectDaysFactor = daysSinceLastMaintenance !== null
+    ? Math.min(daysSinceLastMaintenance / 120, 1)
+    : 0.5;
+  return Math.min(Math.max(0, neglectDaysFactor * 7 + (maintOverdue ? 3 : 0)), 10);
+}
+
+export function computeNeglectAcceleration(daysSinceLastMaintenance: number | null, intervalDays: number): number {
+  return daysSinceLastMaintenance !== null && intervalDays > 0
+    ? Math.min(daysSinceLastMaintenance / intervalDays, 3.0)
+    : 1.0;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SERVICE
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -261,21 +307,9 @@ class EnhancedFeatureEngineeringService {
     const maintBurden = maintenanceCost180d / Math.max(effectiveHours, 100);
 
     // ── Composite risk scores ──────────────────────────────────────────────
-    const hoursFactor = Math.min(totalHoursLifetime / 5000, 1);
-    const ageFactor   = Math.min(assetAgeYears / 8, 1);
-    const mechanicalWearScore = Math.min((hoursFactor * 5 + ageFactor * 5), 10);
-
-    const intensityFactor = Math.min(usageIntensity / 10, 1);
-    const trendFactor     = Math.max(0, Math.min((usageTrend - 1) / 0.5, 1));
-    const abuseScore      = Math.min((intensityFactor * 6 + trendFactor * 4), 10);
-
-    const neglectDaysFactor = daysSinceLastMaintenance !== null
-      ? Math.min(daysSinceLastMaintenance / 120, 1)
-      : 0.5;
-    const neglectScore = Math.min(
-      Math.max(0, neglectDaysFactor * 7 + (maintOverdue ? 3 : 0)),
-      10
-    );
+    const mechanicalWearScore = computeMechanicalWearScore(totalHoursLifetime, assetAgeYears);
+    const abuseScore = computeAbuseScore(usageIntensity, usageTrend);
+    const neglectScore = computeNeglectScore(daysSinceLastMaintenance, maintOverdue);
 
     // ── Dynamic context scores (v2) ────────────────────────────────────────
     // vendorReliabilityScore: inverse of maintenance frequency relative to age
@@ -299,13 +333,13 @@ class EnhancedFeatureEngineeringService {
     const hoursAt90dAgo = Math.max(0, totalHoursLifetime - hoursUsed90d);
     const ageAt90dAgo   = Math.max(0.01, assetAgeYears - 90 / 365.25);
     const wearRate90dAgo = hoursAt90dAgo / (ageAt90dAgo * 8760);
-    const wearRateVelocity = (wearRate - wearRate90dAgo) * 30; // per month
+    const wearRateVelocity = computeWearRateVelocity(wearRate, wearRate90dAgo);
 
     // 2. Maintenance frequency trend: events in last 30d (annualised) vs 90d (annualised)
     const maint30Count = maint90.filter(e => new Date(e.maintenanceDate!) >= d30).length;
     const maintRate30d = maint30Count * 12;        // annualised from 30d
     const maintRate90d = maint90.length * (365 / 90); // annualised from 90d
-    const maintFrequencyTrend = maintRate90d > 0 ? maintRate30d / maintRate90d : 1.0;
+    const maintFrequencyTrend = computeMaintFrequencyTrend(maintRate30d, maintRate90d);
 
     // 3. Cost trend: avg cost per event in recent 90d vs prior 90d
     const avgCostRecent = maint90.length > 0
@@ -314,18 +348,16 @@ class EnhancedFeatureEngineeringService {
     const avgCostPrior = maint90to180.length > 0
       ? maint90to180.reduce((s, e) => s + Number(e.cost || 0), 0) / maint90to180.length
       : avgCostRecent;
-    const costTrend = avgCostPrior > 0 ? avgCostRecent / avgCostPrior : 1.0;
+    const costTrend = computeCostTrend(avgCostRecent, avgCostPrior);
 
     // 4. Hours velocity: hours/day in last 30d vs average hours/day in last 90d
     const hoursPerDay30d = rentalDays30d > 0 ? hoursUsed30d / 30 : 0;
     const hoursPerDay90d = rentalDays90d > 0 ? hoursUsed90d / 90 : 0;
-    const hoursVelocity  = hoursPerDay90d > 0 ? hoursPerDay30d / hoursPerDay90d : 1.0;
+    const hoursVelocity  = computeHoursVelocity(hoursPerDay30d, hoursPerDay90d);
 
     // 5. Neglect acceleration: how far overdue relative to expected interval
     //    0 = just serviced, 1 = exactly at interval, >1 = overdue
-    const neglectAcceleration = daysSinceLastMaintenance !== null && intervalDays > 0
-      ? Math.min(daysSinceLastMaintenance / intervalDays, 3.0)
-      : 1.0;
+    const neglectAcceleration = computeNeglectAcceleration(daysSinceLastMaintenance, intervalDays);
 
     // 6. Sensor degradation rate: recent sensor readings vs historical baseline
     //    Compare vibration and temp — most sensitive leading indicators
