@@ -1,6 +1,15 @@
 # Enterprise Asset Intelligence
 
-Predictive maintenance platform for heavy construction equipment rental fleets. A full-stack system that simulates fleet operations, engineers features from operational data, trains calibrated Random Forest models, and serves multi-horizon failure probability predictions across 10, 30, and 60-day windows — with cost-optimized intervention recommendations and a rental dispatch risk guard.
+**Live demo:** not yet deployed — see [Deployment Status](#deployment-status). Runs locally in a few minutes via [Quickstart](#quickstart).
+
+Predictive maintenance platform for heavy construction equipment rental fleets — encoding the same failure-prediction and risk-scoring logic used in industrial and manufacturing equipment reliability programs. Asset degradation curves, hazard functions, and maintenance-interval optimization transfer directly from a production line's rotating equipment to a rental fleet's excavators and skid steers, which is the direct link to 26 years of CPG/manufacturing process engineering behind this project. It's a full-stack system that simulates fleet operations, engineers features from operational data, trains calibrated Random Forest models, and serves multi-horizon failure probability predictions across 10, 30, and 60-day windows — with cost-optimized intervention recommendations and a rental dispatch risk guard.
+
+## Why This Project
+
+This is the second of two portfolio repositories, deliberately built to be complementary rather than redundant:
+
+- **FormulaForge** demonstrates LLM/RAG application engineering — retrieval pipelines, prompt design, grounding a model in a CPG formulation knowledge base.
+- **Enterprise Asset Intelligence** (this repo) demonstrates classical ML + MLOps engineering — feature engineering from raw operational data, calibrated multi-horizon classifiers, temporal validation, drift monitoring, and model governance. This is the "practical ML floor": the skills that transfer directly from process-engineering discipline (SPC, reliability curves, maintenance scheduling) into applied ML roles, independent of any particular LLM.
 
 ---
 
@@ -57,7 +66,7 @@ React SPA (Vite, port 5173)
 | Drift Detection | PSI (data), output distribution (prediction), category disparity (bias) |
 | Model Governance | Champion-challenger registry, shadow scoring, zero-downtime promotion |
 | Data Quality | 8-check pre-training gate (row count, balance, nulls, bounds, temporal spread) |
-| CI | GitHub Actions — lint (ruff), smoke-test, typecheck (tsc) |
+| CI | GitHub Actions — lint (ruff), ML smoke-test, TypeScript typecheck (tsc), Node unit tests (vitest) |
 | LLM | Groq (llama-3.1-8b-instant) |
 
 ---
@@ -87,6 +96,10 @@ Three separate binary classifiers, one per prediction horizon. Each is a calibra
 | 5 | `log_mean_time_between_failures` | ~12–16% |
 
 **Why holdout AUC drops across horizons:** The 60d holdout set has a 37% positive rate vs 25% in dev — the aging fleet distribution shifts significantly over time. CV ROC-AUC is the more representative performance estimate for deployment.
+
+**What the accuracy numbers mean relative to a naive baseline:** positive (failure) rates are 19.8% / 24.0% / 27.6% for the 10d/30d/60d horizons, so a naive "always predict no-failure" baseline would score 80.2% / 76.0% / 72.4% accuracy while catching zero real failures (0% recall). The actual models score 96.35% / 93.71% / 88.49% accuracy *and* 92.5% / 81.7% / 71.0% recall on the failure class — the recall number is what matters operationally, since a missed failure is far more costly than a false alarm.
+
+**Evaluation methodology:** each horizon's holdout split is a single **temporal** split (not random) — the most recent ~20% of snapshots by simulation date are held out, so no future data leaks into training. On top of that, 5-fold `TimeSeriesSplit` cross-validation (gap = horizon days) is run on the training portion to get a variance estimate (the `CV ROC-AUC ± std` column) before the final model is fit on the full training set and scored once on the untouched holdout. **Retrain triggers:** `monitor.py` polls `/api/agent/model-health` and auto-triggers retraining when any monitored feature's PSI reaches the ALERT threshold (≥ 0.20) or when prediction/bias drift crosses the same threshold; an admin can also trigger retraining manually via `POST /api/ml/train`.
 
 ---
 
@@ -154,8 +167,11 @@ A discrete-event simulator advances a cursor date day by day:
 ├── server/                        # Node.js API gateway
 │   ├── routes.ts                  # All Express routes incl. agent API + drift proxy
 │   └── services/
-│       ├── feature-engineering-enhanced.ts  # Full 31-feature computation + velocity features
-│       └── feature-engineering.ts           # Base snapshot persistence
+│       ├── feature-engineering-enhanced.ts       # Full 31-feature computation + velocity features
+│       ├── feature-engineering-enhanced.test.ts  # Unit tests — pure derived-feature formulas
+│       ├── feature-engineering.ts                # Base snapshot persistence
+│       ├── risk-scoring.ts                       # Legacy heuristic risk score (pre-ML)
+│       └── risk-scoring.test.ts                  # Unit tests — scoring/classification/explanation
 │
 ├── ml-service/                    # Python FastAPI ML service
 │   ├── api/
@@ -169,11 +185,11 @@ A discrete-event simulator advances a cursor date day by day:
 │   │   └── genai_advisor.py           # Groq recommendation generation
 │   ├── training/
 │   │   └── train_model_multihorizon.py  # Training pipeline — TimeSeriesSplit CV + MLflow logging + DQ gate
-│   ├── tests/
-│   │   ├── test_ml_engine.py          # 26 tests — inference, monotonicity, risk ordering, batch, schema
-│   │   ├── test_train_smoke.py        # 25 tests — full training pipeline on synthetic data
-│   │   ├── test_data_quality.py       # 47 tests — all 8 DQ checks + report structure
-│   │   └── test_model_registry.py     # 27 tests — champion/challenger/promote/metrics (in-memory)
+│   ├── tests/                     # 115 tests total (pytest)
+│   │   ├── test_ml_engine.py          # inference, monotonicity, risk ordering, batch, schema
+│   │   ├── test_train_smoke.py        # full training pipeline on synthetic data
+│   │   ├── test_data_quality.py       # all 8 DQ checks + report structure
+│   │   └── test_model_registry.py     # champion/challenger/promote/metrics (in-memory)
 │   └── registry/                  # Versioned model artifacts
 │       ├── rf_{h}d_v1.14.pkl
 │       ├── clip_thresholds_v1.14.json
@@ -182,7 +198,7 @@ A discrete-event simulator advances a cursor date day by day:
 │       └── feature_importance_{h}d_v1.14.json
 │
 ├── monitor.py                     # Local cron script — polls agent API, auto-triggers retrain; --loop mode
-├── .github/workflows/ml-ci.yml   # CI: lint (ruff), smoke-test, typecheck (tsc)
+├── .github/workflows/ml-ci.yml   # CI: lint (ruff), ML smoke-test, typecheck (tsc), Node unit tests (vitest)
 └── shared/
     ├── schema.ts                  # Drizzle table definitions (source of truth)
     └── routes.ts                  # Shared API route/type definitions
@@ -247,6 +263,24 @@ Authenticated with `Authorization: Bearer <AGENT_API_KEY>`. Designed for program
 
 ---
 
+## Testing
+
+```bash
+# Python — ml-service (115 tests: inference, training smoke test, data quality gate, model registry)
+cd ml-service
+pytest tests/ -v
+
+# Node/TypeScript — server (unit tests for feature-engineering and risk-scoring core logic)
+npm test
+
+# TypeScript type-check
+npx tsc --noEmit
+```
+
+All three run in CI (`.github/workflows/ml-ci.yml`) on every push/PR touching `ml-service/`, `server/`, `client/`, or `shared/`.
+
+---
+
 ## Quickstart
 
 ### 1. Clone and configure
@@ -260,6 +294,7 @@ cp .env.example .env
 Fill in `.env`:
 
 ```env
+DATABASE_URL=mysql://root:yourpassword@localhost:3306/asset_inventory
 DB_HOST=localhost
 DB_PORT=3306
 DB_USER=root
@@ -269,6 +304,8 @@ SESSION_SECRET=<openssl rand -hex 32>
 GROQ_API_KEY=gsk_...
 AGENT_API_KEY=<python -c "import secrets; print(secrets.token_hex(32))">
 ```
+
+> `DATABASE_URL` and the individual `DB_*` vars must point at the same database — the Node/Drizzle server reads `DATABASE_URL` (and will refuse to start without it), while the Python ML service reads the individual `DB_*` vars via SQLAlchemy.
 
 ### 2. Install and migrate
 
@@ -310,7 +347,8 @@ On first login, the app automatically redirects to `/setup`. Choose one of two p
 
 | Variable | Required | Description |
 |---|---|---|
-| `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASSWORD` / `DB_NAME` | ✅ | MySQL connection |
+| `DATABASE_URL` | ✅ | Full MySQL DSN — read by the Node/Drizzle server. Must point at the same database as the `DB_*` vars below. |
+| `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASSWORD` / `DB_NAME` | ✅ | Individual MySQL connection vars — read by the Python ML service (SQLAlchemy) |
 | `SESSION_SECRET` | ✅ | Express session signing key |
 | `GROQ_API_KEY` | ✅ | Groq API key for LLM recommendations |
 | `AGENT_API_KEY` | ✅ | Bearer token for agent API (`/api/agent/*`). Generate: `python -c "import secrets; print(secrets.token_hex(32))"` |
@@ -319,6 +357,12 @@ On first login, the app automatically redirects to `/setup`. Choose one of two p
 | `MLFLOW_TRACKING_URI` | — | MLflow server URI. If unset, MLflow logging is skipped (safe no-op). |
 | `SLACK_WEBHOOK_URL` | — | Incoming webhook URL for `monitor.py` alerts. If unset, Slack notifications are silently skipped. |
 | `PYTHONIOENCODING` | — | Set to `utf-8` on Windows to avoid codec errors |
+
+---
+
+## Deployment Status
+
+There is no hosted instance yet — Docker Compose (`docker-compose.yml`, three services: client, server, ml-service) is currently the only way to run the full stack, and `railway.toml` configs exist for the server and ML service but haven't been used for a live deployment. Getting a clickable demo online (frontend + Node API + FastAPI ML service + a free-tier MySQL host) is the next infrastructure step, tracked separately from this pass. Until then, use [Quickstart](#quickstart) to run everything locally — the "Load Demo Data" onboarding path seeds a full fleet with a trained model in under two minutes.
 
 ---
 
