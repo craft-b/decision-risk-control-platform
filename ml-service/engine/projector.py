@@ -15,7 +15,6 @@
 
 import copy
 import math
-import numpy as np
 from typing import Optional
 
 from engine.predictor_multihorizon import MultiHorizonPredictor, RISK_THRESHOLDS

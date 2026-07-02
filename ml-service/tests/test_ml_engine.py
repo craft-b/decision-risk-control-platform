@@ -3,15 +3,13 @@
 # Requires trained model artifacts in ml-service/registry/.
 # Run from project root: python -m pytest ml-service/tests/test_ml_engine.py -v
 
-import json
 import sys
 import pytest
-import numpy as np
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from api.schemas.prediction import SnapshotInput, RiskLevel
+from api.schemas.prediction import SnapshotInput
 from engine.predictor_multihorizon import MultiHorizonPredictor
 
 HORIZONS = [10, 30, 60]

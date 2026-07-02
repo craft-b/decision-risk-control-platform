@@ -14,11 +14,12 @@ from pathlib import Path
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
 
-# Load .env from project root (one level up from ml-service/)
-from dotenv import load_dotenv
+# Load .env from project root (one level up from ml-service/) before
+# importing anything that reads env vars at import time.
+from dotenv import load_dotenv  # noqa: E402
 load_dotenv(ROOT.parent / ".env")
 
-import uvicorn
+import uvicorn  # noqa: E402
 
 if __name__ == "__main__":
     port = int(os.getenv("ML_SERVICE_PORT", "8000"))
