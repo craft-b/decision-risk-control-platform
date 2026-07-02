@@ -344,9 +344,9 @@ class DriftDetector:
             ]
 
             n = len(cur_labels)
-            cur_high_pct   = sum(1 for l in cur_labels if l == "HIGH")   / n
-            cur_medium_pct = sum(1 for l in cur_labels if l == "MEDIUM") / n
-            cur_low_pct    = sum(1 for l in cur_labels if l == "LOW")    / n
+            cur_high_pct   = sum(1 for lbl in cur_labels if lbl == "HIGH")   / n
+            cur_medium_pct = sum(1 for lbl in cur_labels if lbl == "MEDIUM") / n
+            cur_low_pct    = sum(1 for lbl in cur_labels if lbl == "LOW")    / n
 
             ref      = self.pred_reference[h]
             ref_arr  = ref["scores"]
@@ -548,7 +548,6 @@ class DriftDetector:
         Saves drift_reference.json to registry/.
         """
         try:
-            from sqlalchemy import text as sqla_text
             engine = self._get_engine()
 
             # ── Feature reference ─────────────────────────────────────────────
@@ -590,9 +589,9 @@ class DriftDetector:
             labels = df_pred["risk_band"].tolist()
             pred_ref_entry = {
                 "scores":     [round(s, 6) for s in scores],
-                "high_pct":   round(sum(1 for l in labels if l == "HIGH")   / n, 4),
-                "medium_pct": round(sum(1 for l in labels if l == "MEDIUM") / n, 4),
-                "low_pct":    round(sum(1 for l in labels if l == "LOW")    / n, 4),
+                "high_pct":   round(sum(1 for lbl in labels if lbl == "HIGH")   / n, 4),
+                "medium_pct": round(sum(1 for lbl in labels if lbl == "MEDIUM") / n, 4),
+                "low_pct":    round(sum(1 for lbl in labels if lbl == "LOW")    / n, 4),
             }
             # Use same distribution as proxy for all horizons
             for h in HORIZONS:

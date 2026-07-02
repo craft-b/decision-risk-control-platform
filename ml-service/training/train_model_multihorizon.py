@@ -47,7 +47,7 @@ import os
 import pandas as pd
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import StratifiedKFold, TimeSeriesSplit, cross_val_score
+from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import (
     classification_report, confusion_matrix,
     precision_recall_fscore_support, roc_auc_score,
@@ -62,7 +62,7 @@ from pathlib import Path
 from sqlalchemy import create_engine, text
 import warnings
 warnings.filterwarnings('ignore')
-from datetime import datetime
+from datetime import datetime  # noqa: E402
 
 # ── Class imbalance — SMOTE oversampling ──────────────────────────────────────
 # Predictive maintenance datasets are inherently imbalanced: failures are rare
@@ -223,21 +223,21 @@ def get_next_version() -> str:
 def load_training_data() -> pd.DataFrame:
     engine = get_db_connection()
     feature_sql = ', '.join([
-        f'COALESCE(days_since_last_maintenance, 999) as days_since_last_maintenance'
+        'COALESCE(days_since_last_maintenance, 999) as days_since_last_maintenance'
         if col == 'days_since_last_maintenance'
-        else f'COALESCE(mean_time_between_failures, 500) as mean_time_between_failures'
+        else 'COALESCE(mean_time_between_failures, 500) as mean_time_between_failures'
         if col == 'mean_time_between_failures'
-        else f'COALESCE(wear_rate_velocity, 0) as wear_rate_velocity'
+        else 'COALESCE(wear_rate_velocity, 0) as wear_rate_velocity'
         if col == 'wear_rate_velocity'
-        else f'COALESCE(maint_frequency_trend, 1.0) as maint_frequency_trend'
+        else 'COALESCE(maint_frequency_trend, 1.0) as maint_frequency_trend'
         if col == 'maint_frequency_trend'
-        else f'COALESCE(cost_trend, 1.0) as cost_trend'
+        else 'COALESCE(cost_trend, 1.0) as cost_trend'
         if col == 'cost_trend'
-        else f'COALESCE(hours_velocity, 1.0) as hours_velocity'
+        else 'COALESCE(hours_velocity, 1.0) as hours_velocity'
         if col == 'hours_velocity'
-        else f'COALESCE(neglect_acceleration, 1.0) as neglect_acceleration'
+        else 'COALESCE(neglect_acceleration, 1.0) as neglect_acceleration'
         if col == 'neglect_acceleration'
-        else f'COALESCE(sensor_degradation_rate, 0) as sensor_degradation_rate'
+        else 'COALESCE(sensor_degradation_rate, 0) as sensor_degradation_rate'
         if col == 'sensor_degradation_rate'
         else col
         for col in FEATURE_COLS
@@ -352,7 +352,7 @@ def train_horizon_model(X: pd.DataFrame, y: pd.Series, horizon_days: int):
     if pos_rate_gap > 0.15:
         print(f"[SPLIT] ⚠️  Distribution shift detected: {pos_rate_gap:.1%} gap between dev and test.")
         print(f"[SPLIT]    This is expected for {horizon_days}d horizon — equipment ages over simulation.")
-        print(f"[SPLIT]    TimeSeriesSplit CV handles this correctly by training on progressively later folds.")
+        print("[SPLIT]    TimeSeriesSplit CV handles this correctly by training on progressively later folds.")
 
     # ─────────────────────────────────────────────────────────────────
     # TIME-SERIES CROSS VALIDATION
@@ -437,7 +437,7 @@ def train_horizon_model(X: pd.DataFrame, y: pd.Series, horizon_days: int):
     # across time periods, which is a deployment risk signal
     if cv_roc_std > 0.08:
         print(f"[CV] ⚠️  High fold variance ({cv_roc_std:.4f}) — model unstable across time periods.")
-        print(f"[CV]    Consider feature engineering improvements or regularization.")
+        print("[CV]    Consider feature engineering improvements or regularization.")
     else:
         print(f"[CV] ✅ Fold variance acceptable ({cv_roc_std:.4f}) — stable across time periods.")
 
@@ -507,7 +507,7 @@ def train_horizon_model(X: pd.DataFrame, y: pd.Series, horizon_days: int):
     print(f"[CONTEXT] Dev positive rate: {y_dev.mean()*100:.1f}%  "
           f"Holdout positive rate: {y_test.mean()*100:.1f}%")
     if abs(y_test.mean() - y_dev.mean()) > 0.15:
-        print(f"[CONTEXT] Note: holdout metrics reflect a distribution shift scenario.")
+        print("[CONTEXT] Note: holdout metrics reflect a distribution shift scenario.")
         print(f"[CONTEXT] CV ROC-AUC ({cv_roc_mean:.4f}) is a more representative performance estimate.")
 
     # Feature importance from base estimator inside calibrated model
@@ -764,7 +764,7 @@ def main():
             f"Fix the issues above and retrain. {dq_report['summary']}"
         )
     if dq_report["overall"] == "WARN":
-        print(f"[DQ] ⚠️  Proceeding with warnings — review before promoting to production.")
+        print("[DQ] ⚠️  Proceeding with warnings — review before promoting to production.")
 
     # 2. Save drift reference BEFORE feature engineering (raw input space)
     save_drift_reference(df, model_version)

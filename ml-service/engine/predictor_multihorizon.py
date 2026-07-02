@@ -404,6 +404,6 @@ class MultiHorizonPredictor:
             )
         else:
             return (
-                f"Equipment is within normal operating parameters across all prediction horizons. "
-                f"Continue standard maintenance schedule."
+                "Equipment is within normal operating parameters across all prediction horizons. "
+                "Continue standard maintenance schedule."
             )

@@ -6,13 +6,12 @@
 import sys
 import numpy as np
 import pandas as pd
-import pytest
 from pathlib import Path
 from datetime import datetime, timedelta
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from engine.data_quality import run, HORIZONS, MIN_ROWS, WARN_ROWS, MIN_POSITIVES
+from engine.data_quality import run, HORIZONS, MIN_ROWS, WARN_ROWS
 
 
 # ─────────────────────────────────────────────────────────────────────────────

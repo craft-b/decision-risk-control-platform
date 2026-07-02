@@ -30,7 +30,6 @@
 import numpy as np
 import pandas as pd
 from datetime import datetime, timezone
-from typing import Any
 
 # ── Thresholds ────────────────────────────────────────────────────────────────
 MIN_ROWS           = 500    # FAIL below this

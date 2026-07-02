@@ -18,10 +18,9 @@ from api.schemas.prediction import (
     SnapshotInput,
     BatchInput,
     HealthResponse,
-    RiskLevel,
 )
 
-from engine.genai_advisor import generate_recommendation, is_available, LLM_PROVIDER
+from engine.genai_advisor import is_available, LLM_PROVIDER
 from engine.predictor_multihorizon import MultiHorizonPredictor
 from engine.projector import project as project_trajectory
 from engine.drift_detector import DriftDetector
@@ -29,8 +28,6 @@ from engine.model_registry import (
     get_state as registry_get_state,
     register_new_version,
     promote_challenger,
-    get_champion_version,
-    get_challenger_version,
     get_metrics_for_version,
 )
 
@@ -366,9 +363,12 @@ async def drift_summary():
     bias_rows = drift_detector.get_latest_bias_drift()
 
     def _overall(statuses: list[str]) -> str:
-        if "ALERT"   in statuses: return "ALERT"
-        if "WARNING" in statuses: return "WARNING"
-        if statuses:              return "STABLE"
+        if "ALERT" in statuses:
+            return "ALERT"
+        if "WARNING" in statuses:
+            return "WARNING"
+        if statuses:
+            return "STABLE"
         return "NO_DATA"
 
     feat_status = _overall([r["status"]       for r in feat_rows])
