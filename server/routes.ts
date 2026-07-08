@@ -1,7 +1,5 @@
 // server/routes.ts
 
-const ML_SERVICE_URL = process.env.ML_SERVICE_URL || "http://localhost:8000";
-
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
@@ -17,6 +15,7 @@ import { assetRiskPredictions } from "@shared/schema";
 import { enhancedFeatureService } from "./services/feature-engineering-enhanced";
 import { evaluatePMSchedule, generatePMDescription, samplePMCost, MaintenanceTypeKey } from "./services/pm-scheduler";
 import { startSeedJob, getSeedStatus, getSystemStatus, resetSystem } from "./services/seed-orchestrator";
+import { mlFetch } from "./services/ml-client";
 import { IMPUTATION_DEFAULTS, isColdStart, coldStartMultiHorizon } from "./services/imputation";
 
 declare module "express-session" {
@@ -887,7 +886,7 @@ export async function registerRoutes(
             sensor_degradation_rate:     snapshot.sensorDegradationRate ?? 0,
           };
 
-          const fastapiRes = await fetch(ML_SERVICE_URL + '/predict/multi-horizon', {
+          const fastapiRes = await mlFetch('/predict/multi-horizon', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
@@ -1031,7 +1030,7 @@ export async function registerRoutes(
         }
       }
 
-      const fastapiRes = await fetch(ML_SERVICE_URL + '/predict/multi-horizon/batch', {
+      const fastapiRes = await mlFetch('/predict/multi-horizon/batch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ snapshots: snapshotsToScore }),
@@ -1388,6 +1387,9 @@ export async function registerRoutes(
         precision_at_budget: 'precisionAtBudget',
         lead_time_median_days: 'leadTimeMedianDays',
         lead_time_failures_flagged_pct: 'leadTimeFailuresFlaggedPct',
+        // Calibration quality (ML-5)
+        brier: 'brier',
+        ece: 'ece',
       };
       // temporal split → horizons; by_asset split (GroupKFold over equipment,
       // the "new fleet, day one" question) → horizonsByAsset
@@ -1450,7 +1452,7 @@ export async function registerRoutes(
         minSamplesSplit: number | null; classWeight: string | null;
       } | null = null;
       try {
-        const fiRes = await fetch(ML_SERVICE_URL + '/models/feature-importance');
+        const fiRes = await mlFetch('/models/feature-importance');
         if (fiRes.ok) {
           const fiData = await fiRes.json() as { feature_importance: Record<string, number>; hyperparameters: Record<string, any> };
           featureImportance = Object.entries(fiData.feature_importance)
@@ -1588,7 +1590,7 @@ export async function registerRoutes(
         sensor_degradation_rate: snapshot.sensorDegradationRate,
       };
 
-      const mlResponse = await fetch(ML_SERVICE_URL + "/predict/project", {
+      const mlResponse = await mlFetch("/predict/project", {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(mlPayload),
       });
 
@@ -1802,7 +1804,7 @@ export async function registerRoutes(
   // ── ML TRAINING PROXY ─────────────────────────────────────────────────────
   app.post("/api/ml/train", requireAdmin, async (req, res) => {
     try {
-      const mlRes = await fetch(ML_SERVICE_URL + "/train", { method: "POST" });
+      const mlRes = await mlFetch("/train", { method: "POST" }, { actorId: req.session.userId });
       if (!mlRes.ok) return res.status(mlRes.status).json({ message: await mlRes.text() });
       res.json(await mlRes.json());
     } catch (e: any) {
@@ -1812,7 +1814,7 @@ export async function registerRoutes(
 
   app.get("/api/ml/train/status", requireAuth, async (req, res) => {
     try {
-      const mlRes = await fetch(ML_SERVICE_URL + "/train/status");
+      const mlRes = await mlFetch("/train/status");
       if (!mlRes.ok) return res.status(mlRes.status).json({ message: "Status unavailable" });
       res.json(await mlRes.json());
     } catch (e: any) {
@@ -1823,7 +1825,7 @@ export async function registerRoutes(
   // ── DRIFT MONITORING ─────────────────────────────────────────────────────
   app.get("/api/ml/drift/latest", requireAuth, async (req, res) => {
     try {
-      const mlRes = await fetch(ML_SERVICE_URL + "/drift/latest");
+      const mlRes = await mlFetch("/drift/latest");
       if (!mlRes.ok) return res.status(mlRes.status).json({ message: "Drift data unavailable" });
       res.json(await mlRes.json());
     } catch (e: any) {
@@ -1833,7 +1835,7 @@ export async function registerRoutes(
 
   app.post("/api/ml/drift/compute-reference", requireAdmin, async (req, res) => {
     try {
-      const mlRes = await fetch(ML_SERVICE_URL + "/drift/compute-reference", { method: "POST" });
+      const mlRes = await mlFetch("/drift/compute-reference", { method: "POST" }, { actorId: req.session.userId });
       if (!mlRes.ok) return res.status(mlRes.status).json({ message: await mlRes.text() });
       res.json(await mlRes.json());
     } catch (e: any) {
@@ -1843,7 +1845,7 @@ export async function registerRoutes(
 
   app.get("/api/ml/drift/prediction", requireAuth, async (req, res) => {
     try {
-      const mlRes = await fetch(ML_SERVICE_URL + "/drift/prediction");
+      const mlRes = await mlFetch("/drift/prediction");
       if (!mlRes.ok) return res.status(mlRes.status).json({ message: "Prediction drift data unavailable" });
       res.json(await mlRes.json());
     } catch (e: any) {
@@ -1853,7 +1855,7 @@ export async function registerRoutes(
 
   app.get("/api/ml/drift/bias", requireAuth, async (req, res) => {
     try {
-      const mlRes = await fetch(ML_SERVICE_URL + "/drift/bias");
+      const mlRes = await mlFetch("/drift/bias");
       if (!mlRes.ok) return res.status(mlRes.status).json({ message: "Bias drift data unavailable" });
       res.json(await mlRes.json());
     } catch (e: any) {
@@ -1863,7 +1865,7 @@ export async function registerRoutes(
 
   app.get("/api/ml/drift/summary", requireAuth, async (req, res) => {
     try {
-      const mlRes = await fetch(ML_SERVICE_URL + "/drift/summary");
+      const mlRes = await mlFetch("/drift/summary");
       if (!mlRes.ok) return res.status(mlRes.status).json({ message: "Drift summary unavailable" });
       res.json(await mlRes.json());
     } catch (e: any) {
@@ -1874,7 +1876,7 @@ export async function registerRoutes(
   // ── DATA QUALITY ─────────────────────────────────────────────────────────
   app.get("/api/ml/data-quality/report", requireAuth, async (req, res) => {
     try {
-      const mlRes = await fetch(ML_SERVICE_URL + "/data-quality/report");
+      const mlRes = await mlFetch("/data-quality/report");
       if (!mlRes.ok) return res.status(mlRes.status).json({ message: "Data quality report unavailable" });
       res.json(await mlRes.json());
     } catch (e: any) {
@@ -1885,7 +1887,7 @@ export async function registerRoutes(
   // ── CHAMPION-CHALLENGER ───────────────────────────────────────────────────
   app.get("/api/ml/models/registry", requireAuth, async (req, res) => {
     try {
-      const mlRes = await fetch(ML_SERVICE_URL + "/models/registry");
+      const mlRes = await mlFetch("/models/registry");
       if (!mlRes.ok) return res.status(mlRes.status).json({ message: "Registry unavailable" });
       res.json(await mlRes.json());
     } catch (e: any) {
@@ -1895,7 +1897,7 @@ export async function registerRoutes(
 
   app.get("/api/ml/models/compare", requireAuth, async (req, res) => {
     try {
-      const mlRes = await fetch(ML_SERVICE_URL + "/models/champion-challenger/compare");
+      const mlRes = await mlFetch("/models/champion-challenger/compare");
       if (!mlRes.ok) return res.status(mlRes.status).json({ message: "Compare unavailable" });
       res.json(await mlRes.json());
     } catch (e: any) {
@@ -1905,7 +1907,7 @@ export async function registerRoutes(
 
   app.post("/api/ml/models/promote", requireAdmin, async (req, res) => {
     try {
-      const mlRes = await fetch(ML_SERVICE_URL + "/models/promote", { method: "POST" });
+      const mlRes = await mlFetch("/models/promote", { method: "POST" }, { actorId: req.session.userId });
       if (!mlRes.ok) {
         const err = await mlRes.json().catch(() => ({}));
         return res.status(mlRes.status).json(err);
@@ -2118,14 +2120,14 @@ export async function registerRoutes(
       // ── drift ──────────────────────────────────────────────────────────────
       let drift: { overall: string; features: any[] } = { overall: "NO_DATA", features: [] };
       try {
-        const mlRes = await fetch(ML_SERVICE_URL + "/drift/latest");
+        const mlRes = await mlFetch("/drift/latest");
         if (mlRes.ok) drift = await mlRes.json();
       } catch { /* ML service offline — surface NO_DATA */ }
 
       // ── training status ────────────────────────────────────────────────────
       let trainingRunning = false;
       try {
-        const tr = await fetch(ML_SERVICE_URL + "/train/status");
+        const tr = await mlFetch("/train/status");
         if (tr.ok) { const d = await tr.json(); trainingRunning = d.running ?? false; }
       } catch { /* ignore */ }
 
@@ -2191,7 +2193,7 @@ export async function registerRoutes(
 
     if (action === "retrain") {
       try {
-        const mlRes = await fetch(ML_SERVICE_URL + "/train", { method: "POST" });
+        const mlRes = await mlFetch("/train", { method: "POST" }, { actorId: "agent" });
         if (!mlRes.ok) return res.status(mlRes.status).json({ error: await mlRes.text() });
         return res.json({ action, status: "accepted", detail: await mlRes.json() });
       } catch (e: any) {
@@ -2201,7 +2203,7 @@ export async function registerRoutes(
 
     if (action === "compute_drift_reference") {
       try {
-        const mlRes = await fetch(ML_SERVICE_URL + "/drift/compute-reference", { method: "POST" });
+        const mlRes = await mlFetch("/drift/compute-reference", { method: "POST" }, { actorId: "agent" });
         if (!mlRes.ok) return res.status(mlRes.status).json({ error: await mlRes.text() });
         return res.json({ action, status: "accepted", detail: await mlRes.json() });
       } catch (e: any) {

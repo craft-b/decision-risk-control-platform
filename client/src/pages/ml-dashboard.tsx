@@ -53,6 +53,7 @@ import {
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { CHART } from "@/lib/chart-theme";
+import { cn } from "@/lib/utils";
 
 const PSI_THRESHOLDS = { WARNING: 0.1, ALERT: 0.2 };
 
@@ -876,7 +877,8 @@ export default function MLPerformanceDashboard() {
                   <th className="p-3 text-right font-medium">PR-AUC</th>
                   <th className="p-3 text-right font-medium">Recall (failure)</th>
                   <th className="p-3 text-right font-medium">Precision (failure)</th>
-                  <th className="p-3 text-right font-medium">Accuracy</th>
+                  <th className="p-3 text-right font-medium" title="Brier score — lower is better">Brier</th>
+                  <th className="p-3 text-right font-medium" title="Expected calibration error — gate < 0.05">ECE</th>
                   <th className="p-3 text-right font-medium">Positive rate</th>
                   <th className="p-3 text-right font-medium">Test n</th>
                 </tr>
@@ -894,7 +896,10 @@ export default function MLPerformanceDashboard() {
                     <td className="p-3 text-right font-mono">{r.prAuc?.toFixed(4) ?? "n/a"}</td>
                     <td className="p-3 text-right font-mono">{pct(r.recallFailure)}</td>
                     <td className="p-3 text-right font-mono">{pct(r.precisionFailure)}</td>
-                    <td className="p-3 text-right font-mono">{pct(r.accuracy)}</td>
+                    <td className="p-3 text-right font-mono">{r.brier?.toFixed(4) ?? "n/a"}</td>
+                    <td className={cn("p-3 text-right font-mono", r.ece !== undefined && (r.ece < 0.05 ? "text-risk-low" : "text-risk-medium"))}>
+                      {r.ece?.toFixed(4) ?? "n/a"}
+                    </td>
                     <td className="p-3 text-right font-mono">{pct(r.positiveRateTest, 0)}</td>
                     <td className="p-3 text-right font-mono">{r.samplesTest?.toLocaleString() ?? "n/a"}</td>
                   </tr>

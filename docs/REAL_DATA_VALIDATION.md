@@ -23,6 +23,10 @@ What the synthetic metrics do legitimately establish, post-remediation:
   (`label_status = 'censored_intervention'`), not counted as negatives — the standard
   treatment-leakage guard for deployed predictive-maintenance programs.
 - The published split has a per-horizon embargo and a by-asset grouped evaluation (ML-3).
+- One shared feature transform runs at train and serve time, so there is no train/serve skew
+  (ML-6); every preprocessing artifact is resolved by the model's own version (ML-7).
+- Probabilities are calibrated at the true prevalence (no SMOTE before calibration), with Brier
+  score and expected calibration error published per horizon (ML-5).
 
 ## The validation program (Phase B)
 

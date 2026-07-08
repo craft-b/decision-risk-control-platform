@@ -12,7 +12,7 @@ import { assetRiskPredictions, equipmentRiskScores, equipment } from "@shared/sc
 import { eq, desc } from "drizzle-orm";
 import { enhancedFeatureService as featureEngineeringService } from "./feature-engineering-enhanced";
 import { IMPUTATION_DEFAULTS, COLD_START, isColdStart } from "./imputation";
-const ML_SERVICE_URL = process.env.ML_SERVICE_URL || "http://localhost:8000";
+import { mlFetch, ML_SERVICE_URL } from "./ml-client";
 const ML_TIMEOUT_MS  = 10_000;
 
 // ── Public types (unchanged from previous implementation) ─────────────────────
@@ -48,7 +48,7 @@ async function callMLService(
   const timeout    = setTimeout(() => controller.abort(), ML_TIMEOUT_MS);
 
   try {
-    const response = await fetch(`${ML_SERVICE_URL}/predict/multi-horizon`, {
+    const response = await mlFetch(`/predict/multi-horizon`, {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
       body:    JSON.stringify(snapshot),
@@ -75,7 +75,7 @@ async function checkMLServiceHealth(): Promise<boolean> {
   try {
     const controller = new AbortController();
     const timeout    = setTimeout(() => controller.abort(), 3_000);
-    const response   = await fetch(`${ML_SERVICE_URL}/health`, { signal: controller.signal });
+    const response   = await mlFetch(`/health`, { signal: controller.signal });
     clearTimeout(timeout);
     return response.ok;
   } catch {

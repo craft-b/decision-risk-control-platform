@@ -51,10 +51,10 @@ from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import (
     classification_report, confusion_matrix,
     precision_recall_fscore_support, roc_auc_score,
-    average_precision_score
+    average_precision_score, brier_score_loss
 )
 from sklearn.preprocessing import LabelEncoder
-from sklearn.calibration import CalibratedClassifierCV
+from sklearn.calibration import CalibratedClassifierCV, calibration_curve
 import joblib
 import json
 import sys
@@ -64,51 +64,14 @@ import warnings
 warnings.filterwarnings('ignore')
 from datetime import datetime  # noqa: E402
 
-# ── Class imbalance — SMOTE oversampling ──────────────────────────────────────
-# Predictive maintenance datasets are inherently imbalanced: failures are rare
-# by design (good maintenance programs). With <5% positive rate, even
-# class_weight='balanced' struggles because:
-#   (a) With very few positives (<10), TimeSeriesSplit folds often contain 0-1
-#       positives and get skipped → model trains on near-zero positives.
-#   (b) RF with balanced weights upweights the few positives but can't learn
-#       generalizable patterns from 3-4 examples.
-#
-# SMOTE (Synthetic Minority Oversampling TEchnique) addresses this by
-# interpolating new synthetic minority samples between existing positives in
-# feature space — not just duplicating them. This gives the model richer signal.
-#
-# Critical implementation detail: SMOTE is applied ONLY to the training fold,
-# never to validation or test sets. Applying it to val/test would inflate
-# recall metrics and give falsely optimistic evaluation.
-#
-# k_neighbors is set to min(5, n_positives-1) to handle tiny positive sets
-# without crashing (SMOTE requires at least k_neighbors+1 minority samples).
-try:
-    from imblearn.over_sampling import SMOTE
-    _SMOTE_AVAILABLE = True
-except ImportError:
-    _SMOTE_AVAILABLE = False
-    print("[SMOTE] imbalanced-learn not installed — SMOTE disabled. Install with: pip install imbalanced-learn")
-
-def apply_smote(X_train, y_train, random_state=42):
-    """
-    Apply SMOTE to the training set if imbalanced-learn is available and
-    there are enough minority samples to interpolate from (≥2 positives).
-    Returns (X_resampled, y_resampled, applied: bool).
-    """
-    if not _SMOTE_AVAILABLE:
-        return X_train, y_train, False
-    n_pos = int(y_train.sum())
-    if n_pos < 2:
-        return X_train, y_train, False
-    k = min(5, n_pos - 1)
-    try:
-        sm = SMOTE(random_state=random_state, k_neighbors=k)
-        X_res, y_res = sm.fit_resample(X_train, y_train)
-        return X_res, y_res, True
-    except Exception as e:
-        print(f"[SMOTE] Warning — skipping: {e}")
-        return X_train, y_train, False
+# ── Class imbalance — no resampling (ML-5) ────────────────────────────────────
+# SMOTE was removed. It was applied before CalibratedClassifierCV, so the
+# calibrator fit on a ~50% synthetic prevalence and the emitted "failure
+# probability" was inflated versus the true rate (which the 0.30/0.60 thresholds
+# and the cost model consume). At the current 40–58% prevalence — and even at the
+# earlier ~24% — `class_weight='balanced'` handles imbalance without distorting
+# the probability the calibrator has to correct. Calibrating on the untouched,
+# real-prevalence dev set is what makes the probability honest.
 
 # ── Reproducibility ───────────────────────────────────────────────────────────
 # Single seed applied to numpy and every RF estimator — guarantees bit-for-bit
@@ -155,6 +118,28 @@ PM_BUDGET_FRACTION = 0.10
 def _fmt(v) -> str:
     """Print helper for metrics that can legitimately be None (no events to measure)."""
     return f"{v:.3f}" if isinstance(v, (int, float)) else "n/a"
+
+
+def expected_calibration_error(y_true, y_prob, n_bins: int = 10) -> float:
+    """
+    ECE (ML-5): average gap between predicted confidence and observed accuracy,
+    weighted by bin population. 0 = perfectly calibrated. The acceptance gate in
+    the design spec is ECE < 0.05 on the holdout.
+    """
+    y_true = np.asarray(y_true, dtype=float)
+    y_prob = np.asarray(y_prob, dtype=float)
+    bins = np.linspace(0.0, 1.0, n_bins + 1)
+    idx = np.digitize(y_prob, bins[1:-1])
+    ece = 0.0
+    n = len(y_prob)
+    for b in range(n_bins):
+        mask = idx == b
+        if not mask.any():
+            continue
+        conf = y_prob[mask].mean()
+        acc = y_true[mask].mean()
+        ece += (mask.sum() / n) * abs(acc - conf)
+    return float(ece)
 
 FEATURE_COLS = [
     'asset_age_years',
@@ -475,8 +460,7 @@ def grouped_evaluation(X: pd.DataFrame, y: pd.Series, snapshot_ts, equipment_ids
             random_state=RANDOM_SEED, n_jobs=-1,
         )
         model = CalibratedClassifierCV(rf, method=calibration_method, cv=3)
-        X_tr_s, y_tr_s, _ = apply_smote(Xp.iloc[tr_idx], y_tr, random_state=RANDOM_SEED)
-        model.fit(X_tr_s, y_tr_s)
+        model.fit(Xp.iloc[tr_idx], y_tr)  # ML-5: real prevalence, no SMOTE
         proba = model.predict_proba(Xp.iloc[te_idx])
         if proba.shape[1] == 2:
             oof[te_idx] = proba[:, 1]
@@ -590,14 +574,10 @@ def train_horizon_model(X: pd.DataFrame, y: pd.Series, horizon_days: int,
             print(f"{fold:<6} {len(X_fold_train):>8,} {len(X_fold_val):>8,} {'single class':>9} {'skip':>9} {'skip':>8}")
             continue
 
-        X_fold_train_s, y_fold_train_s, smote_applied = apply_smote(
-            X_fold_train, y_fold_train, random_state=RANDOM_SEED
-        )
-        if smote_applied:
-            print(f"  [SMOTE] fold {fold}: {len(X_fold_train)} → {len(X_fold_train_s)} samples "
-                  f"({int(y_fold_train.sum())} → {int(y_fold_train_s.sum())} positives)")
-
-        base_rf.fit(X_fold_train_s, y_fold_train_s)
+        # ML-5: no SMOTE. At 40–58% prevalence (and even at the earlier ~24%),
+        # class_weight='balanced' is sufficient; oversampling only distorts the
+        # score distribution the calibrator later has to correct.
+        base_rf.fit(X_fold_train, y_fold_train)
 
         # Guard: predict_proba returns 1 column if model only saw one class
         proba = base_rf.predict_proba(X_fold_val)
@@ -656,16 +636,15 @@ def train_horizon_model(X: pd.DataFrame, y: pd.Series, horizon_days: int,
         random_state=RANDOM_SEED,
         n_jobs=-1,
     )
-    # Apply SMOTE to dev set before final training.
-    # CalibratedClassifierCV internally splits for calibration — applying SMOTE
-    # before it slightly over-represents synthetic samples in calibration folds,
-    # but the effect is minor and preferable to training on a nearly all-negative set.
-    X_dev_s, y_dev_s, smote_final = apply_smote(X_dev, y_dev, random_state=RANDOM_SEED)
-    if smote_final:
-        print(f"[SMOTE] Final model: {len(X_dev)} → {len(X_dev_s)} samples "
-              f"({int(y_dev.sum())} → {int(y_dev_s.sum())} positives)")
+    # ML-5: calibrate on REAL prevalence — no SMOTE. Previously SMOTE was applied
+    # to the dev set before CalibratedClassifierCV, so the calibrator fit on a
+    # ~50% synthetic prevalence and the "failure probability" it emitted was
+    # systematically inflated (the 0.30/0.60 thresholds and cost model consume
+    # that probability). Training the RF and its calibrator on the untouched
+    # class-weighted dev set makes the probability an honest one.
+    print(f"[TRAIN] Calibrating on real prevalence {y_dev.mean()*100:.1f}% (no resampling)")
     model = CalibratedClassifierCV(final_rf, method=calibration_method, cv=3)
-    model.fit(X_dev_s, y_dev_s)
+    model.fit(X_dev, y_dev)
 
     # ─────────────────────────────────────────────────────────────────
     # HOLDOUT EVALUATION
@@ -689,9 +668,26 @@ def train_horizon_model(X: pd.DataFrame, y: pd.Series, horizon_days: int,
     cm = confusion_matrix(y_test, y_pred)
     tn, fp, fn, tp = cm.ravel()
 
+    # ── Calibration quality on the holdout (ML-5) ─────────────────────
+    # Brier score + expected calibration error + a 10-bin reliability curve.
+    # These are the honest evidence that the probability is calibrated at the
+    # real prevalence, not inflated by resampling.
+    brier = float(brier_score_loss(y_test, y_prob))
+    ece = expected_calibration_error(y_test.to_numpy(), y_prob, n_bins=10)
+    try:
+        frac_pos, mean_pred = calibration_curve(y_test, y_prob, n_bins=10, strategy='uniform')
+        reliability_curve = [
+            {'mean_predicted': round(float(mp), 4), 'fraction_positive': round(float(fp), 4)}
+            for mp, fp in zip(mean_pred, frac_pos)
+        ]
+    except Exception:
+        reliability_curve = []
+
     print(f"\n[HOLDOUT] Accuracy: Train={train_score*100:.1f}%  Test={test_score*100:.1f}%")
     print(f"[HOLDOUT] ROC-AUC: {roc_auc:.4f}  PR-AUC: {pr_auc:.4f}")
     print(f"[HOLDOUT] False Negative Rate: {fn/(fn+tp)*100:.1f}% (missed failures)")
+    print(f"[CALIBRATION] Brier: {brier:.4f}  ECE: {ece:.4f} "
+          f"({'PASS' if ece < 0.05 else 'REVIEW'} — gate ECE < 0.05)")
     print(f"\n[REPORT]\n{classification_report(y_test, y_pred, target_names=['No Failure', 'Failure'])}")
 
     # Distribution shift context — helps interpret holdout metrics honestly
@@ -756,6 +752,9 @@ def train_horizon_model(X: pd.DataFrame, y: pd.Series, horizon_days: int,
         'cv_fold_roc_aucs':      [round(v, 4) for v in fold_roc_aucs],
         'cv_fold_pos_rates':     [round(v, 4) for v in fold_pos_rates],
         'calibration_method':    calibration_method,
+        'brier':                 brier,
+        'ece':                   ece,
+        'reliability_curve':     reliability_curve,
         'dev_positive_rate':     float(y_dev.mean()),
         'test_positive_rate':    float(y_test.mean()),
         'distribution_shift':    float(abs(y_test.mean() - y_dev.mean())),
@@ -822,6 +821,14 @@ def save_horizon_model(model, feature_names: list, metrics: dict,
         'positive_rate': round(metrics['positive_rate'], 4),
         'samples_train': metrics['samples_train'],
         'samples_test':  metrics['samples_test'],
+        # ML-5: calibration evidence (no SMOTE; fit at real prevalence)
+        'calibration': {
+            'brier':             round(metrics['brier'], 4),
+            'ece':               round(metrics['ece'], 4),
+            'ece_gate_passed':   bool(metrics['ece'] < 0.05),
+            'resampling':        'none (class_weight=balanced)',
+            'reliability_curve': metrics['reliability_curve'],
+        },
         'hyperparameters': {
             'n_estimators': 200, 'max_depth': 12,
             'min_samples_split': 5, 'min_samples_leaf': 3,
@@ -881,6 +888,8 @@ def save_metrics_to_db(all_metrics: dict, dataset_size: int, model_version: str)
                     'train_accuracy':     m['train_accuracy'],
                     'cv_roc_auc_mean':    m['cv_roc_auc_mean'],
                     'cv_roc_auc_std':     m['cv_roc_auc_std'],
+                    'brier':              m['brier'],
+                    'ece':                m['ece'],
                     'precision_failure':  m['precision'][1],
                     'recall_failure':     m['recall'][1],
                     'f1_failure':         m['f1'][1],
@@ -1045,7 +1054,7 @@ def main():
             "min_samples_leaf":   3,
             "max_features":       "sqrt",
             "class_weight":       "balanced",
-            "smote_enabled":      _SMOTE_AVAILABLE,
+            "resampling":         "none",
             "tscv_n_splits":      5,
             "horizons":           str(HORIZONS),
             "dataset_size":       len(df),

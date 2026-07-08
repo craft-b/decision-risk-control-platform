@@ -24,8 +24,7 @@ import { seedRentals } from "../seeds/rentals";
 import { seedMaintenanceConfig } from "../seeds/maintenance-config";
 import { featureEngineeringService } from "./feature-engineering";
 import { predictiveMaintenanceService } from "./predictive-maintenance-fixed";
-
-const ML_SERVICE_URL = process.env.ML_SERVICE_URL || "http://localhost:8000";
+import { mlFetch } from "./ml-client";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SEED CURSOR DATE — the "today" date used for all seeded data
@@ -433,7 +432,7 @@ async function seedFailureEvents(
 
 // Training on the seeded dataset typically takes ~2-4 minutes; allow headroom.
 async function trainAndPoll(timeoutMs = 420_000): Promise<void> {
-  const trainRes = await fetch(ML_SERVICE_URL + "/train", { method: "POST" });
+  const trainRes = await mlFetch("/train", { method: "POST" }, { actorId: "seed" });
   if (!trainRes.ok) {
     const body = await trainRes.text();
     throw new Error(`ML service train failed: ${body}`);
@@ -447,7 +446,7 @@ async function trainAndPoll(timeoutMs = 420_000): Promise<void> {
     await sleep(4000);
     polls++;
     try {
-      const statusRes = await fetch(ML_SERVICE_URL + "/train/status");
+      const statusRes = await mlFetch("/train/status");
       if (statusRes.ok) {
         const status = await statusRes.json() as any;
         const lastLog: string = status.log?.[status.log.length - 1] ?? "";
@@ -480,7 +479,7 @@ async function trainAndPoll(timeoutMs = 420_000): Promise<void> {
 }
 
 async function bootstrapDriftReference(): Promise<void> {
-  const res = await fetch(ML_SERVICE_URL + "/drift/compute-reference", { method: "POST" });
+  const res = await mlFetch("/drift/compute-reference", { method: "POST" }, { actorId: "seed" });
   if (!res.ok) throw new Error(`Drift reference failed: ${await res.text()}`);
 }
 
