@@ -198,10 +198,19 @@ def get_next_version() -> str:
     try:
         engine = get_db_connection()
         with engine.connect() as conn:
-            result = conn.execute(text(
-                "SELECT model_version FROM model_training_metrics ORDER BY trained_at DESC LIMIT 1"
-            ))
-            row = result.fetchone()
+            # Prefer the long-format model_metrics table; fall back to the
+            # legacy model_training_metrics table for pre-existing installs.
+            row = None
+            for table in ("model_metrics", "model_training_metrics"):
+                try:
+                    result = conn.execute(text(
+                        f"SELECT model_version FROM {table} ORDER BY trained_at DESC LIMIT 1"
+                    ))
+                    row = result.fetchone()
+                    if row is not None:
+                        break
+                except Exception:
+                    continue
         engine.dispose()
         if row is None:
             return "v2.0"
@@ -622,56 +631,75 @@ def save_horizon_model(model, feature_names: list, metrics: dict,
     return str(path)
 
 
-def save_multihorizon_metrics_to_db(all_metrics: dict, dataset_size: int, model_version: str):
-    """Save a summary row to model_training_metrics using the 30d model as the primary."""
+def save_metrics_to_db(all_metrics: dict, dataset_size: int, model_version: str):
+    """
+    Persist per-horizon metrics in long format: one row per
+    (model_version, horizon, split, metric). Each metric is stored under its
+    real name — no re-labeling of ROC-AUC as precision, no 3-class shoehorning.
+    `split` is 'temporal' for the time-based holdout evaluation.
+    """
+    trained_at = datetime.now()
     try:
         engine = get_db_connection()
-        m30 = all_metrics[30]
-        cm  = m30['confusion_matrix']
-        tn, fp, fn, tp = cm[0][0], cm[0][1], cm[1][0], cm[1][1]
-
         with engine.connect() as conn:
+            # TEMPORARY DDL: created here until ARCH-1 (Group 2) moves this
+            # table into the Drizzle migration baseline as the single DDL owner.
             conn.execute(text("""
-                INSERT INTO model_training_metrics (
-                    model_version, trained_at, dataset_size,
-                    accuracy,
-                    precision_high, precision_medium, precision_low,
-                    recall_high,    recall_medium,    recall_low,
-                    f1_high,        f1_medium,        f1_low,
-                    high_predicted_high,   high_predicted_medium,   high_predicted_low,
-                    medium_predicted_high, medium_predicted_medium, medium_predicted_low,
-                    low_predicted_high,    low_predicted_medium,    low_predicted_low
-                ) VALUES (
-                    :mv, :ta, :ds, :acc,
-                    :ph, :pm, :pl,
-                    :rh, :rm, :rl,
-                    :fh, :fm, :fl,
-                    :hhh, :hhm, :hhl,
-                    :hmh, :hmm, :hml,
-                    :hlh, :hlm, :hll
-                )
-            """), {
-                'mv':  model_version,
-                'ta':  datetime.now(),
-                'ds':  dataset_size,
-                'acc': float(m30['accuracy']),
-                # Store ROC-AUC per horizon in precision/recall/f1 slots
-                'ph':  float(m30['roc_auc']),
-                'pm':  float(all_metrics[10]['roc_auc']),
-                'pl':  float(all_metrics[60]['roc_auc']),
-                'rh':  float(m30['recall'][1]),
-                'rm':  float(all_metrics[10]['recall'][1]),
-                'rl':  float(all_metrics[60]['recall'][1]),
-                'fh':  float(m30['f1'][1]),
-                'fm':  float(all_metrics[10]['f1'][1]),
-                'fl':  float(all_metrics[60]['f1'][1]),
-                'hhh': int(tp),  'hhm': 0,  'hhl': int(fn),
-                'hmh': 0,        'hmm': 0,  'hml': 0,
-                'hlh': int(fp),  'hlm': 0,  'hll': int(tn),
-            })
+                CREATE TABLE IF NOT EXISTS model_metrics (
+                    id            BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    model_version VARCHAR(50)  NOT NULL,
+                    horizon_days  INT          NOT NULL,
+                    split         VARCHAR(20)  NOT NULL DEFAULT 'temporal',
+                    metric        VARCHAR(60)  NOT NULL,
+                    value         DECIMAL(14,6) NOT NULL,
+                    trained_at    TIMESTAMP    NOT NULL,
+                    dataset_size  INT,
+                    created_at    TIMESTAMP    DEFAULT NOW(),
+                    INDEX idx_version (model_version),
+                    INDEX idx_version_horizon (model_version, horizon_days)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """))
+
+            rows = []
+            for h, m in all_metrics.items():
+                cm = m['confusion_matrix']
+                tn, fp, fn, tp = cm[0][0], cm[0][1], cm[1][0], cm[1][1]
+                horizon_metrics = {
+                    'roc_auc':            m['roc_auc'],
+                    'pr_auc':             m['pr_auc'],
+                    'accuracy':           m['accuracy'],
+                    'train_accuracy':     m['train_accuracy'],
+                    'cv_roc_auc_mean':    m['cv_roc_auc_mean'],
+                    'cv_roc_auc_std':     m['cv_roc_auc_std'],
+                    'precision_failure':  m['precision'][1],
+                    'recall_failure':     m['recall'][1],
+                    'f1_failure':         m['f1'][1],
+                    'precision_no_failure': m['precision'][0],
+                    'recall_no_failure':  m['recall'][0],
+                    'positive_rate_dev':  m['dev_positive_rate'],
+                    'positive_rate_test': m['test_positive_rate'],
+                    'samples_train':      m['samples_train'],
+                    'samples_test':       m['samples_test'],
+                    'confusion_tn':       tn,
+                    'confusion_fp':       fp,
+                    'confusion_fn':       fn,
+                    'confusion_tp':       tp,
+                }
+                for name, value in horizon_metrics.items():
+                    rows.append({
+                        'mv': model_version, 'h': int(h), 'split': 'temporal',
+                        'metric': name, 'value': float(value),
+                        'ta': trained_at, 'ds': dataset_size,
+                    })
+
+            conn.execute(text("""
+                INSERT INTO model_metrics
+                    (model_version, horizon_days, split, metric, value, trained_at, dataset_size)
+                VALUES (:mv, :h, :split, :metric, :value, :ta, :ds)
+            """), rows)
             conn.commit()
         engine.dispose()
-        print(f"[DATABASE] Multi-horizon metrics saved for {model_version}")
+        print(f"[DATABASE] {len(rows)} metric rows saved for {model_version} (long format)")
     except Exception as e:
         print(f"[DATABASE] Warning: could not save metrics: {e}")
 
@@ -845,8 +873,8 @@ def main():
             artifact_path="artifacts"
         )
 
-    # 5. Persist summary to DB (uses 30d model as primary)
-    save_multihorizon_metrics_to_db(all_metrics, len(df), model_version)
+    # 5. Persist per-horizon metrics to DB (long format, real metric names)
+    save_metrics_to_db(all_metrics, len(df), model_version)
 
     # 6. Summary
     print("\n" + "=" * 60)

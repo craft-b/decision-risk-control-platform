@@ -1,50 +1,55 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 
-interface ModelMetrics {
-  version: string;
-  trainedAt: string;
-  datasetSize: number;
-  accuracy: number;
-  precision: {
-    HIGH: number;
-    MEDIUM: number;
-    LOW: number;
-  };
-  recall: {
-    HIGH: number;
-    MEDIUM: number;
-    LOW: number;
-  };
-  f1Score: {
-    HIGH: number;
-    MEDIUM: number;
-    LOW: number;
-  };
-  confusionMatrix: {
-    HIGH: { predictedHIGH: number; predictedMEDIUM: number; predictedLOW: number };
-    MEDIUM: { predictedHIGH: number; predictedMEDIUM: number; predictedLOW: number };
-    LOW: { predictedHIGH: number; predictedMEDIUM: number; predictedLOW: number };
-  };
-  featureImportance: Array<{
+// Per-horizon binary metrics as trained/evaluated — each model is a binary
+// failure classifier for a 10/30/60-day window, so metrics are reported per
+// horizon under their real names (no 3-class re-labeling, ML-9).
+export interface HorizonHoldoutMetrics {
+  rocAuc?: number;
+  prAuc?: number;
+  accuracy?: number;
+  trainAccuracy?: number;
+  cvRocAucMean?: number;
+  cvRocAucStd?: number;
+  precisionFailure?: number;
+  recallFailure?: number;
+  f1Failure?: number;
+  precisionNoFailure?: number;
+  recallNoFailure?: number;
+  positiveRateDev?: number;
+  positiveRateTest?: number;
+  samplesTrain?: number;
+  samplesTest?: number;
+  confusion: { tn: number; fp: number; fn: number; tp: number };
+}
+
+export interface ModelMetrics {
+  available: boolean;
+  dataSource: string; // 'simulated' until real fleet labels exist
+  version?: string;
+  trainedAt?: string;
+  datasetSize?: number | null;
+  horizons?: Record<string, HorizonHoldoutMetrics>;
+  featureImportance?: Array<{
     feature: string;
     importance: number;
     description: string;
   }>;
-  predictionHistory: Array<{
+  predictionHistory?: Array<{
     date: string;
     total: number;
     high: number;
     medium: number;
     low: number;
   }>;
-  hyperparameters: {
+  // null when the ML service is unreachable — never defaulted
+  hyperparameters?: {
     algorithm: string;
-    nEstimators: number;
-    maxDepth: number;
-    minSamplesSplit: number;
-    classWeight: string;
-  };
+    nEstimators: number | null;
+    maxDepth: number | null;
+    minSamplesSplit: number | null;
+    classWeight: string | null;
+  } | null;
 }
 
 

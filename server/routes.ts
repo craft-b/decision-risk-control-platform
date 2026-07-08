@@ -59,37 +59,8 @@ export async function registerRoutes(
     next();
   };
 
-  function getDefaultMetrics() {
-    return {
-      version: 'v1.14',
-      trainedAt: new Date().toISOString(),
-      datasetSize: 22025,
-      accuracy: 0.937,
-      precision: { HIGH: 0.98, MEDIUM: 0.92, LOW: 0.85 },
-      recall: { HIGH: 0.82, MEDIUM: 0.99, LOW: 0.99 },
-      f1Score: { HIGH: 0.89, MEDIUM: 0.96, LOW: 0.92 },
-      confusionMatrix: {
-        HIGH: { predictedHIGH: 1386, predictedMEDIUM: 0, predictedLOW: 0 },
-        MEDIUM: { predictedHIGH: 0, predictedMEDIUM: 3019, predictedLOW: 0 },
-        LOW: { predictedHIGH: 0, predictedMEDIUM: 0, predictedLOW: 2767 },
-      },
-      featureImportance: [
-        { feature: 'Equipment Age', importance: 0.21, description: 'Years since manufacture' },
-        { feature: 'Maintenance Cost 180d (log)', importance: 0.16, description: 'Log maintenance cost trajectory' },
-        { feature: 'Wear Rate Velocity', importance: 0.14, description: 'Rate of change in wear accumulation' },
-        { feature: 'Lifetime Hours (log)', importance: 0.12, description: 'Log cumulative operating hours' },
-        { feature: 'MTBF (log)', importance: 0.12, description: 'Log mean time between failures' },
-      ],
-      predictionHistory: [],
-      hyperparameters: {
-        algorithm: 'Random Forest (calibrated)',
-        nEstimators: 200,
-        maxDepth: 12,
-        minSamplesSplit: 5,
-        classWeight: 'balanced',
-      },
-    };
-  }
+  // NOTE: the old getDefaultMetrics() hardcoded-fallback was deleted (ML-9).
+  // Metrics endpoints now return an honest empty state when no model exists.
 
   // ── SIMULATION CURSOR HELPER ──────────────────────────────────────────────
   async function getSimulationDate(): Promise<Date> {
@@ -1376,12 +1347,55 @@ export async function registerRoutes(
   });
 
   // ── ML METRICS ────────────────────────────────────────────────────────────
+  // Per-horizon binary metrics from the long-format model_metrics table.
+  // Every number is stored under its real name (ROC-AUC as ROC-AUC, failure-class
+  // precision as precision) — no re-labeling, no fabricated fallbacks (ML-9).
   app.get('/api/ml/model-metrics', requireAuth, async (req, res) => {
     try {
-      const { modelTrainingMetrics, assetRiskPredictions } = await import('@shared/schema');
-      const [latestMetrics] = await db.select().from(modelTrainingMetrics).orderBy(desc(modelTrainingMetrics.trainedAt)).limit(1);
+      const { modelMetrics } = await import('@shared/schema');
+      const [latest] = await db
+        .select({
+          modelVersion: modelMetrics.modelVersion,
+          trainedAt: modelMetrics.trainedAt,
+          datasetSize: modelMetrics.datasetSize,
+        })
+        .from(modelMetrics)
+        .orderBy(desc(modelMetrics.trainedAt))
+        .limit(1);
 
-      if (!latestMetrics) return res.json(getDefaultMetrics());
+      // Honest empty state: no trained model → say so, invent nothing.
+      if (!latest) {
+        return res.json({ available: false, dataSource: 'simulated' });
+      }
+
+      const rows = await db
+        .select()
+        .from(modelMetrics)
+        .where(eq(modelMetrics.modelVersion, latest.modelVersion));
+
+      // Pivot long-format rows → { '10': { rocAuc, ... }, '30': ..., '60': ... }
+      const metricKeyMap: Record<string, string> = {
+        roc_auc: 'rocAuc', pr_auc: 'prAuc', accuracy: 'accuracy',
+        train_accuracy: 'trainAccuracy',
+        cv_roc_auc_mean: 'cvRocAucMean', cv_roc_auc_std: 'cvRocAucStd',
+        precision_failure: 'precisionFailure', recall_failure: 'recallFailure',
+        f1_failure: 'f1Failure',
+        precision_no_failure: 'precisionNoFailure', recall_no_failure: 'recallNoFailure',
+        positive_rate_dev: 'positiveRateDev', positive_rate_test: 'positiveRateTest',
+        samples_train: 'samplesTrain', samples_test: 'samplesTest',
+      };
+      const horizons: Record<string, any> = {};
+      for (const row of rows) {
+        if (row.split !== 'temporal') continue; // by_asset split lands in Group 1
+        const h = String(row.horizonDays);
+        horizons[h] = horizons[h] ?? { confusion: { tn: 0, fp: 0, fn: 0, tp: 0 } };
+        const value = Number(row.value);
+        if (row.metric.startsWith('confusion_')) {
+          horizons[h].confusion[row.metric.replace('confusion_', '')] = value;
+        } else if (metricKeyMap[row.metric]) {
+          horizons[h][metricKeyMap[row.metric]] = value;
+        }
+      }
 
       const predictionHistory = await db.execute(sql`
         SELECT DATE_FORMAT(predicted_at, '%Y-%m') as month, COUNT(*) as total,
@@ -1418,8 +1432,13 @@ export async function registerRoutes(
         hours_velocity: 'Rate of change in operating hours', neglect_acceleration: 'Accelerating neglect signal',
         sensor_degradation_rate: 'Sensor signal quality degradation rate',
       };
+      // Feature importance + hyperparameters come live from the ML service.
+      // If it's unreachable they are empty/null — never hardcoded defaults.
       let featureImportance: { feature: string; importance: number; description: string }[] = [];
-      let hyperparameters = { algorithm: 'Random Forest (calibrated)', nEstimators: 200, maxDepth: 12, minSamplesSplit: 5, classWeight: 'balanced' };
+      let hyperparameters: {
+        algorithm: string; nEstimators: number | null; maxDepth: number | null;
+        minSamplesSplit: number | null; classWeight: string | null;
+      } | null = null;
       try {
         const fiRes = await fetch(ML_SERVICE_URL + '/models/feature-importance');
         if (fiRes.ok) {
@@ -1436,30 +1455,26 @@ export async function registerRoutes(
           if (fiData.hyperparameters && Object.keys(fiData.hyperparameters).length > 0) {
             hyperparameters = {
               algorithm: fiData.hyperparameters.algorithm ?? 'Random Forest (calibrated)',
-              nEstimators: fiData.hyperparameters.n_estimators ?? 200,
-              maxDepth: fiData.hyperparameters.max_depth ?? 12,
-              minSamplesSplit: fiData.hyperparameters.min_samples_split ?? 5,
-              classWeight: fiData.hyperparameters.class_weight ?? 'balanced',
+              nEstimators: fiData.hyperparameters.n_estimators ?? null,
+              maxDepth: fiData.hyperparameters.max_depth ?? null,
+              minSamplesSplit: fiData.hyperparameters.min_samples_split ?? null,
+              classWeight: fiData.hyperparameters.class_weight ?? null,
             };
           }
         }
       } catch (e) {
-        // ML service unavailable — use defaults
+        // ML service unavailable — featureImportance stays [], hyperparameters null
       }
 
       res.json({
-        version: latestMetrics.modelVersion,
-        trainedAt: latestMetrics.trainedAt.toISOString(),
-        datasetSize: latestMetrics.datasetSize,
-        accuracy: Number(latestMetrics.accuracy),
-        precision: { HIGH: Number(latestMetrics.precisionHigh), MEDIUM: Number(latestMetrics.precisionMedium), LOW: Number(latestMetrics.precisionLow) },
-        recall: { HIGH: Number(latestMetrics.recallHigh), MEDIUM: Number(latestMetrics.recallMedium), LOW: Number(latestMetrics.recallLow) },
-        f1Score: { HIGH: Number(latestMetrics.f1High), MEDIUM: Number(latestMetrics.f1Medium), LOW: Number(latestMetrics.f1Low) },
-        confusionMatrix: {
-          HIGH: { predictedHIGH: latestMetrics.highPredictedHigh, predictedMEDIUM: latestMetrics.highPredictedMedium, predictedLOW: latestMetrics.highPredictedLow },
-          MEDIUM: { predictedHIGH: latestMetrics.mediumPredictedHigh, predictedMEDIUM: latestMetrics.mediumPredictedMedium, predictedLOW: latestMetrics.mediumPredictedLow },
-          LOW: { predictedHIGH: latestMetrics.lowPredictedHigh, predictedMEDIUM: latestMetrics.lowPredictedMedium, predictedLOW: latestMetrics.lowPredictedLow },
-        },
+        available: true,
+        // All current training data comes from the fleet simulator; metrics
+        // verify the pipeline, not field performance. Surfaced in the UI.
+        dataSource: 'simulated',
+        version: latest.modelVersion,
+        trainedAt: latest.trainedAt.toISOString(),
+        datasetSize: latest.datasetSize,
+        horizons,
         featureImportance,
         predictionHistory: ((predictionHistory as any)[0] as any[]).map((row: any) => ({
           date: row.month, total: Number(row.total), high: Number(row.high), medium: Number(row.medium), low: Number(row.low),
@@ -1472,15 +1487,9 @@ export async function registerRoutes(
     }
   });
 
-  app.get('/api/ml/feature-importance', requireAuth, async (req, res) => {
-    res.json([
-      { feature: 'Equipment Age', importance: 0.21, description: 'Years since manufacture' },
-      { feature: 'Maintenance Cost 180d (log)', importance: 0.16, description: 'Log maintenance cost trajectory' },
-      { feature: 'Wear Rate Velocity', importance: 0.14, description: 'Rate of change in wear accumulation' },
-      { feature: 'Lifetime Hours (log)', importance: 0.12, description: 'Log cumulative operating hours' },
-      { feature: 'MTBF (log)', importance: 0.12, description: 'Log mean time between failures' },
-    ]);
-  });
+  // NOTE: the old GET /api/ml/feature-importance route was deleted (ML-9): it
+  // returned hardcoded importances regardless of the trained model and had no
+  // callers. Live importances come from /api/ml/model-metrics.
 
   app.get('/api/ml/pipeline-status', requireAuth, async (req, res) => {
     try {
@@ -2060,14 +2069,32 @@ export async function registerRoutes(
   // plus a machine-readable recommended_action field agents can act on.
   app.get("/api/agent/model-health", requireAgentKey, async (req, res) => {
     try {
-      const { modelTrainingMetrics, assetFeatureSnapshots, assetRiskPredictions } = await import("@shared/schema");
+      const { modelMetrics, assetFeatureSnapshots, assetRiskPredictions } = await import("@shared/schema");
 
-      // ── model metrics ──────────────────────────────────────────────────────
+      // ── model metrics (long-format table; headline = 30d holdout ROC-AUC) ──
       const [latestModel] = await db
-        .select()
-        .from(modelTrainingMetrics)
-        .orderBy(desc(modelTrainingMetrics.trainedAt))
+        .select({
+          modelVersion: modelMetrics.modelVersion,
+          trainedAt: modelMetrics.trainedAt,
+          datasetSize: modelMetrics.datasetSize,
+        })
+        .from(modelMetrics)
+        .orderBy(desc(modelMetrics.trainedAt))
         .limit(1);
+
+      let rocAuc30d: number | null = null;
+      if (latestModel) {
+        const [rocRow] = await db
+          .select({ value: modelMetrics.value })
+          .from(modelMetrics)
+          .where(and(
+            eq(modelMetrics.modelVersion, latestModel.modelVersion),
+            eq(modelMetrics.horizonDays, 30),
+            eq(modelMetrics.metric, 'roc_auc'),
+          ))
+          .limit(1);
+        rocAuc30d = rocRow ? Number(rocRow.value) : null;
+      }
 
       // ── pipeline stats ─────────────────────────────────────────────────────
       const [snapStats] = await db.select({
@@ -2115,8 +2142,9 @@ export async function registerRoutes(
         model: latestModel ? {
           version: latestModel.modelVersion,
           trained_at: latestModel.trainedAt,
-          accuracy: Number(latestModel.accuracy),
+          roc_auc_30d: rocAuc30d,
           dataset_size: latestModel.datasetSize,
+          data_source: "simulated",
         } : null,
         pipeline: {
           snapshots_total: Number(snapStats?.total) || 0,

@@ -431,30 +431,52 @@ async function seedFailureEvents(
 // TRAIN + POLL — triggers training, polls status until complete or timeout
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function trainAndPoll(timeoutMs = 180_000): Promise<void> {
+// Training on the seeded dataset typically takes ~2-4 minutes; allow headroom.
+async function trainAndPoll(timeoutMs = 420_000): Promise<void> {
   const trainRes = await fetch(ML_SERVICE_URL + "/train", { method: "POST" });
   if (!trainRes.ok) {
     const body = await trainRes.text();
     throw new Error(`ML service train failed: ${body}`);
   }
 
+  // /train/status returns { running: boolean, log: string[], last_result: { success, ... } | null }
   const deadline = Date.now() + timeoutMs;
+  let sawRunning = false;
+  let polls = 0;
   while (Date.now() < deadline) {
     await sleep(4000);
+    polls++;
     try {
       const statusRes = await fetch(ML_SERVICE_URL + "/train/status");
       if (statusRes.ok) {
         const status = await statusRes.json() as any;
-        setStep(7, "running", `Training… ${status.status ?? ""}`);
-        if (status.status === "completed" || status.status === "idle") return;
-        if (status.status === "failed") throw new Error("ML training failed: " + status.error);
+        const lastLog: string = status.log?.[status.log.length - 1] ?? "";
+        setStep(7, "running", `Training… ${lastLog}`.slice(0, 200));
+        if (status.running) {
+          sawRunning = true;
+          continue;
+        }
+        // Not running: either finished (last_result set) or hasn't started yet.
+        // Require sawRunning or ≥2 polls so a stale last_result from a previous
+        // run isn't mistaken for this run's outcome before the job starts.
+        if (status.last_result && (sawRunning || polls >= 2)) {
+          if (status.last_result.success) return;
+          throw new Error(
+            "ML training failed: " + (status.last_result.error ?? `exit code ${status.last_result.return_code}`)
+          );
+        }
+        if (sawRunning) {
+          // Ran and stopped without a result — treat as failure
+          throw new Error("ML training stopped without reporting a result");
+        }
+        // Job not picked up yet — keep polling
       }
     } catch (e: any) {
-      if (e.message.includes("ML training failed")) throw e;
+      if (e.message.includes("ML training")) throw e;
       // Network hiccup — keep polling
     }
   }
-  throw new Error("ML training timed out after 3 minutes");
+  throw new Error(`ML training timed out after ${Math.round(timeoutMs / 60000)} minutes`);
 }
 
 async function bootstrapDriftReference(): Promise<void> {

@@ -222,8 +222,9 @@ def report(health: dict, drift_summary: dict):
     if model:
         log(f"Version    : {model['version']}")
         log(f"Trained at : {model['trained_at']}")
-        log(f"Accuracy   : {model['accuracy']:.1%}")
-        log(f"Dataset    : {model['dataset_size']:,} samples")
+        roc = model.get("roc_auc_30d")
+        log(f"ROC-AUC 30d: {roc:.4f}" if roc is not None else "ROC-AUC 30d: n/a")
+        log(f"Dataset    : {model['dataset_size']:,} samples ({model.get('data_source', 'unknown')} data)")
     else:
         log("No trained model found — run a seed + train cycle", "WARN")
 

@@ -253,19 +253,13 @@ async def multi_horizon_model_info():
     """Returns loaded model versions and performance metrics per horizon."""
     if not mh_predictor:
         raise HTTPException(status_code=503, detail="Multi-horizon model not loaded")
+    from engine.predictor_multihorizon import RISK_THRESHOLDS
     return {
         "versions":   mh_predictor.versions,
         "horizons":   [10, 30, 60],
-        "confidence": {
-            "10d": "high (CV ROC-AUC 0.987)",
-            "30d": "high (CV ROC-AUC 0.985)",
-            "60d": "high (CV ROC-AUC 0.982)",
-        },
-        "thresholds": {
-            "10d": {"HIGH": 0.60, "MEDIUM": 0.30},
-            "30d": {"HIGH": 0.60, "MEDIUM": 0.30},
-            "60d": {"HIGH": 0.60, "MEDIUM": 0.30},
-        },
+        # Derived from each loaded model's own metadata — never hardcoded
+        "confidence": {f"{h}d": mh_predictor.confidence.get(h, "unknown") for h in [10, 30, 60]},
+        "thresholds": {f"{h}d": RISK_THRESHOLDS[h] for h in [10, 30, 60]},
         "monotonicity": "enforced — p(fail≤10d) ≤ p(fail≤30d) ≤ p(fail≤60d)",
     }
 

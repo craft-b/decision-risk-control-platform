@@ -643,7 +643,9 @@ export default function MLPerformanceDashboard() {
     );
   }
 
-  if (error || !modelMetrics) {
+  // Honest empty state: API says no trained model exists (available:false) —
+  // show the setup path instead of fabricated numbers (ML-9).
+  if (error || !modelMetrics || !modelMetrics.available) {
     const steps = [
       {
         done: true,
@@ -727,59 +729,37 @@ export default function MLPerformanceDashboard() {
     );
   }
 
-  // Prepare confusion matrix data for visualization
-  const confusionData = [
-    {
-      actual: "HIGH",
-      predictedHIGH: modelMetrics.confusionMatrix.HIGH.predictedHIGH,
-      predictedMEDIUM: modelMetrics.confusionMatrix.HIGH.predictedMEDIUM,
-      predictedLOW: modelMetrics.confusionMatrix.HIGH.predictedLOW,
-    },
-    {
-      actual: "MEDIUM",
-      predictedHIGH: modelMetrics.confusionMatrix.MEDIUM.predictedHIGH,
-      predictedMEDIUM: modelMetrics.confusionMatrix.MEDIUM.predictedMEDIUM,
-      predictedLOW: modelMetrics.confusionMatrix.MEDIUM.predictedLOW,
-    },
-    {
-      actual: "LOW",
-      predictedHIGH: modelMetrics.confusionMatrix.LOW.predictedHIGH,
-      predictedMEDIUM: modelMetrics.confusionMatrix.LOW.predictedMEDIUM,
-      predictedLOW: modelMetrics.confusionMatrix.LOW.predictedLOW,
-    },
-  ];
+  // Each horizon (10d/30d/60d) is an independent binary failure classifier —
+  // metrics are shown per horizon under their real names (ML-9).
+  const horizonKeys = ["10", "30", "60"].filter(h => modelMetrics.horizons?.[h]);
+  const horizonRows = horizonKeys.map(h => ({
+    key: h,
+    label: `${h}d`,
+    ...modelMetrics.horizons![h],
+  }));
+  const m30 = modelMetrics.horizons?.["30"];
 
-  // Calculate overall metrics
-  const avgPrecision = (
-    (modelMetrics.precision.HIGH + modelMetrics.precision.MEDIUM + modelMetrics.precision.LOW) / 3
-  ).toFixed(3);
-  
-  const avgRecall = (
-    (modelMetrics.recall.HIGH + modelMetrics.recall.MEDIUM + modelMetrics.recall.LOW) / 3
-  ).toFixed(3);
+  const featureImportance = modelMetrics.featureImportance ?? [];
+  const predictionHistory = modelMetrics.predictionHistory ?? [];
+  const hyperparameters = modelMetrics.hyperparameters ?? null;
 
-  const avgF1 = (
-    (modelMetrics.f1Score.HIGH + modelMetrics.f1Score.MEDIUM + modelMetrics.f1Score.LOW) / 3
-  ).toFixed(3);
+  // Failure-class performance per horizon (the class that matters operationally)
+  const failureClassPerformance = horizonRows.map(r => ({
+    horizon: r.label,
+    precision: r.precisionFailure ?? 0,
+    recall: r.recallFailure ?? 0,
+    f1: r.f1Failure ?? 0,
+  }));
 
-  // Class performance data
-  const classPerformance = [
-    { class: "HIGH", precision: modelMetrics.precision.HIGH, recall: modelMetrics.recall.HIGH, f1: modelMetrics.f1Score.HIGH },
-    { class: "MEDIUM", precision: modelMetrics.precision.MEDIUM, recall: modelMetrics.recall.MEDIUM, f1: modelMetrics.f1Score.MEDIUM },
-    { class: "LOW", precision: modelMetrics.precision.LOW, recall: modelMetrics.recall.LOW, f1: modelMetrics.f1Score.LOW },
-  ];
-
-  // Dynamic insight values
-  const lowPrecision  = (modelMetrics.precision.LOW   * 100).toFixed(0);
-  const lowRecall     = (modelMetrics.recall.LOW       * 100).toFixed(0);
-  const highRecall    = (modelMetrics.recall.HIGH      * 100).toFixed(0);
-  const mediumRecall  = (modelMetrics.recall.MEDIUM    * 100).toFixed(0);
-  const topFeature    = modelMetrics.featureImportance[0]?.feature ?? 'Equipment Age';
-  const secondFeature = modelMetrics.featureImportance[1]?.feature ?? 'Usage Hours';
+  // Insight inputs
+  const topFeature    = featureImportance[0]?.feature;
+  const secondFeature = featureImportance[1]?.feature;
   const topTwo        = (
-    (modelMetrics.featureImportance[0]?.importance ?? 0) +
-    (modelMetrics.featureImportance[1]?.importance ?? 0)
+    (featureImportance[0]?.importance ?? 0) +
+    (featureImportance[1]?.importance ?? 0)
   ) * 100;
+  const pct = (v: number | undefined, digits = 1) =>
+    v === undefined ? "n/a" : `${(v * 100).toFixed(digits)}%`;
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
@@ -791,77 +771,134 @@ export default function MLPerformanceDashboard() {
         </p>
       </div>
 
-      {/* Model Status Alert */}
-      <Alert className="border-green-200 bg-green-50">
-        <CheckCircle2 className="h-4 w-4 text-green-600" />
-        <AlertDescription className="text-green-800">
-          <strong>Model Status: Production</strong> • Last updated {new Date(modelMetrics.trainedAt).toLocaleDateString()} • 
-          Overall accuracy: {(modelMetrics.accuracy * 100).toFixed(1)}%
+      {/* Model Status Alert — states data provenance up front */}
+      <Alert className="border-blue-200 bg-blue-50">
+        <CheckCircle2 className="h-4 w-4 text-blue-600" />
+        <AlertDescription className="text-blue-900">
+          <strong>Model {modelMetrics.version}</strong> • trained {modelMetrics.trainedAt ? new Date(modelMetrics.trainedAt).toLocaleDateString() : "—"} •
+          30d holdout ROC-AUC: {m30?.rocAuc?.toFixed(3) ?? "n/a"} •{" "}
+          <Badge variant="outline" className="align-middle border-amber-300 bg-amber-50 text-amber-800">
+            {modelMetrics.dataSource === "simulated" ? "Simulated data" : modelMetrics.dataSource}
+          </Badge>
+          {modelMetrics.dataSource === "simulated" && (
+            <span className="block text-xs text-blue-800/80 mt-1">
+              Metrics verify the training pipeline on simulator-generated labels — they are not field performance.
+            </span>
+          )}
         </AlertDescription>
       </Alert>
 
-      {/* Key Metrics Cards */}
+      {/* Key Metrics Cards — 30d horizon (primary operational window), temporal holdout */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <Card className="border-l-4 border-l-blue-500">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Overall Accuracy</CardTitle>
+            <CardTitle className="text-sm font-medium">ROC-AUC (30d)</CardTitle>
             <Target className="h-4 w-4 text-blue-500" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-blue-600">
-              {(modelMetrics.accuracy * 100).toFixed(1)}%
+              {m30?.rocAuc?.toFixed(3) ?? "n/a"}
             </div>
             <p className="text-xs text-muted-foreground">
-              Correct predictions across all classes
+              Temporal holdout, 30-day horizon
             </p>
           </CardContent>
         </Card>
 
         <Card className="border-l-4 border-l-green-500">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Avg Precision</CardTitle>
-            <TrendingUp className="h-4 w-4 text-green-500" />
+            <CardTitle className="text-sm font-medium">Failure Recall (30d)</CardTitle>
+            <Activity className="h-4 w-4 text-green-500" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-green-600">
-              {(parseFloat(avgPrecision) * 100).toFixed(1)}%
+              {pct(m30?.recallFailure)}
             </div>
             <p className="text-xs text-muted-foreground">
-              Positive prediction accuracy
+              Share of actual failures caught — the costly error is missing one
             </p>
           </CardContent>
         </Card>
 
         <Card className="border-l-4 border-l-purple-500">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Avg Recall</CardTitle>
-            <Activity className="h-4 w-4 text-purple-500" />
+            <CardTitle className="text-sm font-medium">Failure Precision (30d)</CardTitle>
+            <TrendingUp className="h-4 w-4 text-purple-500" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-purple-600">
-              {(parseFloat(avgRecall) * 100).toFixed(1)}%
+              {pct(m30?.precisionFailure)}
             </div>
             <p className="text-xs text-muted-foreground">
-              Actual positive capture rate
+              How often a flagged unit actually fails
             </p>
           </CardContent>
         </Card>
 
         <Card className="border-l-4 border-l-orange-500">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Avg F1 Score</CardTitle>
+            <CardTitle className="text-sm font-medium">PR-AUC (30d)</CardTitle>
             <Zap className="h-4 w-4 text-orange-500" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-orange-600">
-              {(parseFloat(avgF1) * 100).toFixed(1)}%
+              {m30?.prAuc?.toFixed(3) ?? "n/a"}
             </div>
             <p className="text-xs text-muted-foreground">
-              Harmonic mean of precision & recall
+              Precision-recall trade-off; baseline = positive rate ({pct(m30?.positiveRateTest, 0)})
             </p>
           </CardContent>
         </Card>
       </div>
+
+      {/* Per-horizon summary table — all metrics under their real names */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Per-Horizon Holdout Metrics</CardTitle>
+          <CardDescription>
+            Each horizon is an independent binary classifier evaluated on a time-based holdout
+            (most recent ~20% of snapshots). CV = TimeSeriesSplit on the training window.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="overflow-x-auto rounded-lg border">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-xs text-muted-foreground">
+                <tr>
+                  <th className="p-3 text-left font-medium">Horizon</th>
+                  <th className="p-3 text-right font-medium">ROC-AUC</th>
+                  <th className="p-3 text-right font-medium">CV ROC-AUC</th>
+                  <th className="p-3 text-right font-medium">PR-AUC</th>
+                  <th className="p-3 text-right font-medium">Recall (failure)</th>
+                  <th className="p-3 text-right font-medium">Precision (failure)</th>
+                  <th className="p-3 text-right font-medium">Accuracy</th>
+                  <th className="p-3 text-right font-medium">Positive rate</th>
+                  <th className="p-3 text-right font-medium">Test n</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {horizonRows.map((r) => (
+                  <tr key={r.key}>
+                    <td className="p-3 font-medium">{r.label}</td>
+                    <td className="p-3 text-right font-mono">{r.rocAuc?.toFixed(4) ?? "n/a"}</td>
+                    <td className="p-3 text-right font-mono">
+                      {r.cvRocAucMean !== undefined
+                        ? `${r.cvRocAucMean.toFixed(3)} ± ${(r.cvRocAucStd ?? 0).toFixed(3)}`
+                        : "n/a"}
+                    </td>
+                    <td className="p-3 text-right font-mono">{r.prAuc?.toFixed(4) ?? "n/a"}</td>
+                    <td className="p-3 text-right font-mono">{pct(r.recallFailure)}</td>
+                    <td className="p-3 text-right font-mono">{pct(r.precisionFailure)}</td>
+                    <td className="p-3 text-right font-mono">{pct(r.accuracy)}</td>
+                    <td className="p-3 text-right font-mono">{pct(r.positiveRateTest, 0)}</td>
+                    <td className="p-3 text-right font-mono">{r.samplesTest?.toLocaleString() ?? "n/a"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Charts Row 1: Feature Importance & Class Performance */}
       <div className="grid gap-4 lg:grid-cols-2">
@@ -873,71 +910,80 @@ export default function MLPerformanceDashboard() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="h-[350px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={modelMetrics.featureImportance} layout="vertical">
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" horizontal={true} vertical={false} />
-                  <XAxis type="number" domain={[0, 0.3]} tickFormatter={(value) => `${(value * 100).toFixed(0)}%`} />
-                  <YAxis type="category" dataKey="feature" width={150} fontSize={12} />
-                  <Tooltip
-                    formatter={(value: number) => `${(value * 100).toFixed(1)}%`}
-                    contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                  />
-                  <Bar dataKey="importance" radius={[0, 4, 4, 0]}>
-                    {modelMetrics.featureImportance.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={`hsl(${220 - index * 20}, 70%, 50%)`} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="mt-4 space-y-2 text-xs text-muted-foreground">
-              {modelMetrics.featureImportance.slice(0, 3).map((feat, idx) => (
-                <div key={idx}>
-                  <strong>{feat.feature}:</strong> {feat.description}
+            {featureImportance.length === 0 ? (
+              <div className="h-[350px] flex items-center justify-center text-sm text-muted-foreground text-center px-8">
+                Feature importance unavailable — the ML service is not reachable.
+                Live values appear here when it's running.
+              </div>
+            ) : (
+              <>
+                <div className="h-[350px] w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={featureImportance} layout="vertical">
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" horizontal={true} vertical={false} />
+                      <XAxis type="number" domain={[0, 0.3]} tickFormatter={(value) => `${(value * 100).toFixed(0)}%`} />
+                      <YAxis type="category" dataKey="feature" width={150} fontSize={12} />
+                      <Tooltip
+                        formatter={(value: number) => `${(value * 100).toFixed(1)}%`}
+                        contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                      />
+                      <Bar dataKey="importance" radius={[0, 4, 4, 0]}>
+                        {featureImportance.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={`hsl(${220 - index * 20}, 70%, 50%)`} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
                 </div>
-              ))}
-            </div>
+                <div className="mt-4 space-y-2 text-xs text-muted-foreground">
+                  {featureImportance.slice(0, 3).map((feat, idx) => (
+                    <div key={idx}>
+                      <strong>{feat.feature}:</strong> {feat.description}
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle>Per-Class Performance</CardTitle>
+            <CardTitle>Failure-Class Performance by Horizon</CardTitle>
             <CardDescription>
-              Precision, recall, and F1 score by risk level
+              Precision, recall, and F1 on the failure class — per prediction window (temporal holdout)
             </CardDescription>
           </CardHeader>
           <CardContent>
             <div className="h-[350px] w-full">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={classPerformance}>
+                <BarChart data={failureClassPerformance}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
-                  <XAxis dataKey="class" />
+                  <XAxis dataKey="horizon" />
                   <YAxis domain={[0, 1]} tickFormatter={(value) => `${(value * 100).toFixed(0)}%`} />
                   <Tooltip
                     formatter={(value: number) => `${(value * 100).toFixed(1)}%`}
                     contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
                   />
                   <Legend />
-                  <Bar dataKey="precision" fill="#3b82f6" name="Precision" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="recall" fill="#10b981" name="Recall" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="f1" fill="#8b5cf6" name="F1 Score" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="precision" fill="#3b82f6" name="Precision (failure)" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="recall" fill="#10b981" name="Recall (failure)" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="f1" fill="#8b5cf6" name="F1 (failure)" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
             <div className="mt-4 grid grid-cols-3 gap-4 text-center text-xs">
               <div>
                 <div className="font-medium">Precision</div>
-                <div className="text-muted-foreground">Predicted positive accuracy</div>
+                <div className="text-muted-foreground">Flagged units that actually fail</div>
               </div>
               <div>
                 <div className="font-medium">Recall</div>
-                <div className="text-muted-foreground">Actual positive capture</div>
+                <div className="text-muted-foreground">Actual failures caught</div>
               </div>
               <div>
-                <div className="font-medium">F1 Score</div>
-                <div className="text-muted-foreground">Balanced performance</div>
+                <div className="font-medium">F1</div>
+                <div className="text-muted-foreground">Balance of the two</div>
               </div>
             </div>
           </CardContent>
@@ -948,55 +994,52 @@ export default function MLPerformanceDashboard() {
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Confusion Matrix</CardTitle>
+            <CardTitle>Confusion Matrices (binary, per horizon)</CardTitle>
             <CardDescription>
-              Actual vs predicted classifications (test set)
+              Actual vs predicted failure on each horizon's temporal holdout set
             </CardDescription>
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
-              <div className="overflow-hidden rounded-lg border">
-                <table className="w-full">
-                  <thead className="bg-slate-50">
-                    <tr>
-                      <th className="p-3 text-left text-xs font-medium text-muted-foreground">Actual \ Predicted</th>
-                      <th className="p-3 text-center text-xs font-medium text-red-700">HIGH</th>
-                      <th className="p-3 text-center text-xs font-medium text-orange-700">MEDIUM</th>
-                      <th className="p-3 text-center text-xs font-medium text-green-700">LOW</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y">
-                    {confusionData.map((row, idx) => (
-                      <tr key={idx}>
-                        <td className={`p-3 text-sm font-medium ${
-                          row.actual === 'HIGH' ? 'text-red-700' :
-                          row.actual === 'MEDIUM' ? 'text-orange-700' :
-                          'text-green-700'
-                        }`}>
-                          {row.actual}
-                        </td>
-                        <td className={`p-3 text-center text-sm font-bold ${row.actual === 'HIGH' ? 'bg-red-50' : ''}`}>
-                          {row.predictedHIGH}
-                        </td>
-                        <td className={`p-3 text-center text-sm font-bold ${row.actual === 'MEDIUM' ? 'bg-orange-50' : ''}`}>
-                          {row.predictedMEDIUM}
-                        </td>
-                        <td className={`p-3 text-center text-sm font-bold ${row.actual === 'LOW' ? 'bg-green-50' : ''}`}>
-                          {row.predictedLOW}
-                        </td>
+              {horizonRows.map((r) => (
+                <div key={r.key} className="rounded-lg border overflow-hidden">
+                  <div className="bg-slate-50 px-3 py-1.5 text-xs font-medium text-muted-foreground">
+                    {r.label} horizon · {r.samplesTest?.toLocaleString() ?? "?"} holdout samples
+                  </div>
+                  <table className="w-full">
+                    <thead>
+                      <tr className="text-xs text-muted-foreground">
+                        <th className="p-2 text-left font-medium">Actual \ Predicted</th>
+                        <th className="p-2 text-center font-medium text-red-700">Failure</th>
+                        <th className="p-2 text-center font-medium text-green-700">No failure</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody className="divide-y text-sm">
+                      <tr>
+                        <td className="p-2 font-medium text-red-700">Failure</td>
+                        <td className="p-2 text-center font-bold bg-green-50">{r.confusion.tp.toLocaleString()}</td>
+                        <td className="p-2 text-center font-bold text-red-600">{r.confusion.fn.toLocaleString()}</td>
+                      </tr>
+                      <tr>
+                        <td className="p-2 font-medium text-green-700">No failure</td>
+                        <td className="p-2 text-center font-bold">{r.confusion.fp.toLocaleString()}</td>
+                        <td className="p-2 text-center font-bold bg-green-50">{r.confusion.tn.toLocaleString()}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              ))}
               <div className="space-y-2 text-xs">
                 <div className="flex items-start gap-2">
-                  <CheckCircle2 className="h-4 w-4 text-green-600 mt-0.5" />
-                  <div><strong>Diagonal values</strong> (highlighted) represent correct predictions</div>
+                  <AlertCircle className="h-4 w-4 text-red-600 mt-0.5" />
+                  <div>
+                    <strong>False negatives</strong> (top-right, red) are missed failures — the operationally
+                    expensive error in maintenance scheduling.
+                  </div>
                 </div>
                 <div className="flex items-start gap-2">
-                  <AlertCircle className="h-4 w-4 text-orange-600 mt-0.5" />
-                  <div><strong>Off-diagonal values</strong> show misclassifications - lower is better</div>
+                  <CheckCircle2 className="h-4 w-4 text-green-600 mt-0.5" />
+                  <div><strong>Diagonal cells</strong> (highlighted) are correct predictions.</div>
                 </div>
               </div>
             </div>
@@ -1013,7 +1056,7 @@ export default function MLPerformanceDashboard() {
           <CardContent>
             <div className="h-[280px] w-full">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={modelMetrics.predictionHistory}>
+                <LineChart data={predictionHistory}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                   <XAxis dataKey="date" />
                   <YAxis />
@@ -1055,21 +1098,25 @@ export default function MLPerformanceDashboard() {
               </div>
               <div className="flex justify-between items-center pb-3 border-b">
                 <span className="text-sm text-muted-foreground">Algorithm</span>
-                <span className="text-sm font-medium">{modelMetrics.hyperparameters.algorithm}</span>
+                <span className="text-sm font-medium">{hyperparameters?.algorithm ?? "—"}</span>
               </div>
               <div className="flex justify-between items-center pb-3 border-b">
                 <span className="text-sm text-muted-foreground">Training Date</span>
                 <span className="text-sm font-medium">
-                  {new Date(modelMetrics.trainedAt).toLocaleDateString()}
+                  {modelMetrics.trainedAt ? new Date(modelMetrics.trainedAt).toLocaleDateString() : "—"}
                 </span>
               </div>
               <div className="flex justify-between items-center pb-3 border-b">
                 <span className="text-sm text-muted-foreground">Training Dataset Size</span>
-                <span className="text-sm font-medium">{modelMetrics.datasetSize.toLocaleString()} samples</span>
+                <span className="text-sm font-medium">
+                  {modelMetrics.datasetSize != null ? `${modelMetrics.datasetSize.toLocaleString()} samples` : "—"}
+                </span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-sm text-muted-foreground">Status</span>
-                <Badge className="bg-green-100 text-green-800 border-green-300">Production</Badge>
+                <span className="text-sm text-muted-foreground">Data Source</span>
+                <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-800">
+                  {modelMetrics.dataSource === "simulated" ? "Simulated (fleet simulator)" : modelMetrics.dataSource}
+                </Badge>
               </div>
             </div>
           </CardContent>
@@ -1083,28 +1130,36 @@ export default function MLPerformanceDashboard() {
             </div>
           </CardHeader>
           <CardContent>
-            <div className="space-y-3">
-              <div className="flex justify-between items-center pb-3 border-b">
-                <span className="text-sm text-muted-foreground">Number of Estimators</span>
-                <span className="text-sm font-mono font-medium">{modelMetrics.hyperparameters.nEstimators}</span>
+            {!hyperparameters ? (
+              <div className="py-8 text-center text-sm text-muted-foreground">
+                Hyperparameters unavailable — the ML service is not reachable.
               </div>
-              <div className="flex justify-between items-center pb-3 border-b">
-                <span className="text-sm text-muted-foreground">Max Depth</span>
-                <span className="text-sm font-mono font-medium">{modelMetrics.hyperparameters.maxDepth}</span>
-              </div>
-              <div className="flex justify-between items-center pb-3 border-b">
-                <span className="text-sm text-muted-foreground">Min Samples Split</span>
-                <span className="text-sm font-mono font-medium">{modelMetrics.hyperparameters.minSamplesSplit}</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-sm text-muted-foreground">Class Weight</span>
-                <span className="text-sm font-mono font-medium">{modelMetrics.hyperparameters.classWeight}</span>
-              </div>
-            </div>
-            <div className="mt-4 p-3 bg-slate-50 rounded-lg text-xs text-muted-foreground">
-              <strong>Note:</strong> Class weights are balanced to handle imbalanced training data and 
-              prevent bias toward majority classes.
-            </div>
+            ) : (
+              <>
+                <div className="space-y-3">
+                  <div className="flex justify-between items-center pb-3 border-b">
+                    <span className="text-sm text-muted-foreground">Number of Estimators</span>
+                    <span className="text-sm font-mono font-medium">{hyperparameters.nEstimators ?? "—"}</span>
+                  </div>
+                  <div className="flex justify-between items-center pb-3 border-b">
+                    <span className="text-sm text-muted-foreground">Max Depth</span>
+                    <span className="text-sm font-mono font-medium">{hyperparameters.maxDepth ?? "—"}</span>
+                  </div>
+                  <div className="flex justify-between items-center pb-3 border-b">
+                    <span className="text-sm text-muted-foreground">Min Samples Split</span>
+                    <span className="text-sm font-mono font-medium">{hyperparameters.minSamplesSplit ?? "—"}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-muted-foreground">Class Weight</span>
+                    <span className="text-sm font-mono font-medium">{hyperparameters.classWeight ?? "—"}</span>
+                  </div>
+                </div>
+                <div className="mt-4 p-3 bg-slate-50 rounded-lg text-xs text-muted-foreground">
+                  <strong>Note:</strong> Class weights are balanced to handle imbalanced training data and
+                  prevent bias toward majority classes.
+                </div>
+              </>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -1124,66 +1179,66 @@ export default function MLPerformanceDashboard() {
         <ChampionChallengerCard />
       </div>
 
-      {/* Key Insights */}
+      {/* Key Insights — derived from real per-horizon holdout metrics only */}
       <Card className="border-blue-200 bg-blue-50">
         <CardHeader>
           <CardTitle className="text-blue-900">Key Model Insights</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3 text-sm text-blue-900">
-          {/* LOW risk */}
-          <div className="flex items-start gap-2">
-            {parseFloat(lowPrecision) >= 70 && parseFloat(lowRecall) >= 70
-              ? <CheckCircle2 className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
-              : <AlertCircle  className="h-5 w-5 text-orange-600 mt-0.5 flex-shrink-0" />
-            }
-            <div>
-              <strong>LOW risk detection:</strong> {lowPrecision}% precision and {lowRecall}% recall.{" "}
-              {parseFloat(lowPrecision) >= 70 && parseFloat(lowRecall) >= 70
-                ? "Reliable identification of equipment in good condition, minimizing unnecessary maintenance."
-                : parseFloat(lowRecall) < 30
-                  ? "Low recall indicates the model may be collapsing to a single class — more labeled failure examples needed."
-                  : "Precision or recall below target — consider advancing the simulation to generate more failure events."
-              }
+          {/* Failure recall per horizon */}
+          {horizonRows.map((r) => {
+            const recall = r.recallFailure;
+            const ok = recall !== undefined && recall >= 0.7;
+            return (
+              <div key={r.key} className="flex items-start gap-2">
+                {ok
+                  ? <CheckCircle2 className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
+                  : <AlertCircle className="h-5 w-5 text-orange-600 mt-0.5 flex-shrink-0" />
+                }
+                <div>
+                  <strong>{r.label} failure recall ({pct(recall, 0)}):</strong>{" "}
+                  {recall === undefined
+                    ? "No holdout metrics recorded for this horizon."
+                    : ok
+                      ? `Catches most failures in the ${r.label} window at the current threshold; ${r.confusion.fn.toLocaleString()} missed on the holdout set.`
+                      : `Below the 70% operating target — ${r.confusion.fn.toLocaleString()} failures missed on the holdout set. Longer horizons are inherently harder; review threshold choice before acting on ${r.label} scores.`
+                  }
+                </div>
+              </div>
+            );
+          })}
+          {/* Accuracy vs naive baseline — honest framing for imbalanced data */}
+          {m30?.accuracy !== undefined && m30?.positiveRateTest !== undefined && (
+            <div className="flex items-start gap-2">
+              <Target className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
+              <div>
+                <strong>Accuracy in context:</strong> 30d accuracy is {pct(m30.accuracy)}, vs{" "}
+                {pct(1 - m30.positiveRateTest)} for a naive "never fails" baseline that catches zero
+                failures — recall on the failure class is the number that matters operationally.
+              </div>
             </div>
-          </div>
-          {/* HIGH risk */}
-          <div className="flex items-start gap-2">
-            {parseFloat(highRecall) >= 70
-              ? <CheckCircle2 className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
-              : <AlertCircle  className="h-5 w-5 text-orange-600 mt-0.5 flex-shrink-0" />
-            }
-            <div>
-              <strong>HIGH risk recall ({highRecall}%):</strong>{" "}
-              {parseFloat(highRecall) >= 70
-                ? "Model successfully catches most critical failure cases, crucial for safety and preventing downtime."
-                : parseFloat(highRecall) === 0
-                  ? "Model is not detecting HIGH risk units — training data has too few failure examples. Advance simulation and retrain."
-                  : "Partial HIGH risk coverage. More failure events in training data will improve detection."
-              }
-            </div>
-          </div>
-          {/* MEDIUM risk */}
-          <div className="flex items-start gap-2">
-            {parseFloat(mediumRecall) >= 70
-              ? <CheckCircle2 className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
-              : <AlertCircle  className="h-5 w-5 text-orange-600 mt-0.5 flex-shrink-0" />
-            }
-            <div>
-              <strong>MEDIUM risk recall ({mediumRecall}%):</strong>{" "}
-              {parseFloat(mediumRecall) >= 70
-                ? "Good coverage of medium-risk equipment across the fleet."
-                : "MEDIUM risk units being misclassified — class imbalance likely. Advance simulation to generate more labeled samples."
-              }
-            </div>
-          </div>
+          )}
           {/* Top features */}
-          <div className="flex items-start gap-2">
-            <TrendingUp className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
-            <div>
-              <strong>Top predictive features:</strong> {topFeature} and {secondFeature} contribute{" "}
-              {topTwo.toFixed(0)}% of prediction power, validating the importance of these maintenance factors.
+          {topFeature && secondFeature && (
+            <div className="flex items-start gap-2">
+              <TrendingUp className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
+              <div>
+                <strong>Top predictive features:</strong> {topFeature} and {secondFeature} contribute{" "}
+                {topTwo.toFixed(0)}% of prediction power.
+              </div>
             </div>
-          </div>
+          )}
+          {/* Provenance */}
+          {modelMetrics.dataSource === "simulated" && (
+            <div className="flex items-start gap-2">
+              <AlertCircle className="h-5 w-5 text-amber-600 mt-0.5 flex-shrink-0" />
+              <div>
+                <strong>Data provenance:</strong> all training labels come from the fleet simulator.
+                These metrics validate the pipeline end-to-end; they are not evidence of field
+                performance until real fleet maintenance outcomes are used for training.
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>
