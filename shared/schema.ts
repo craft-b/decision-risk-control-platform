@@ -268,6 +268,18 @@ export const assetFeatureSnapshots = mysqlTable("asset_feature_snapshots", {
   willFail10d: int("will_fail_10d"),
   willFail30d: int("will_fail_30d"),
   willFail60d: int("will_fail_60d"),
+  // ML-11: label integrity. NULL = not yet evaluated by the labeler.
+  //   observed              → outcome window fully elapsed, labels are ground truth
+  //   censored_intervention → a PREDICTIVE_INTERVENTION landed in the window before
+  //                           any failure; the counterfactual is unknowable, so the
+  //                           row is excluded from training and prevalence accounting
+  //   censored_horizon      → 60d outcome window hasn't elapsed yet (re-evaluated
+  //                           as the simulation cursor advances)
+  labelStatus: mysqlEnum("label_status", [
+    "observed",
+    "censored_intervention",
+    "censored_horizon",
+  ]),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

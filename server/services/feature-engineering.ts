@@ -291,8 +291,22 @@ class FeatureEngineeringService {
   }
   
   /**
-   * Label historical snapshots with failure events
-   * CRITICAL: Only labels snapshots where we know the outcome (30 days have passed)
+   * Label historical snapshots with failure outcomes (ML-2 / ML-11).
+   *
+   * Label definition:
+   *   will_fail_h = 1 iff a REACTIVE_REPAIR event (the unit actually broke down)
+   *   occurs in the window (snapshot_ts, snapshot_ts + h] — day 0 is excluded
+   *   because a same-day event has already influenced the snapshot's features.
+   *   SCHEDULED_PM and PREDICTIVE_INTERVENTION events are never failures:
+   *   planned work is the outcome the model is trying to cause, not predict.
+   *
+   * Censoring (label_status):
+   *   - If a PREDICTIVE_INTERVENTION lands in the 60d window before any observed
+   *     failure, we cannot know whether the unit would have failed — the row is
+   *     marked censored_intervention with NULL labels and excluded from training.
+   *     Without this, the model's own successes would become negative labels.
+   *   - Rows whose 60d window hasn't elapsed yet are marked censored_horizon and
+   *     re-evaluated on later runs as the simulation cursor advances.
    */
   async labelSnapshots(): Promise<number> {
     // Use simulation cursor as reference, not wall clock
@@ -303,68 +317,101 @@ class FeatureEngineeringService {
       ? new Date(stateRows[0].cursor_date)
       : new Date();
 
-    // Only label snapshots where full 60d outcome window has elapsed
+    // Full 60d outcome window must have elapsed for a definitive label
     const cutoffDate = new Date(simCursor.getTime() - 60 * 24 * 60 * 60 * 1000);
-      // Get unlabeled snapshots older than 60 days (need full window to label all horizons)
-      const unlabeledSnapshots = await db
-        .select()
-        .from(assetFeatureSnapshots)
-        .where(
-          and(
-            sql`${assetFeatureSnapshots.willFail60d} IS NULL`,
-            lte(assetFeatureSnapshots.snapshotTs, cutoffDate)
-          )
-        );
-    
+
+    // Candidates: never evaluated, or horizon-censored rows whose window may
+    // have elapsed since the last run. (Legacy rows labeled under the old
+    // any-MAJOR_SERVICE rule have label_status NULL and get relabeled too.)
+    const candidates = await db
+      .select()
+      .from(assetFeatureSnapshots)
+      .where(
+        sql`(${assetFeatureSnapshots.labelStatus} IS NULL
+             OR ${assetFeatureSnapshots.labelStatus} = 'censored_horizon')`
+      );
+
     let labeled = 0;
-    
-    for (const snapshot of unlabeledSnapshots) {
+
+    for (const snapshot of candidates) {
       const snapshotDate = new Date(snapshot.snapshotTs);
-      const windowEnd = new Date(snapshotDate.getTime() + 30 * 24 * 60 * 60 * 1000);     
-      const window10End = new Date(snapshotDate.getTime() + 10 * 24 * 60 * 60 * 1000);
-        const window60End = new Date(snapshotDate.getTime() + 60 * 24 * 60 * 60 * 1000);
 
-        // Only MAJOR_SERVICE counts as a failure event
-        // Minor service and inspections are routine PM — not failure predictions
-        const [maint10] = await db.select({ count: count() }).from(maintenanceEvents).where(
-          and(
-            eq(maintenanceEvents.equipmentId, snapshot.equipmentId),
-            gte(maintenanceEvents.maintenanceDate, snapshotDate),
-            lte(maintenanceEvents.maintenanceDate, window10End),
-            sql`${maintenanceEvents.maintenanceType} = 'MAJOR_SERVICE'`
-          )
-        );
-        const [maintenanceInWindow] = await db
-          .select({ count: count() })
-          .from(maintenanceEvents)
-          .where(
-            and(
-              eq(maintenanceEvents.equipmentId, snapshot.equipmentId),
-              gte(maintenanceEvents.maintenanceDate, snapshotDate),
-              lte(maintenanceEvents.maintenanceDate, windowEnd),
-              sql`${maintenanceEvents.maintenanceType} = 'MAJOR_SERVICE'`
-            )
-          );
-        const [maint60] = await db.select({ count: count() }).from(maintenanceEvents).where(
-          and(
-            eq(maintenanceEvents.equipmentId, snapshot.equipmentId),
-            gte(maintenanceEvents.maintenanceDate, snapshotDate),
-            lte(maintenanceEvents.maintenanceDate, window60End),
-            sql`${maintenanceEvents.maintenanceType} = 'MAJOR_SERVICE'`
-          )
-        );
+      if (snapshotDate > cutoffDate) {
+        if (snapshot.labelStatus !== 'censored_horizon') {
+          await db
+            .update(assetFeatureSnapshots)
+            .set({ labelStatus: 'censored_horizon' })
+            .where(eq(assetFeatureSnapshots.id, snapshot.id));
+        }
+        continue;
+      }
 
-        const label10 = (maint10?.count || 0) > 0 ? 1 : 0;
-        const label30 = (maintenanceInWindow?.count || 0) > 0 ? 1 : 0;
-        const label60 = (maint60?.count || 0) > 0 ? 1 : 0;
+      const window60End = new Date(snapshotDate.getTime() + 60 * 24 * 60 * 60 * 1000);
 
+      // First actual breakdown in (ts, ts+60] — strict > excludes day-0 events
+      const [failRows] = await db.execute(sql`
+        SELECT MIN(maintenance_date) AS first_event
+        FROM maintenance_events
+        WHERE equipment_id = ${snapshot.equipmentId}
+          AND event_source = 'REACTIVE_REPAIR'
+          AND maintenance_date > ${snapshotDate}
+          AND maintenance_date <= ${window60End}
+      `) as any;
+
+      // First model-driven intervention in the same window
+      const [intRows] = await db.execute(sql`
+        SELECT MIN(maintenance_date) AS first_event
+        FROM maintenance_events
+        WHERE equipment_id = ${snapshot.equipmentId}
+          AND event_source = 'PREDICTIVE_INTERVENTION'
+          AND maintenance_date > ${snapshotDate}
+          AND maintenance_date <= ${window60End}
+      `) as any;
+
+      const firstFailure: Date | null = failRows[0]?.first_event
+        ? new Date(failRows[0].first_event) : null;
+      const firstIntervention: Date | null = intRows[0]?.first_event
+        ? new Date(intRows[0].first_event) : null;
+
+      // Intervention before any observed failure → counterfactual unknown.
+      // Censor the row entirely rather than record a negative we can't defend.
+      if (firstIntervention && (!firstFailure || firstIntervention < firstFailure)) {
         await db
           .update(assetFeatureSnapshots)
-          .set({ willFail10d: label10, willFail30d: label30, willFail60d: label60 })
+          .set({
+            willFail10d: null,
+            willFail30d: null,
+            willFail60d: null,
+            labelStatus: 'censored_intervention',
+          })
           .where(eq(assetFeatureSnapshots.id, snapshot.id));
         labeled++;
+        continue;
+      }
+
+      // Calendar-day distance from snapshot date to first failure
+      const snapMidnight = new Date(
+        snapshotDate.getFullYear(), snapshotDate.getMonth(), snapshotDate.getDate()
+      );
+      const daysToFailure = firstFailure
+        ? Math.round((firstFailure.getTime() - snapMidnight.getTime()) / (24 * 60 * 60 * 1000))
+        : null;
+
+      const labelFor = (h: number) =>
+        daysToFailure !== null && daysToFailure >= 1 && daysToFailure <= h ? 1 : 0;
+
+      await db
+        .update(assetFeatureSnapshots)
+        .set({
+          willFail10d: labelFor(10),
+          willFail30d: labelFor(30),
+          willFail60d: labelFor(60),
+          labelStatus: 'observed',
+        })
+        .where(eq(assetFeatureSnapshots.id, snapshot.id));
+      labeled++;
     }
-    
+
     return labeled;
   }
 }

@@ -1383,17 +1383,28 @@ export async function registerRoutes(
         precision_no_failure: 'precisionNoFailure', recall_no_failure: 'recallNoFailure',
         positive_rate_dev: 'positiveRateDev', positive_rate_test: 'positiveRateTest',
         samples_train: 'samplesTrain', samples_test: 'samplesTest',
+        positive_rate: 'positiveRate',
+        // Operator metrics (ML-3): evaluated at the HIGH-band operating point
+        recall_failure_operating: 'recallFailureOperating',
+        precision_at_budget: 'precisionAtBudget',
+        lead_time_median_days: 'leadTimeMedianDays',
+        lead_time_failures_flagged_pct: 'leadTimeFailuresFlaggedPct',
       };
+      // temporal split → horizons; by_asset split (GroupKFold over equipment,
+      // the "new fleet, day one" question) → horizonsByAsset
       const horizons: Record<string, any> = {};
+      const horizonsByAsset: Record<string, any> = {};
       for (const row of rows) {
-        if (row.split !== 'temporal') continue; // by_asset split lands in Group 1
+        const target = row.split === 'temporal' ? horizons
+          : row.split === 'by_asset' ? horizonsByAsset : null;
+        if (!target) continue;
         const h = String(row.horizonDays);
-        horizons[h] = horizons[h] ?? { confusion: { tn: 0, fp: 0, fn: 0, tp: 0 } };
+        target[h] = target[h] ?? (row.split === 'temporal' ? { confusion: { tn: 0, fp: 0, fn: 0, tp: 0 } } : {});
         const value = Number(row.value);
         if (row.metric.startsWith('confusion_')) {
-          horizons[h].confusion[row.metric.replace('confusion_', '')] = value;
+          target[h].confusion[row.metric.replace('confusion_', '')] = value;
         } else if (metricKeyMap[row.metric]) {
-          horizons[h][metricKeyMap[row.metric]] = value;
+          target[h][metricKeyMap[row.metric]] = value;
         }
       }
 
@@ -1475,6 +1486,7 @@ export async function registerRoutes(
         trainedAt: latest.trainedAt.toISOString(),
         datasetSize: latest.datasetSize,
         horizons,
+        horizonsByAsset,
         featureImportance,
         predictionHistory: ((predictionHistory as any)[0] as any[]).map((row: any) => ({
           date: row.month, total: Number(row.total), high: Number(row.high), medium: Number(row.medium), low: Number(row.low),

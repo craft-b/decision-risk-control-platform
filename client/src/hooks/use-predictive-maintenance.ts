@@ -20,7 +20,24 @@ export interface HorizonHoldoutMetrics {
   positiveRateTest?: number;
   samplesTrain?: number;
   samplesTest?: number;
+  // Operator metrics (ML-3), evaluated at the HIGH-band operating threshold
+  recallFailureOperating?: number;
+  precisionAtBudget?: number;
+  leadTimeMedianDays?: number;
+  leadTimeFailuresFlaggedPct?: number;
   confusion: { tn: number; fp: number; fn: number; tp: number };
+}
+
+// by_asset split: GroupKFold over equipment — "new fleet, day one" question.
+// No confusion matrix (pooled out-of-fold predictions, no single threshold split).
+export interface HorizonByAssetMetrics {
+  rocAuc?: number;
+  prAuc?: number;
+  positiveRate?: number;
+  recallFailureOperating?: number;
+  precisionAtBudget?: number;
+  leadTimeMedianDays?: number;
+  leadTimeFailuresFlaggedPct?: number;
 }
 
 export interface ModelMetrics {
@@ -30,6 +47,7 @@ export interface ModelMetrics {
   trainedAt?: string;
   datasetSize?: number | null;
   horizons?: Record<string, HorizonHoldoutMetrics>;
+  horizonsByAsset?: Record<string, HorizonByAssetMetrics>;
   featureImportance?: Array<{
     feature: string;
     importance: number;

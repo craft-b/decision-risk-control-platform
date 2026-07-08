@@ -143,6 +143,10 @@ class EnhancedFeatureEngineeringService {
     const d90  = new Date(now); d90.setDate(d90.getDate() - 90);
     const d180 = new Date(now); d180.setDate(d180.getDate() - 180);
     const d365 = new Date(now); d365.setDate(d365.getDate() - 365);
+    // ML-1: every window query below is bounded ABOVE by the snapshot date.
+    // Without the upper bound, backfilled snapshots read events that happen
+    // after the snapshot — including the label event itself (temporal leakage).
+    const nowStr = now.toISOString().split('T')[0];
 
     // ── Asset age ──────────────────────────────────────────────────────────
     const equipAny = equip as any;
@@ -173,7 +177,8 @@ class EnhancedFeatureEngineeringService {
       .where(
         and(
           eq(rentals.equipmentId, equipmentId),
-          sql`${rentals.receiveDate} >= ${d30.toISOString().split('T')[0]}`
+          sql`${rentals.receiveDate} >= ${d30.toISOString().split('T')[0]}`,
+          sql`${rentals.receiveDate} <= ${nowStr}`
         )
       );
 
@@ -183,21 +188,22 @@ class EnhancedFeatureEngineeringService {
       .where(
         and(
           eq(rentals.equipmentId, equipmentId),
-          sql`${rentals.receiveDate} >= ${d90.toISOString().split('T')[0]}` // FIXED: was d30
+          sql`${rentals.receiveDate} >= ${d90.toISOString().split('T')[0]}`, // FIXED: was d30
+          sql`${rentals.receiveDate} <= ${nowStr}`
         )
       );
 
-    const rentalDays30d = rentals30.reduce((sum, r) => {
-      if (!r.receiveDate) return sum;
-      const end = r.returnDate ? new Date(r.returnDate) : now;
-      return sum + Math.max(0, (end.getTime() - new Date(r.receiveDate).getTime()) / (24 * 3600 * 1000));
-    }, 0);
+    // Rental-day accumulation is capped at the snapshot date: a rental still
+    // open (or returned later) contributes only the days elapsed by snapshot.
+    const rentalDaysUpTo = (r: { receiveDate: Date | string | null; returnDate: Date | string | null }) => {
+      if (!r.receiveDate) return 0;
+      const rawEnd = r.returnDate ? new Date(r.returnDate) : now;
+      const end = rawEnd.getTime() < now.getTime() ? rawEnd : now;
+      return Math.max(0, (end.getTime() - new Date(r.receiveDate).getTime()) / (24 * 3600 * 1000));
+    };
 
-    const rentalDays90d = rentals90.reduce((sum, r) => {
-      if (!r.receiveDate) return sum;
-      const end = r.returnDate ? new Date(r.returnDate) : now;
-      return sum + Math.max(0, (end.getTime() - new Date(r.receiveDate).getTime()) / (24 * 3600 * 1000));
-    }, 0);
+    const rentalDays30d = rentals30.reduce((sum, r) => sum + rentalDaysUpTo(r), 0);
+    const rentalDays90d = rentals90.reduce((sum, r) => sum + rentalDaysUpTo(r), 0);
 
     const avgRentalDuration = rentals90.length > 0 ? rentalDays90d / rentals90.length : 0;
 
@@ -209,6 +215,7 @@ class EnhancedFeatureEngineeringService {
         and(
           eq(maintenanceEvents.equipmentId, equipmentId),
           sql`${maintenanceEvents.maintenanceDate} >= ${d90.toISOString().split('T')[0]}`,
+          sql`${maintenanceEvents.maintenanceDate} <= ${nowStr}`,
           sql`${maintenanceEvents.maintenanceType} IN ('MAJOR_SERVICE', 'MINOR_SERVICE')`
         )
       );
@@ -220,6 +227,7 @@ class EnhancedFeatureEngineeringService {
         and(
           eq(maintenanceEvents.equipmentId, equipmentId),
           sql`${maintenanceEvents.maintenanceDate} >= ${d180.toISOString().split('T')[0]}`,
+          sql`${maintenanceEvents.maintenanceDate} <= ${nowStr}`,
           sql`${maintenanceEvents.maintenanceType} IN ('MAJOR_SERVICE', 'MINOR_SERVICE')`
         )
       );
@@ -236,11 +244,16 @@ class EnhancedFeatureEngineeringService {
     const maintenanceCost180d = avgEventCost * Math.min(maint180.length, 12);
     const avgDowntimePerEvent = maint90.length > 0 ? 8 : 0;
 
-    // Days since last maintenance
+    // Days since last maintenance (as of the snapshot date, not "ever")
     const [lastMaint] = await db
       .select()
       .from(maintenanceEvents)
-      .where(eq(maintenanceEvents.equipmentId, equipmentId))
+      .where(
+        and(
+          eq(maintenanceEvents.equipmentId, equipmentId),
+          sql`${maintenanceEvents.maintenanceDate} <= ${nowStr}`
+        )
+      )
       .orderBy(desc(maintenanceEvents.maintenanceDate))
       .limit(1);
 
@@ -248,13 +261,14 @@ class EnhancedFeatureEngineeringService {
       ? Math.max(0, (now.getTime() - new Date(lastMaint.maintenanceDate).getTime()) / (24 * 3600 * 1000))
       : null;
 
-    // Mean time between failures
+    // Mean time between failures — history up to the snapshot date only
     const allMaint = await db
       .select()
       .from(maintenanceEvents)
       .where(
         and(
           eq(maintenanceEvents.equipmentId, equipmentId),
+          sql`${maintenanceEvents.maintenanceDate} <= ${nowStr}`,
           sql`${maintenanceEvents.maintenanceType} IN ('MAJOR_SERVICE', 'MINOR_SERVICE')`
         )
       )
