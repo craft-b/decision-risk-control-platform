@@ -28,12 +28,17 @@ RISK_THRESHOLDS = {
     60: {"HIGH": 0.60, "MEDIUM": 0.30},
 }
 
-# Confidence labels for UI display
-MODEL_CONFIDENCE = {
-    10: "moderate",   # ROC-AUC 0.72
-    30: "high",       # ROC-AUC 0.96
-    60: "very high",  # ROC-AUC 0.997
-}
+# Confidence labels are derived from each loaded model's own holdout ROC-AUC
+# (see _confidence_label / _load_artifacts) — never hardcoded, so they can't
+# go stale when a new version is trained.
+def _confidence_label(roc_auc: Optional[float]) -> str:
+    if roc_auc is None:
+        return "unknown"
+    if roc_auc >= 0.90:
+        return f"high (holdout ROC-AUC {roc_auc:.2f})"
+    if roc_auc >= 0.80:
+        return f"moderate (holdout ROC-AUC {roc_auc:.2f})"
+    return f"low (holdout ROC-AUC {roc_auc:.2f})"
 
 
 class MultiHorizonPredictor:
@@ -129,13 +134,26 @@ class MultiHorizonPredictor:
             else:
                 self.feature_importance[h] = {}
 
-        # Hyperparameters from 30d metadata
-        self.hyperparameters: dict = {}
-        meta_files = sorted(REGISTRY.glob("metadata_30d_*.json"), key=_version_key, reverse=True)
-        if meta_files:
-            with open(meta_files[0]) as f:
-                meta = json.load(f)
-                self.hyperparameters = meta.get("hyperparameters", {})
+        # Per-horizon metadata → hyperparameters + honest confidence labels.
+        # Prefer the metadata file matching the loaded model's version; fall
+        # back to latest-by-glob only for legacy registries missing it.
+        self.metadata: dict = {}
+        self.confidence: dict = {}
+        for h in HORIZONS:
+            meta = {}
+            versioned = REGISTRY / f"metadata_{h}d_{self.versions[h]}.json"
+            if versioned.exists():
+                with open(versioned) as f:
+                    meta = json.load(f)
+            else:
+                meta_files = sorted(REGISTRY.glob(f"metadata_{h}d_*.json"), key=_version_key, reverse=True)
+                if meta_files:
+                    with open(meta_files[0]) as f:
+                        meta = json.load(f)
+            self.metadata[h] = meta
+            self.confidence[h] = _confidence_label(meta.get("roc_auc"))
+
+        self.hyperparameters: dict = self.metadata.get(30, {}).get("hyperparameters", {})
 
         print(f"[MH-PREDICTOR] Ready — horizons: {HORIZONS}d, version: {self.version}")
     
@@ -197,7 +215,7 @@ class MultiHorizonPredictor:
                 "failure_probability": round(failure_prob, 4),
                 "risk_level":          risk_level,
                 "risk_score":          round(failure_prob * 100),
-                "model_confidence":    MODEL_CONFIDENCE[h],
+                "model_confidence":    self.confidence.get(h, "unknown"),
                 "top_risk_drivers":    self._get_risk_drivers(snapshot, failure_prob, h),
                 # Per-prediction SHAP attribution: feature → contribution to failure probability.
                 # Positive = pushes toward failure; negative = protective.

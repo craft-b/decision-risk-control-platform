@@ -331,6 +331,24 @@ export const modelTrainingMetrics = mysqlTable("model_training_metrics", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+// Long-format model metrics — one row per (version, horizon, split, metric).
+// Replaces the mis-shaped model_training_metrics table, whose 3-class
+// precision/recall columns were being (ab)used to store per-horizon ROC-AUCs.
+// `split`: 'temporal' (time-based holdout) | 'by_asset' (grouped by equipment).
+export const modelMetrics = mysqlTable("model_metrics", {
+  id: bigint("id", { mode: 'number', unsigned: true }).primaryKey().autoincrement(),
+  modelVersion: varchar("model_version", { length: 50 }).notNull(),
+  horizonDays: int("horizon_days").notNull(),
+  split: varchar("split", { length: 20 }).notNull().default("temporal"),
+  metric: varchar("metric", { length: 60 }).notNull(),
+  value: decimal("value", { precision: 14, scale: 6 }).notNull(),
+  trainedAt: timestamp("trained_at").notNull(),
+  datasetSize: int("dataset_size"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export type ModelMetricRow = typeof modelMetrics.$inferSelect;
+
 export const maintenanceOverrides = mysqlTable("maintenance_overrides", {
   id: bigint("id", { mode: 'number', unsigned: true }).primaryKey().autoincrement(),
   equipmentId: bigint("equipment_id", { mode: 'number', unsigned: true }).notNull(),
