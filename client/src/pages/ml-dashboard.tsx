@@ -900,6 +900,64 @@ export default function MLPerformanceDashboard() {
         </CardContent>
       </Card>
 
+      {/* Operator metrics (ML-3) — evaluated where the business acts */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Operator Metrics</CardTitle>
+          <CardDescription>
+            Evaluated at the HIGH operating threshold. Temporal split answers "same fleet, next
+            quarter"; the by-asset split (GroupKFold over equipment) answers "a new fleet, day one" —
+            the honest deployment question for a customer whose units the model has never seen.
+            Precision@budget = precision inside the weekly top-10%-of-fleet work queue.
+            Lead time = median days from first HIGH flag to the actual failure (must exceed ~7d PM
+            scheduling latency to be actionable).
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="overflow-x-auto rounded-lg border">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-xs text-muted-foreground">
+                <tr>
+                  <th className="p-3 text-left font-medium">Horizon</th>
+                  <th className="p-3 text-left font-medium">Split</th>
+                  <th className="p-3 text-right font-medium">ROC-AUC</th>
+                  <th className="p-3 text-right font-medium">Recall @ HIGH</th>
+                  <th className="p-3 text-right font-medium">Precision @ budget</th>
+                  <th className="p-3 text-right font-medium">Lead time (median)</th>
+                  <th className="p-3 text-right font-medium">Failures flagged</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {horizonKeys.flatMap((h) => {
+                  const t = modelMetrics.horizons?.[h];
+                  const a = modelMetrics.horizonsByAsset?.[h];
+                  const fmtDays = (v?: number) => v === undefined ? "n/a" : `${v.toFixed(0)}d`;
+                  const rows = [
+                    { split: "Temporal", rocAuc: t?.rocAuc, rec: t?.recallFailureOperating, pab: t?.precisionAtBudget, lead: t?.leadTimeMedianDays, flag: t?.leadTimeFailuresFlaggedPct },
+                    ...(a ? [{ split: "By-asset", rocAuc: a.rocAuc, rec: a.recallFailureOperating, pab: a.precisionAtBudget, lead: a.leadTimeMedianDays, flag: a.leadTimeFailuresFlaggedPct }] : []),
+                  ];
+                  return rows.map((r) => (
+                    <tr key={`${h}-${r.split}`}>
+                      <td className="p-3 font-medium">{r.split === "Temporal" ? `${h}d` : ""}</td>
+                      <td className="p-3">{r.split}</td>
+                      <td className="p-3 text-right font-mono">{r.rocAuc?.toFixed(4) ?? "n/a"}</td>
+                      <td className="p-3 text-right font-mono">{pct(r.rec)}</td>
+                      <td className="p-3 text-right font-mono">{pct(r.pab)}</td>
+                      <td className="p-3 text-right font-mono">{fmtDays(r.lead)}</td>
+                      <td className="p-3 text-right font-mono">{pct(r.flag, 0)}</td>
+                    </tr>
+                  ));
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-3 text-xs text-muted-foreground">
+            "n/a" means the metric had nothing to measure on that split (e.g. no evaluable failure
+            events) — never a fabricated default.
+          </p>
+        </CardContent>
+      </Card>
+
       {/* Charts Row 1: Feature Importance & Class Performance */}
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>

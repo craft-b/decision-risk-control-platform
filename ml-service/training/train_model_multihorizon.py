@@ -139,6 +139,20 @@ if str(SCRIPT_DIR) not in sys.path:
 
 HORIZONS = [10, 30, 60]  # days
 
+# ── Operating point & shop-capacity budget (ML-3 operator metrics) ────────────
+# HIGH band threshold used by the serving layer (predictor risk bands 0.30/0.60).
+# Operator metrics are evaluated where the business acts: the HIGH flag.
+OPERATING_THRESHOLD = 0.60
+# precision@budget: the shop can realistically service ~10% of the fleet per
+# week; precision inside that top-K queue is the "will my mechanic trust this
+# list" number, unlike global AUC.
+PM_BUDGET_FRACTION = 0.10
+
+
+def _fmt(v) -> str:
+    """Print helper for metrics that can legitimately be None (no events to measure)."""
+    return f"{v:.3f}" if isinstance(v, (int, float)) else "n/a"
+
 FEATURE_COLS = [
     'asset_age_years',
     'total_hours_lifetime',
@@ -251,9 +265,14 @@ def load_training_data() -> pd.DataFrame:
         else col
         for col in FEATURE_COLS
     ])
+    # ML-11: only rows with observed outcomes train the model. Rows censored by
+    # a predictive intervention (counterfactual unknown) or by the horizon are
+    # excluded from training AND from prevalence accounting. label_status IS NULL
+    # is accepted for pre-migration rows labeled under the legacy rule.
     query = f"""
     SELECT
         {feature_sql},
+        equipment_id,
         will_fail_10d,
         will_fail_30d,
         will_fail_60d,
@@ -262,12 +281,25 @@ def load_training_data() -> pd.DataFrame:
     WHERE will_fail_10d IS NOT NULL
       AND will_fail_30d IS NOT NULL
       AND will_fail_60d IS NOT NULL
+      AND (label_status IS NULL OR label_status = 'observed')
     ORDER BY snapshot_ts
     """
     df = pd.read_sql(query, engine)
+
+    # Censoring accounting — printed so prevalence claims stay honest
+    try:
+        with engine.connect() as conn:
+            cens = conn.execute(text(
+                "SELECT label_status, COUNT(*) FROM asset_feature_snapshots "
+                "WHERE label_status IS NOT NULL GROUP BY label_status"
+            )).fetchall()
+        for status, n in cens:
+            print(f"[DATA] label_status={status}: {n:,} rows")
+    except Exception:
+        pass
     engine.dispose()
 
-    print(f"[DATA] Loaded {len(df):,} fully labeled samples")
+    print(f"[DATA] Loaded {len(df):,} observed labeled samples")
     for h in HORIZONS:
         col = f'will_fail_{h}d'
         rate = df[col].mean() * 100
@@ -281,6 +313,23 @@ def load_training_data() -> pd.DataFrame:
     return df
 
 
+def load_failure_events() -> pd.DataFrame:
+    """
+    Actual breakdown events (REACTIVE_REPAIR) — used for the lead-time operator
+    metric: days from first HIGH flag to the failure event.
+    """
+    engine = get_db_connection()
+    df = pd.read_sql(
+        "SELECT equipment_id, maintenance_date FROM maintenance_events "
+        "WHERE event_source = 'REACTIVE_REPAIR'",
+        engine,
+    )
+    engine.dispose()
+    df['maintenance_date'] = pd.to_datetime(df['maintenance_date'])
+    print(f"[DATA] Loaded {len(df):,} REACTIVE_REPAIR failure events for lead-time metric")
+    return df
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # FEATURE ENGINEERING  (shared across all three horizons)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -288,8 +337,9 @@ def load_training_data() -> pd.DataFrame:
 def prepare_features(df: pd.DataFrame, model_version: str):
     df = df.copy()
 
-    # Drop label columns and timestamp — keep only features
-    label_cols = ['will_fail_10d', 'will_fail_30d', 'will_fail_60d', 'snapshot_ts']
+    # Drop label/meta columns — keep only features. snapshot_ts and equipment_id
+    # ride along in `labels` for the split embargo and grouped evaluation (ML-3).
+    label_cols = ['will_fail_10d', 'will_fail_30d', 'will_fail_60d', 'snapshot_ts', 'equipment_id']
     labels = {col: df.pop(col) for col in label_cols if col in df.columns}
 
     # Encode category
@@ -336,22 +386,177 @@ def prepare_features(df: pd.DataFrame, model_version: str):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# OPERATOR METRICS (ML-3) — the numbers a maintenance manager acts on
+# ─────────────────────────────────────────────────────────────────────────────
+
+def compute_operator_metrics(y_true, y_prob, snapshot_ts, equipment_ids,
+                             failures_df: pd.DataFrame, horizon_days: int,
+                             threshold: float = OPERATING_THRESHOLD) -> dict:
+    """
+    Metrics evaluated at the operating point, not averaged over all thresholds:
+      - recall_failure_operating: share of actual failures flagged HIGH (≥ threshold).
+        Missed failures are the expensive error class.
+      - precision_at_budget: per snapshot date, take the top-K units by predicted
+        probability (K = PM_BUDGET_FRACTION of units scored that date — the shop's
+        weekly capacity) and measure how many were true positives.
+      - lead_time_median_days: median days from the first HIGH flag to the actual
+        failure event; must exceed PM scheduling latency (~7d) to be actionable.
+      - lead_time_failures_flagged_pct: share of evaluable failures that got a
+        HIGH flag at any point in the `horizon_days` before the event.
+    All inputs are positional (same order); NaNs must be pre-masked.
+    """
+    y_true = np.asarray(y_true).astype(int)
+    y_prob = np.asarray(y_prob, dtype=float)
+    frame = pd.DataFrame({
+        'ts':  pd.to_datetime(pd.Series(snapshot_ts).reset_index(drop=True)),
+        'eq':  pd.Series(equipment_ids).reset_index(drop=True).astype(int),
+        'y':   y_true,
+        'p':   y_prob,
+    })
+
+    out: dict = {}
+
+    n_pos = int((frame['y'] == 1).sum())
+    if n_pos > 0:
+        out['recall_failure_operating'] = float(
+            ((frame['p'] >= threshold) & (frame['y'] == 1)).sum() / n_pos
+        )
+    else:
+        out['recall_failure_operating'] = None
+
+    # precision@budget — weekly top-K queue precision
+    precisions = []
+    for _, g in frame.groupby(frame['ts'].dt.date):
+        k = max(1, int(np.ceil(len(g) * PM_BUDGET_FRACTION)))
+        precisions.append(float(g.nlargest(k, 'p')['y'].mean()))
+    out['precision_at_budget'] = float(np.mean(precisions)) if precisions else None
+
+    # lead time — per actual failure with at least one scored snapshot in the
+    # horizon window before the event
+    eval_eq = set(frame['eq'].unique())
+    leads: list = []
+    evaluable = 0
+    ts_min, ts_max = frame['ts'].min(), frame['ts'].max()
+    for _, f in failures_df.iterrows():
+        eq_id = int(f['equipment_id'])
+        fail_ts = f['maintenance_date']
+        if eq_id not in eval_eq:
+            continue
+        # only failures whose lookback window overlaps the evaluated period
+        if fail_ts < ts_min or fail_ts - pd.Timedelta(days=horizon_days) > ts_max:
+            continue
+        w = frame[(frame['eq'] == eq_id)
+                  & (frame['ts'] < fail_ts)
+                  & (frame['ts'] >= fail_ts - pd.Timedelta(days=horizon_days))]
+        if w.empty:
+            continue
+        evaluable += 1
+        hits = w[w['p'] >= threshold]
+        if not hits.empty:
+            leads.append((fail_ts - hits['ts'].min()).days)
+    out['lead_time_median_days'] = float(np.median(leads)) if leads else None
+    out['lead_time_failures_flagged_pct'] = (
+        float(len(leads) / evaluable) if evaluable > 0 else None
+    )
+    out['lead_time_failures_evaluable'] = evaluable
+    out['operating_threshold'] = threshold
+    out['budget_fraction'] = PM_BUDGET_FRACTION
+    return out
+
+
+def grouped_evaluation(X: pd.DataFrame, y: pd.Series, snapshot_ts, equipment_ids,
+                       failures_df: pd.DataFrame, horizon_days: int,
+                       calibration_method: str):
+    """
+    By-asset generalization (ML-3): GroupKFold over equipment_id, pooled
+    out-of-fold predictions. Every asset is scored by a model that never saw
+    any of its rows — this answers "how does it do on a NEW fleet, day one"
+    (the sales scenario), which the temporal holdout cannot answer because
+    every holdout asset also appears in dev with near-identical features.
+    """
+    from sklearn.model_selection import GroupKFold
+
+    groups = pd.Series(equipment_ids).reset_index(drop=True).astype(int)
+    n_assets = groups.nunique()
+    n_splits = min(5, n_assets)
+    if n_splits < 2:
+        return None
+
+    y_np  = pd.Series(y).reset_index(drop=True).astype(int)
+    ts_np = pd.Series(snapshot_ts).reset_index(drop=True)
+    Xp    = X.reset_index(drop=True)
+
+    oof = np.full(len(Xp), np.nan)
+    gkf = GroupKFold(n_splits=n_splits)
+    for tr_idx, te_idx in gkf.split(Xp, y_np, groups):
+        y_tr = y_np.iloc[tr_idx]
+        if y_tr.nunique() < 2:
+            continue
+        rf = RandomForestClassifier(
+            n_estimators=200, max_depth=12, min_samples_split=5,
+            min_samples_leaf=3, max_features='sqrt', class_weight='balanced',
+            random_state=RANDOM_SEED, n_jobs=-1,
+        )
+        model = CalibratedClassifierCV(rf, method=calibration_method, cv=3)
+        X_tr_s, y_tr_s, _ = apply_smote(Xp.iloc[tr_idx], y_tr, random_state=RANDOM_SEED)
+        model.fit(X_tr_s, y_tr_s)
+        proba = model.predict_proba(Xp.iloc[te_idx])
+        if proba.shape[1] == 2:
+            oof[te_idx] = proba[:, 1]
+
+    mask = ~np.isnan(oof)
+    if mask.sum() == 0 or y_np[mask].nunique() < 2:
+        return None
+
+    y_m, p_m = y_np[mask].to_numpy(), oof[mask]
+    result = {
+        'roc_auc':       float(roc_auc_score(y_m, p_m)),
+        'pr_auc':        float(average_precision_score(y_m, p_m)),
+        'positive_rate': float(y_m.mean()),
+        'n_evaluated':   int(mask.sum()),
+        'n_folds':       n_splits,
+    }
+    result.update(compute_operator_metrics(
+        y_m, p_m, ts_np[mask], groups[mask], failures_df, horizon_days
+    ))
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # TRAINING — one model per horizon
 # ─────────────────────────────────────────────────────────────────────────────
 
-def train_horizon_model(X: pd.DataFrame, y: pd.Series, horizon_days: int):
+def train_horizon_model(X: pd.DataFrame, y: pd.Series, horizon_days: int,
+                        snapshot_ts: pd.Series, equipment_ids: pd.Series,
+                        failures_df: pd.DataFrame):
     print(f"\n{'='*60}")
     print(f"[TRAIN] Horizon: {horizon_days}d  |  Positive rate: {y.mean()*100:.1f}%")
 
     # ─────────────────────────────────────────────────────────────────
-    # TEMPORAL HOLDOUT
-    # Final 20% of timeline is held out as the true test set.
-    # This data is never seen during training or CV — it simulates
-    # deploying the model and evaluating on genuinely future data.
+    # TEMPORAL HOLDOUT WITH EMBARGO (ML-3)
+    # Final 20% of timeline is held out as the true test set. Dev rows
+    # whose label window [ts, ts+horizon] crosses the holdout boundary
+    # are dropped (embargo): their labels are realized inside the
+    # holdout period, which would leak future outcome information into
+    # training.
     # ─────────────────────────────────────────────────────────────────
     holdout_idx = int(len(X) * 0.80)
     X_dev,  X_test = X.iloc[:holdout_idx].copy(), X.iloc[holdout_idx:].copy()
     y_dev,  y_test = y.iloc[:holdout_idx].copy(), y.iloc[holdout_idx:].copy()
+    ts_all = pd.to_datetime(pd.Series(snapshot_ts).reset_index(drop=True))
+    ts_dev, ts_test = ts_all.iloc[:holdout_idx], ts_all.iloc[holdout_idx:]
+    eq_all = pd.Series(equipment_ids).reset_index(drop=True).astype(int)
+    eq_test = eq_all.iloc[holdout_idx:]
+
+    holdout_start = ts_test.iloc[0]
+    embargo_cutoff = holdout_start - pd.Timedelta(days=horizon_days)
+    keep = (ts_dev <= embargo_cutoff).to_numpy()
+    n_embargoed = int((~keep).sum())
+    if n_embargoed > 0:
+        X_dev = X_dev.iloc[keep]
+        y_dev = y_dev.iloc[keep]
+    print(f"[SPLIT] Embargo: dropped {n_embargoed} dev rows within "
+          f"{horizon_days}d of holdout boundary ({holdout_start.date()})")
 
     print(f"[SPLIT] Dev: {len(X_dev):,}  Holdout test: {len(X_test):,}")
     print(f"[SPLIT] Dev positive:  {y_dev.mean()*100:.1f}%")
@@ -519,6 +724,34 @@ def train_horizon_model(X: pd.DataFrame, y: pd.Series, horizon_days: int):
         print("[CONTEXT] Note: holdout metrics reflect a distribution shift scenario.")
         print(f"[CONTEXT] CV ROC-AUC ({cv_roc_mean:.4f}) is a more representative performance estimate.")
 
+    # ─────────────────────────────────────────────────────────────────
+    # OPERATOR METRICS on the temporal holdout (ML-3)
+    # ─────────────────────────────────────────────────────────────────
+    op_temporal = compute_operator_metrics(
+        y_test.to_numpy(), y_prob, ts_test, eq_test, failures_df, horizon_days
+    )
+    print(f"[OPERATOR] recall@{OPERATING_THRESHOLD:.2f} (HIGH): "
+          f"{_fmt(op_temporal['recall_failure_operating'])}  "
+          f"precision@budget({PM_BUDGET_FRACTION:.0%}): {_fmt(op_temporal['precision_at_budget'])}")
+    print(f"[OPERATOR] lead time median: {_fmt(op_temporal['lead_time_median_days'])}d  "
+          f"failures flagged: {_fmt(op_temporal['lead_time_failures_flagged_pct'])} "
+          f"(n={op_temporal['lead_time_failures_evaluable']})")
+
+    # ─────────────────────────────────────────────────────────────────
+    # BY-ASSET GROUPED EVALUATION (ML-3)
+    # ─────────────────────────────────────────────────────────────────
+    print(f"[BY-ASSET] GroupKFold evaluation ({horizon_days}d) — this answers "
+          f"'new fleet, day one'; temporal answers 'same fleet, next quarter'")
+    by_asset = grouped_evaluation(
+        X, y, snapshot_ts, equipment_ids, failures_df, horizon_days, calibration_method
+    )
+    if by_asset:
+        print(f"[BY-ASSET] ROC-AUC: {by_asset['roc_auc']:.4f}  PR-AUC: {by_asset['pr_auc']:.4f}  "
+              f"recall@HIGH: {_fmt(by_asset['recall_failure_operating'])}  "
+              f"precision@budget: {_fmt(by_asset['precision_at_budget'])}")
+    else:
+        print("[BY-ASSET] skipped — not enough assets/classes for grouped folds")
+
     # Feature importance from base estimator inside calibrated model
     base_estimator = model.calibrated_classifiers_[0].estimator
     feature_importance = dict(sorted(
@@ -531,6 +764,10 @@ def train_horizon_model(X: pd.DataFrame, y: pd.Series, horizon_days: int):
         print(f"  {feat:<40} {imp:.4f}")
 
     metrics = {
+        'operator_temporal':     op_temporal,
+        'by_asset':              by_asset,
+        'embargo_days':          horizon_days,
+        'embargoed_rows':        n_embargoed,
         'horizon_days':          horizon_days,
         'accuracy':              float(test_score),
         'train_accuracy':        float(train_score),
@@ -589,6 +826,17 @@ def save_horizon_model(model, feature_names: list, metrics: dict,
         'horizon_days':  horizon_days,
         'algorithm':     f"Random Forest (calibrated, {metrics['calibration_method']})",
         'trained_at':    datetime.now().isoformat(),
+        # ML-2: labels come from the fleet simulator's hazard process over
+        # features the model consumes. These metrics verify the pipeline
+        # end-to-end; they are NOT evidence of field predictive performance.
+        'data_source':   'simulated',
+        'metrics_framing': 'pipeline verification on synthetic data — pending real fleet labels',
+        'label_definition': "REACTIVE_REPAIR event in (ts, ts+horizon]; day-0 excluded; "
+                            "intervention-censored rows excluded (label_status)",
+        'embargo_days':  metrics['embargo_days'],
+        'embargoed_rows': metrics['embargoed_rows'],
+        'operator_metrics_temporal': metrics['operator_temporal'],
+        'by_asset':      metrics['by_asset'],
         'accuracy':      round(metrics['accuracy'], 4),
         'train_accuracy': round(metrics['train_accuracy'], 4),
         'roc_auc':       round(metrics['roc_auc'], 4),
@@ -685,12 +933,31 @@ def save_metrics_to_db(all_metrics: dict, dataset_size: int, model_version: str)
                     'confusion_fn':       fn,
                     'confusion_tp':       tp,
                 }
+                # Operator metrics (ML-3) on the temporal split
+                op = m.get('operator_temporal') or {}
+                for name in ('recall_failure_operating', 'precision_at_budget',
+                             'lead_time_median_days', 'lead_time_failures_flagged_pct'):
+                    if op.get(name) is not None:
+                        horizon_metrics[name] = op[name]
+
                 for name, value in horizon_metrics.items():
                     rows.append({
                         'mv': model_version, 'h': int(h), 'split': 'temporal',
                         'metric': name, 'value': float(value),
                         'ta': trained_at, 'ds': dataset_size,
                     })
+
+                # By-asset grouped split (ML-3) — same long format, split='by_asset'
+                ba = m.get('by_asset') or {}
+                for name in ('roc_auc', 'pr_auc', 'positive_rate',
+                             'recall_failure_operating', 'precision_at_budget',
+                             'lead_time_median_days', 'lead_time_failures_flagged_pct'):
+                    if ba.get(name) is not None:
+                        rows.append({
+                            'mv': model_version, 'h': int(h), 'split': 'by_asset',
+                            'metric': name, 'value': float(ba[name]),
+                            'ta': trained_at, 'ds': dataset_size,
+                        })
 
             conn.execute(text("""
                 INSERT INTO model_metrics
@@ -774,6 +1041,7 @@ def main():
 
     # 1. Load data once — shared across all horizons
     df = load_training_data()
+    failures_df = load_failure_events()
 
     # ── Data quality gate ────────────────────────────────────────────────────
     # Runs before feature engineering so checks operate on raw labeled data.
@@ -830,7 +1098,12 @@ def main():
         label_col = f'will_fail_{horizon}d'
         y = labels[label_col].astype(int)
 
-        model, metrics = train_horizon_model(X, y, horizon)
+        model, metrics = train_horizon_model(
+            X, y, horizon,
+            snapshot_ts=labels['snapshot_ts'],
+            equipment_ids=labels['equipment_id'],
+            failures_df=failures_df,
+        )
         path = save_horizon_model(model, feature_names, metrics, model_version, horizon)
 
         all_metrics[horizon] = metrics
@@ -903,11 +1176,19 @@ def main():
         'model_version': model_version,
         'horizons':      HORIZONS,
         'model_paths':   model_paths,
+        # ML-2: metrics verify the pipeline on simulator-generated labels;
+        # they must never be quoted as field predictive performance.
+        'data_source':   'simulated',
+        'metrics_framing': 'pipeline verification on synthetic data — pending real fleet labels',
         'metrics': {
             str(h): {
                 'roc_auc':  round(all_metrics[h]['roc_auc'], 4),
                 'accuracy': round(all_metrics[h]['accuracy'], 4),
                 'pr_auc':   round(all_metrics[h]['pr_auc'], 4),
+                'recall_failure_operating': all_metrics[h]['operator_temporal']['recall_failure_operating'],
+                'precision_at_budget':      all_metrics[h]['operator_temporal']['precision_at_budget'],
+                'lead_time_median_days':    all_metrics[h]['operator_temporal']['lead_time_median_days'],
+                'by_asset_roc_auc': (all_metrics[h]['by_asset'] or {}).get('roc_auc'),
             }
             for h in HORIZONS
         },

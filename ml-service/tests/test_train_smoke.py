@@ -129,6 +129,9 @@ def make_synthetic_df(n_samples: int = 600, seed: int = RANDOM_SEED) -> pd.DataF
     base = pd.Timestamp("2024-01-01")
     df["snapshot_ts"] = [base + pd.Timedelta(days=i) for i in range(len(df))]
 
+    # Asset identity — required for the by-asset grouped evaluation (ML-3)
+    df["equipment_id"] = (np.arange(len(df)) % 30) + 1
+
     # Labels — correlated with high-risk features but not perfectly separable
     combined_score = (
         df["mechanical_wear_score"] / 10
@@ -189,10 +192,22 @@ def trained_models(prepared, tmp_path_factory):
     tm.MODEL_DIR = tmp
     tm.MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
+    # No failure-event history in the synthetic setup — lead-time metrics
+    # legitimately come back None (never fabricated).
+    empty_failures = pd.DataFrame({
+        "equipment_id": pd.Series(dtype=int),
+        "maintenance_date": pd.Series(dtype="datetime64[ns]"),
+    })
+
     results = {}
     for h in HORIZONS:
         y = labels[f"will_fail_{h}d"]
-        model, metrics = train_horizon_model(X, y, h)
+        model, metrics = train_horizon_model(
+            X, y, h,
+            snapshot_ts=labels["snapshot_ts"],
+            equipment_ids=labels["equipment_id"],
+            failures_df=empty_failures,
+        )
         save_horizon_model(model, feature_names, metrics, "v0.test", h)
         results[h] = {"model": model, "metrics": metrics}
 
@@ -301,6 +316,8 @@ class TestTrainingPipeline:
             "horizon_days", "accuracy", "roc_auc", "pr_auc",
             "precision", "recall", "f1", "confusion_matrix",
             "feature_importance", "samples_train", "samples_test",
+            # ML-3: operator metrics + split-integrity additions
+            "operator_temporal", "by_asset", "embargo_days", "embargoed_rows",
         ]
         for h in HORIZONS:
             for key in required_keys:
