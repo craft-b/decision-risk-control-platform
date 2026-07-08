@@ -22,7 +22,6 @@ import {
   ResponsiveContainer,
   LineChart,
   Line,
-  Cell,
 } from "recharts";
 import { DollarSign, TrendingUp, Percent, AlertCircle, Calendar, AlertTriangle, Truck, Wrench, BarChart3, ChevronRight } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
@@ -31,6 +30,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useSimulationState } from "@/hooks/use-predictive-maintenance";
 import { Link } from "wouter";
 import { cn } from "@/lib/utils";
+import { CHART, fmtMoney, fmtMoneyCompact } from "@/lib/chart-theme";
 
 export default function Dashboard() {
   const { data: equipment } = useEquipment();
@@ -121,12 +121,6 @@ export default function Dashboard() {
     .sort((a, b) => b.count - a.count)
     .slice(0, 12);
 
-  const SITE_COLORS = [
-    '#3b82f6', '#22c55e', '#f59e0b', '#8b5cf6', '#ef4444',
-    '#14b8a6', '#ec4899', '#f97316', '#06b6d4', '#84cc16',
-    '#a855f7', '#64748b',
-  ];
-
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       <div className="flex items-center justify-between">
@@ -180,69 +174,64 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Key Financial Metrics */}
+      {/* Key Financial Metrics — neutral stat tiles; color is reserved for semantics */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <Card className="shadow-sm hover:shadow-md transition-shadow border-l-4 border-l-blue-500">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Week-to-Date Revenue</CardTitle>
-            <DollarSign className="h-4 w-4 text-blue-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-blue-600">
-              ${weekToDateRevenue.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+        <Card>
+          <CardContent className="pt-5">
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Week-to-Date Revenue</p>
+              <DollarSign className="h-4 w-4 text-muted-foreground/60" />
             </div>
-            <p className="text-xs text-muted-foreground">
+            <div className="mt-2 font-mono text-[26px] font-semibold leading-none tracking-tight">
+              {fmtMoney(weekToDateRevenue)}
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
               {differenceInDays(today, weekStart) + 1} days elapsed
             </p>
           </CardContent>
         </Card>
-        
-        <Card className="shadow-sm hover:shadow-md transition-shadow border-l-4 border-l-green-500">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">30-Day Revenue</CardTitle>
-            <TrendingUp className="h-4 w-4 text-green-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-green-600">
-              ${monthlyRevenue.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+
+        <Card>
+          <CardContent className="pt-5">
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">30-Day Revenue</p>
+              <TrendingUp className="h-4 w-4 text-muted-foreground/60" />
             </div>
-            <p className="text-xs text-muted-foreground">Accrued revenue, rolling 30 days</p>
+            <div className="mt-2 font-mono text-[26px] font-semibold leading-none tracking-tight">
+              {fmtMoney(monthlyRevenue)}
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">Accrued revenue, rolling 30 days</p>
           </CardContent>
         </Card>
 
-        <Card className="shadow-sm hover:shadow-md transition-shadow border-l-4 border-l-purple-500">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Fleet Utilization</CardTitle>
-            <Percent className="h-4 w-4 text-purple-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-purple-600">
+        <Card>
+          <CardContent className="pt-5">
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Fleet Utilization</p>
+              <Percent className="h-4 w-4 text-muted-foreground/60" />
+            </div>
+            <div className="mt-2 font-mono text-[26px] font-semibold leading-none tracking-tight">
               {utilizationRate.toFixed(1)}%
             </div>
-            <p className="text-xs text-muted-foreground">
-              {rentedEquipment} of {totalEquipment} assets rented
-            </p>
-            <p className="text-xs text-purple-500 font-medium mt-1">
-              {avgUtilization30d.toFixed(1)}% avg last 30 days
+            <p className="mt-2 text-xs text-muted-foreground">
+              {rentedEquipment} of {totalEquipment} assets rented · {avgUtilization30d.toFixed(1)}% 30-day avg
             </p>
           </CardContent>
         </Card>
 
-        <Card className="shadow-sm hover:shadow-md transition-shadow border-l-4 border-l-orange-500">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Outstanding A/R</CardTitle>
-            <AlertCircle className="h-4 w-4 text-orange-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-orange-600">
-              ${outstandingAR.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+        <Card>
+          <CardContent className="pt-5">
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Outstanding A/R</p>
+              <AlertCircle className="h-4 w-4 text-muted-foreground/60" />
             </div>
-            <p className="text-xs text-muted-foreground">Unpaid completed rentals</p>
-            {uninvoicedCount > 0 && (
-              <p className="text-xs text-orange-500 font-medium mt-1">
-                {uninvoicedCount} rental{uninvoicedCount !== 1 ? 's' : ''} awaiting invoice
-              </p>
-            )}
+            <div className="mt-2 font-mono text-[26px] font-semibold leading-none tracking-tight">
+              {fmtMoney(outstandingAR)}
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Unpaid completed rentals
+              {uninvoicedCount > 0 && ` · ${uninvoicedCount} awaiting invoice`}
+            </p>
           </CardContent>
         </Card>
       </div>
@@ -263,31 +252,33 @@ export default function Dashboard() {
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={dailyRevenue} margin={{ top: 4, right: 4, bottom: 4, left: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+                    <CartesianGrid {...CHART.grid} vertical={false} />
                     <XAxis
                       dataKey="day"
-                      stroke="#888888"
-                      fontSize={11}
+                      stroke={CHART.axis.stroke}
+                      tick={CHART.axis.tick}
                       tickLine={false}
+                      axisLine={false}
                       interval={4}
                       tickFormatter={(v) => {
                         try { return format(new Date(v + 'T00:00:00'), 'MMM d'); } catch { return v; }
                       }}
                     />
                     <YAxis
-                      stroke="#888888"
-                      fontSize={11}
+                      stroke={CHART.axis.stroke}
+                      tick={CHART.axis.tick}
                       tickLine={false}
-                      tickFormatter={(v) => `$${v >= 1000 ? `${(v / 1000).toFixed(0)}k` : v}`}
+                      axisLine={false}
+                      tickFormatter={fmtMoneyCompact}
                     />
                     <Tooltip
-                      formatter={(value: number) => [`$${value.toLocaleString()}`, 'Revenue']}
+                      formatter={(value: number) => [fmtMoney(value), 'Revenue']}
                       labelFormatter={(label) => {
                         try { return format(new Date(label + 'T00:00:00'), 'MMM d, yyyy'); } catch { return label; }
                       }}
-                      contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                      {...CHART.tooltip}
                     />
-                    <Bar dataKey="revenue" fill="#3b82f6" radius={[3, 3, 0, 0]} name="Revenue" />
+                    <Bar dataKey="revenue" fill={CHART.data} radius={CHART.barRadius} name="Revenue" maxBarSize={20} />
                   </BarChart>
                 </ResponsiveContainer>
               )}
@@ -304,12 +295,13 @@ export default function Dashboard() {
             <div className="h-[350px] w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={monthlyTrend}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <CartesianGrid {...CHART.grid} vertical={false} />
                   <XAxis
                     dataKey="month"
-                    stroke="#888888"
-                    fontSize={11}
+                    stroke={CHART.axis.stroke}
+                    tick={CHART.axis.tick}
                     tickLine={false}
+                    axisLine={false}
                     tickFormatter={(v: string) => {
                       try {
                         const [y, m] = v.split('-').map(Number);
@@ -318,14 +310,15 @@ export default function Dashboard() {
                     }}
                   />
                   <YAxis
-                    stroke="#888888"
-                    fontSize={12}
+                    stroke={CHART.axis.stroke}
+                    tick={CHART.axis.tick}
                     tickLine={false}
-                    tickFormatter={(value) => `$${value / 1000}k`}
+                    axisLine={false}
+                    tickFormatter={fmtMoneyCompact}
                   />
                   <Tooltip
-                    contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                    formatter={(value) => [`$${Number(value).toLocaleString()}`, 'Revenue']}
+                    {...CHART.tooltip}
+                    formatter={(value) => [fmtMoney(Number(value)), 'Revenue']}
                     labelFormatter={(label: string) => {
                       try {
                         const [y, m] = label.split('-').map(Number);
@@ -336,10 +329,10 @@ export default function Dashboard() {
                   <Line
                     type="monotone"
                     dataKey="revenue"
-                    stroke="#3b82f6"
-                    strokeWidth={3}
-                    dot={{ r: 4 }}
-                    activeDot={{ r: 6 }}
+                    stroke={CHART.data}
+                    strokeWidth={CHART.line.strokeWidth}
+                    dot={CHART.line.dot}
+                    activeDot={CHART.line.activeDot}
                     name="Revenue"
                   />
                 </LineChart>
@@ -368,32 +361,30 @@ export default function Dashboard() {
                   layout="vertical"
                   margin={{ top: 4, right: 24, bottom: 4, left: 8 }}
                 >
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" horizontal={false} />
+                  <CartesianGrid {...CHART.grid} horizontal={false} />
                   <XAxis
                     type="number"
                     allowDecimals={false}
-                    stroke="#888888"
-                    fontSize={12}
+                    stroke={CHART.axis.stroke}
+                    tick={CHART.axis.tick}
                     tickLine={false}
+                    axisLine={false}
                   />
                   <YAxis
                     type="category"
                     dataKey="site"
-                    stroke="#888888"
-                    fontSize={11}
+                    stroke={CHART.axis.stroke}
+                    tick={CHART.axis.tick}
                     tickLine={false}
+                    axisLine={false}
                     width={140}
-                    tick={{ fill: '#475569' }}
                   />
                   <Tooltip
                     formatter={(value: number) => [value, 'Units deployed']}
-                    contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                    {...CHART.tooltip}
                   />
-                  <Bar dataKey="count" radius={[0, 4, 4, 0]}>
-                    {equipmentBySite.map((_, i) => (
-                      <Cell key={i} fill={SITE_COLORS[i % SITE_COLORS.length]} />
-                    ))}
-                  </Bar>
+                  {/* One measure, one hue — identity lives in the y-axis labels */}
+                  <Bar dataKey="count" fill={CHART.data} radius={CHART.barRadiusHorizontal} maxBarSize={16} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -406,7 +397,7 @@ export default function Dashboard() {
         <Card className="shadow-sm">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
             <CardTitle className="text-base font-semibold flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4 text-orange-500" />
+              <AlertTriangle className="h-4 w-4 text-risk-medium" />
               Maintenance Alerts
             </CardTitle>
             <Link href="/equipment">
@@ -417,29 +408,29 @@ export default function Dashboard() {
           </CardHeader>
           <CardContent className="space-y-5">
 
-            {/* Overdue section */}
+            {/* Overdue section — semantic HIGH */}
             {overdueCount > 0 && (
               <div>
                 <div className="flex items-center gap-2 mb-3">
-                  <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-red-600">
-                    <span className="inline-block w-2 h-2 rounded-full bg-red-500" />
+                  <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-risk-high">
+                    <span className="inline-block w-2 h-2 rounded-full bg-risk-high" />
                     Overdue
                     <span className="ml-1 tabular-nums">({overdueCount})</span>
                   </span>
-                  <div className="flex-1 h-px bg-red-200" />
+                  <div className="flex-1 h-px bg-border" />
                 </div>
                 <div className="space-y-0.5">
                   {overdueItems.map((item) => (
                     <button
                       key={item.id}
                       onClick={() => setSchedulingEquip({ id: item.id, name: item.name })}
-                      className="w-full flex items-center justify-between px-3 py-2 rounded-md text-left hover:bg-red-50 transition-colors group"
+                      className="w-full flex items-center justify-between px-3 py-2 rounded-md text-left hover:bg-muted transition-colors group"
                     >
                       <div className="min-w-0 mr-3">
-                        <p className="text-sm font-medium text-foreground group-hover:text-red-900 truncate">{item.name}</p>
+                        <p className="text-sm font-medium text-foreground truncate">{item.name}</p>
                         <p className="text-xs text-muted-foreground font-mono">{item.equipmentId}</p>
                       </div>
-                      <Badge className="shrink-0 bg-red-100 text-red-700 border-red-200 hover:bg-red-100 text-xs font-medium">
+                      <Badge variant="outline" className="shrink-0 bg-risk-high-surface text-risk-high border-risk-high text-xs font-medium tabular-nums">
                         {Math.abs(Number(item.daysUntilDue))}d overdue
                       </Badge>
                     </button>
@@ -448,16 +439,16 @@ export default function Dashboard() {
               </div>
             )}
 
-            {/* Due Soon section */}
+            {/* Due Soon section — semantic MEDIUM */}
             {dueSoonCount > 0 && (
               <div>
                 <div className="flex items-center gap-2 mb-3">
-                  <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-orange-600">
-                    <span className="inline-block w-2 h-2 rounded-full bg-orange-500" />
+                  <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-risk-medium">
+                    <span className="inline-block w-2 h-2 rounded-full bg-risk-medium" />
                     Due Soon
                     <span className="ml-1 tabular-nums">({dueSoonCount})</span>
                   </span>
-                  <div className="flex-1 h-px bg-orange-200" />
+                  <div className="flex-1 h-px bg-border" />
                 </div>
                 <div className="space-y-0.5">
                   {dueSoonItems.map((item) => {
@@ -466,13 +457,13 @@ export default function Dashboard() {
                       <button
                         key={item.id}
                         onClick={() => setSchedulingEquip({ id: item.id, name: item.name })}
-                        className="w-full flex items-center justify-between px-3 py-2 rounded-md text-left hover:bg-orange-50 transition-colors group"
+                        className="w-full flex items-center justify-between px-3 py-2 rounded-md text-left hover:bg-muted transition-colors group"
                       >
                         <div className="min-w-0 mr-3">
-                          <p className="text-sm font-medium text-foreground group-hover:text-orange-900 truncate">{item.name}</p>
+                          <p className="text-sm font-medium text-foreground truncate">{item.name}</p>
                           <p className="text-xs text-muted-foreground font-mono">{item.equipmentId}</p>
                         </div>
-                        <Badge className="shrink-0 bg-orange-100 text-orange-700 border-orange-200 hover:bg-orange-100 text-xs font-medium">
+                        <Badge variant="outline" className="shrink-0 bg-risk-medium-surface text-risk-medium border-risk-medium text-xs font-medium tabular-nums">
                           {days === 0 ? 'Today' : `${days}d`}
                         </Badge>
                       </button>
@@ -498,8 +489,8 @@ export default function Dashboard() {
               {topJobSites.map((site, index) => (
                 <div key={site.name} className="flex items-center justify-between border-b pb-3 last:border-0">
                   <div className="flex items-center gap-4">
-                    <div className="flex items-center justify-center w-8 h-8 rounded-full bg-blue-100 text-blue-700 font-bold text-sm">
-                      #{index + 1}
+                    <div className="flex items-center justify-center w-7 h-7 rounded-md bg-muted font-mono font-semibold text-xs text-muted-foreground">
+                      {index + 1}
                     </div>
                     <div>
                       <p className="font-medium">{site.name}</p>
@@ -509,10 +500,10 @@ export default function Dashboard() {
                     </div>
                   </div>
                   <div className="text-right">
-                    <p className="font-bold text-green-600">
-                      ${site.revenue.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                    <p className="font-mono font-semibold tabular-nums">
+                      {fmtMoney(site.revenue)}
                     </p>
-                    <p className="text-xs text-muted-foreground">
+                    <p className="text-xs text-muted-foreground font-mono tabular-nums">
                       ${(site.revenue / site.equipmentCount).toFixed(0)}/rental
                     </p>
                   </div>
@@ -566,8 +557,8 @@ export default function Dashboard() {
                   return (
                     <div key={equip.id} className="flex items-center justify-between border-b pb-3 last:border-0">
                       <div className="flex items-center gap-4">
-                        <div className="flex items-center justify-center w-8 h-8 rounded-full bg-green-100 text-green-700 font-bold text-sm">
-                          #{index + 1}
+                        <div className="flex items-center justify-center w-7 h-7 rounded-md bg-muted font-mono font-semibold text-xs text-muted-foreground">
+                          {index + 1}
                         </div>
                         <div>
                           <p className="font-medium">{equip.name}</p>
@@ -577,8 +568,8 @@ export default function Dashboard() {
                         </div>
                       </div>
                       <div className="text-right">
-                        <p className="font-bold text-blue-600">
-                          ${totalRevenue.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                        <p className="font-mono font-semibold tabular-nums">
+                          {fmtMoney(totalRevenue)}
                         </p>
                         <p className="text-xs text-muted-foreground">
                           {equipmentRentals.length} rental{equipmentRentals.length !== 1 ? 's' : ''}

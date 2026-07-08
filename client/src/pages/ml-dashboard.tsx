@@ -52,6 +52,7 @@ import {
 } from "lucide-react";
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
+import { CHART } from "@/lib/chart-theme";
 
 const PSI_THRESHOLDS = { WARNING: 0.1, ALERT: 0.2 };
 
@@ -63,24 +64,25 @@ const FEATURE_LABELS: Record<string, string> = {
   hours_used_90d:             "Hours Used (90d)",
 };
 
+// Drift states are semantic status — they wear the reserved risk tokens
 function statusBadgeClass(status: string) {
-  return status === "ALERT"   ? "bg-red-100 text-red-800 border-red-300" :
-         status === "WARNING" ? "bg-yellow-100 text-yellow-800 border-yellow-300" :
-                                "bg-green-100 text-green-800 border-green-300";
+  return status === "ALERT"   ? "bg-risk-high-surface text-risk-high border-risk-high" :
+         status === "WARNING" ? "bg-risk-medium-surface text-risk-medium border-risk-medium" :
+                                "bg-risk-low-surface text-risk-low border-risk-low";
 }
 
 function statusBorderClass(status: string) {
-  return status === "ALERT"   ? "border-red-500 bg-red-50" :
-         status === "WARNING" ? "border-yellow-500 bg-yellow-50" :
-         status === "STABLE"  ? "border-green-500 bg-green-50" :
-                                "border-slate-200";
+  return status === "ALERT"   ? "border-l-risk-high" :
+         status === "WARNING" ? "border-l-risk-medium" :
+         status === "STABLE"  ? "border-l-risk-low" :
+                                "border-l-border";
 }
 
 function statusTextClass(status: string) {
-  return status === "ALERT"   ? "text-red-700" :
-         status === "WARNING" ? "text-yellow-700" :
-         status === "STABLE"  ? "text-green-700" :
-                                "text-slate-500";
+  return status === "ALERT"   ? "text-risk-high" :
+         status === "WARNING" ? "text-risk-medium" :
+         status === "STABLE"  ? "text-risk-low" :
+                                "text-muted-foreground";
 }
 
 function DriftMonitorCard() {
@@ -154,9 +156,9 @@ function DriftMonitorCard() {
               {drift.features.map((f) => {
                 const psiPct = Math.min(f.psi / PSI_THRESHOLDS.ALERT, 1);
                 const barColor =
-                  f.status === "ALERT"   ? "bg-red-500" :
-                  f.status === "WARNING" ? "bg-yellow-400" :
-                                          "bg-green-500";
+                  f.status === "ALERT"   ? "bg-risk-high" :
+                  f.status === "WARNING" ? "bg-risk-medium" :
+                                          "bg-risk-low";
                 return (
                   <div key={f.feature} className="space-y-1">
                     <div className="flex items-center justify-between text-sm">
@@ -170,16 +172,16 @@ function DriftMonitorCard() {
                         <Badge
                           variant="outline"
                           className={
-                            f.status === "ALERT"   ? "text-red-700 border-red-300" :
-                            f.status === "WARNING" ? "text-yellow-700 border-yellow-300" :
-                                                     "text-green-700 border-green-300"
+                            f.status === "ALERT"   ? "text-risk-high border-risk-high" :
+                            f.status === "WARNING" ? "text-risk-medium border-risk-medium" :
+                                                     "text-risk-low border-risk-low"
                           }
                         >
                           {f.status}
                         </Badge>
                       </div>
                     </div>
-                    <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
+                    <div className="h-2 rounded-full bg-muted overflow-hidden">
                       <div
                         className={`h-full rounded-full transition-all ${barColor}`}
                         style={{ width: `${psiPct * 100}%` }}
@@ -192,9 +194,9 @@ function DriftMonitorCard() {
 
             {/* Legend */}
             <div className="flex gap-4 text-xs text-muted-foreground pt-1">
-              <span><span className="font-medium text-green-600">Stable</span> PSI &lt; 0.10</span>
-              <span><span className="font-medium text-yellow-600">Warning</span> 0.10 – 0.20</span>
-              <span><span className="font-medium text-red-600">Alert</span> &gt; 0.20 → retrain recommended</span>
+              <span><span className="font-medium text-risk-low">Stable</span> PSI &lt; 0.10</span>
+              <span><span className="font-medium text-risk-medium">Warning</span> 0.10 – 0.20</span>
+              <span><span className="font-medium text-risk-high">Alert</span> &gt; 0.20 → retrain recommended</span>
             </div>
           </div>
         )}
@@ -254,9 +256,9 @@ function PredictionDriftCard() {
             <div className="space-y-3">
               {data.horizons.map((h) => {
                 const psiPct   = Math.min(h.score_psi / 0.20, 1);
-                const barColor = h.score_status === "ALERT"   ? "bg-red-500" :
-                                 h.score_status === "WARNING" ? "bg-yellow-400" :
-                                                               "bg-green-500";
+                const barColor = h.score_status === "ALERT"   ? "bg-risk-high" :
+                                 h.score_status === "WARNING" ? "bg-risk-medium" :
+                                                               "bg-risk-low";
                 const highDelta  = ((h.high_pct   - h.ref_high_pct)   * 100).toFixed(1);
                 const highArrow  = h.high_pct > h.ref_high_pct ? "↑" : h.high_pct < h.ref_high_pct ? "↓" : "–";
                 return (
@@ -270,7 +272,7 @@ function PredictionDriftCard() {
                         </Badge>
                       </div>
                     </div>
-                    <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
+                    <div className="h-2 rounded-full bg-muted overflow-hidden">
                       <div className={`h-full rounded-full transition-all ${barColor}`}
                            style={{ width: `${psiPct * 100}%` }} />
                     </div>
@@ -285,9 +287,9 @@ function PredictionDriftCard() {
             </div>
 
             <div className="flex gap-4 text-xs text-muted-foreground pt-1">
-              <span><span className="font-medium text-green-600">Stable</span> PSI &lt; 0.10</span>
-              <span><span className="font-medium text-yellow-600">Warning</span> 0.10 – 0.20</span>
-              <span><span className="font-medium text-red-600">Alert</span> &gt; 0.20 → investigate</span>
+              <span><span className="font-medium text-risk-low">Stable</span> PSI &lt; 0.10</span>
+              <span><span className="font-medium text-risk-medium">Warning</span> 0.10 – 0.20</span>
+              <span><span className="font-medium text-risk-high">Alert</span> &gt; 0.20 → investigate</span>
             </div>
           </div>
         )}
@@ -358,15 +360,15 @@ function BiasDriftCard() {
                   >
                     <div className="flex items-center gap-2">
                       {isAlert
-                        ? <AlertCircle className="h-4 w-4 text-red-500 shrink-0" />
-                        : <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />}
+                        ? <AlertCircle className="h-4 w-4 text-risk-high shrink-0" />
+                        : <CheckCircle2 className="h-4 w-4 text-risk-low shrink-0" />}
                       <span className="font-medium">{c.category}</span>
                     </div>
                     <div className="flex items-center gap-3 text-xs text-muted-foreground">
                       <span>HIGH: {highPct}% (ref {refPct}%)</span>
                       <Badge
                         variant="outline"
-                        className={isAlert ? "text-red-700 border-red-300" : "text-green-700 border-green-300"}
+                        className={isAlert ? "text-risk-high border-risk-high" : "text-risk-low border-risk-low"}
                       >
                         {isAlert ? `${direction} by ${deviationPct}pp` : `±${deviationPct}pp`}
                       </Badge>
@@ -390,9 +392,9 @@ function BiasDriftCard() {
 // ── Data Quality Card ─────────────────────────────────────────────────────────
 
 function dqStatusIcon(status: DQCheck["status"]) {
-  if (status === "PASS") return <CheckCircle2 className="h-4 w-4 text-green-600 shrink-0 mt-0.5" />;
+  if (status === "PASS") return <CheckCircle2 className="h-4 w-4 text-risk-low shrink-0 mt-0.5" />;
   if (status === "WARN") return <AlertCircle  className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />;
-  return <XCircle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />;
+  return <XCircle className="h-4 w-4 text-risk-high shrink-0 mt-0.5" />;
 }
 
 function DataQualityCard() {
@@ -460,7 +462,7 @@ function DataQualityCard() {
                 <div className="min-w-0">
                   <span className="font-mono text-xs text-muted-foreground mr-2">{c.check}</span>
                   <span className={
-                    c.status === "FAIL" ? "text-red-700" :
+                    c.status === "FAIL" ? "text-risk-high" :
                     c.status === "WARN" ? "text-amber-700" : "text-slate-700"
                   }>{c.message}</span>
                 </div>
@@ -514,7 +516,7 @@ function HorizonRow({
       </div>
       <div className="text-center text-xs font-mono">
         {delta != null ? (
-          <span className={delta > 0.005 ? "text-green-600 font-semibold" : delta < -0.005 ? "text-red-500 font-semibold" : "text-muted-foreground"}>
+          <span className={delta > 0.005 ? "text-risk-low font-semibold" : delta < -0.005 ? "text-risk-high font-semibold" : "text-muted-foreground"}>
             {delta > 0 ? "+" : ""}{(delta * 100).toFixed(1)}pp
           </span>
         ) : (
@@ -551,7 +553,7 @@ function ChampionChallengerCard() {
         <div className="flex items-start justify-between">
           <div>
             <CardTitle className="flex items-center gap-2">
-              <Swords className="h-5 w-5 text-purple-600" />
+              <Swords className="h-5 w-5 text-muted-foreground" />
               Champion vs Challenger
             </CardTitle>
             <CardDescription className="mt-1">
@@ -581,12 +583,12 @@ function ChampionChallengerCard() {
         <div className="grid grid-cols-[5rem_1fr_1fr_6rem] gap-2 items-center">
           <span />
           <div className="flex items-center gap-2 justify-center">
-            <Trophy className="h-4 w-4 text-yellow-500" />
+            <Trophy className="h-4 w-4 text-risk-medium" />
             <span className="font-semibold text-sm">{compare.champion.version ?? "—"}</span>
             <Badge className="bg-yellow-100 text-yellow-800 border-yellow-300 text-xs">champion</Badge>
           </div>
           <div className="flex items-center gap-2 justify-center">
-            <Swords className="h-4 w-4 text-purple-500" />
+            <Swords className="h-4 w-4 text-muted-foreground" />
             <span className="font-semibold text-sm">{compare.challenger?.version ?? "—"}</span>
             {compare.challenger ? (
               <Badge className="bg-purple-100 text-purple-800 border-purple-300 text-xs">challenger</Badge>
@@ -636,7 +638,7 @@ export default function MLPerformanceDashboard() {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-center">
-          <Loader2 className="h-8 w-8 animate-spin text-blue-600 mx-auto mb-4" />
+          <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto mb-4" />
           <p className="text-muted-foreground">Loading model metrics...</p>
         </div>
       </div>
@@ -680,7 +682,7 @@ export default function MLPerformanceDashboard() {
         <div className="text-center space-y-3">
           <div className="flex justify-center">
             <div className="rounded-full bg-blue-100 p-4">
-              <Brain className="h-10 w-10 text-blue-600" />
+              <Brain className="h-10 w-10 text-primary" />
             </div>
           </div>
           <h2 className="text-2xl font-bold">ML Dashboard isn't ready yet</h2>
@@ -699,7 +701,7 @@ export default function MLPerformanceDashboard() {
             >
               <div className="mt-0.5 shrink-0">
                 {step.done ? (
-                  <CheckCircle2 className="h-5 w-5 text-green-600" />
+                  <CheckCircle2 className="h-5 w-5 text-risk-low" />
                 ) : (
                   <div className="h-5 w-5 rounded-full border-2 border-muted-foreground/40 flex items-center justify-center text-xs font-bold text-muted-foreground">
                     {i + 1}
@@ -771,80 +773,83 @@ export default function MLPerformanceDashboard() {
         </p>
       </div>
 
-      {/* Model Status Alert — states data provenance up front */}
-      <Alert className="border-blue-200 bg-blue-50">
-        <CheckCircle2 className="h-4 w-4 text-blue-600" />
-        <AlertDescription className="text-blue-900">
-          <strong>Model {modelMetrics.version}</strong> • trained {modelMetrics.trainedAt ? new Date(modelMetrics.trainedAt).toLocaleDateString() : "—"} •
-          30d holdout ROC-AUC: {m30?.rocAuc?.toFixed(3) ?? "n/a"} •{" "}
-          <Badge variant="outline" className="align-middle border-amber-300 bg-amber-50 text-amber-800">
+      {/* Model provenance strip — version, training date, data source up front */}
+      <Alert className="border-border bg-card">
+        <CheckCircle2 className="h-4 w-4 text-primary" />
+        <AlertDescription className="text-foreground">
+          <span className="font-mono font-semibold">{modelMetrics.version}</span>
+          <span className="text-muted-foreground"> · trained {modelMetrics.trainedAt ? new Date(modelMetrics.trainedAt).toLocaleDateString() : "—"} · 30d holdout ROC-AUC </span>
+          <span className="font-mono font-semibold tabular-nums">{m30?.rocAuc?.toFixed(3) ?? "n/a"}</span>
+          {"  "}
+          <Badge variant="outline" className="ml-2 align-middle bg-risk-medium-surface text-risk-medium border-risk-medium">
             {modelMetrics.dataSource === "simulated" ? "Simulated data" : modelMetrics.dataSource}
           </Badge>
           {modelMetrics.dataSource === "simulated" && (
-            <span className="block text-xs text-blue-800/80 mt-1">
+            <span className="block text-xs text-muted-foreground mt-1">
               Metrics verify the training pipeline on simulator-generated labels — they are not field performance.
             </span>
           )}
         </AlertDescription>
       </Alert>
 
-      {/* Key Metrics Cards — 30d horizon (primary operational window), temporal holdout */}
+      {/* Key Metrics Cards — 30d horizon (primary operational window), temporal holdout.
+          Neutral stat tiles: the numbers carry the weight, not decoration. */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <Card className="border-l-4 border-l-blue-500">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">ROC-AUC (30d)</CardTitle>
-            <Target className="h-4 w-4 text-blue-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-blue-600">
+        <Card>
+          <CardContent className="pt-5">
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">ROC-AUC (30d)</p>
+              <Target className="h-4 w-4 text-muted-foreground/60" />
+            </div>
+            <div className="mt-2 font-mono text-[26px] font-semibold leading-none tracking-tight">
               {m30?.rocAuc?.toFixed(3) ?? "n/a"}
             </div>
-            <p className="text-xs text-muted-foreground">
+            <p className="mt-2 text-xs text-muted-foreground">
               Temporal holdout, 30-day horizon
             </p>
           </CardContent>
         </Card>
 
-        <Card className="border-l-4 border-l-green-500">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Failure Recall (30d)</CardTitle>
-            <Activity className="h-4 w-4 text-green-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-green-600">
+        <Card>
+          <CardContent className="pt-5">
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Failure Recall (30d)</p>
+              <Activity className="h-4 w-4 text-muted-foreground/60" />
+            </div>
+            <div className="mt-2 font-mono text-[26px] font-semibold leading-none tracking-tight">
               {pct(m30?.recallFailure)}
             </div>
-            <p className="text-xs text-muted-foreground">
+            <p className="mt-2 text-xs text-muted-foreground">
               Share of actual failures caught — the costly error is missing one
             </p>
           </CardContent>
         </Card>
 
-        <Card className="border-l-4 border-l-purple-500">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Failure Precision (30d)</CardTitle>
-            <TrendingUp className="h-4 w-4 text-purple-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-purple-600">
+        <Card>
+          <CardContent className="pt-5">
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Failure Precision (30d)</p>
+              <TrendingUp className="h-4 w-4 text-muted-foreground/60" />
+            </div>
+            <div className="mt-2 font-mono text-[26px] font-semibold leading-none tracking-tight">
               {pct(m30?.precisionFailure)}
             </div>
-            <p className="text-xs text-muted-foreground">
+            <p className="mt-2 text-xs text-muted-foreground">
               How often a flagged unit actually fails
             </p>
           </CardContent>
         </Card>
 
-        <Card className="border-l-4 border-l-orange-500">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">PR-AUC (30d)</CardTitle>
-            <Zap className="h-4 w-4 text-orange-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-orange-600">
+        <Card>
+          <CardContent className="pt-5">
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">PR-AUC (30d)</p>
+              <Zap className="h-4 w-4 text-muted-foreground/60" />
+            </div>
+            <div className="mt-2 font-mono text-[26px] font-semibold leading-none tracking-tight">
               {m30?.prAuc?.toFixed(3) ?? "n/a"}
             </div>
-            <p className="text-xs text-muted-foreground">
+            <p className="mt-2 text-xs text-muted-foreground">
               Precision-recall trade-off; baseline = positive rate ({pct(m30?.positiveRateTest, 0)})
             </p>
           </CardContent>
@@ -978,18 +983,31 @@ export default function MLPerformanceDashboard() {
                 <div className="h-[350px] w-full">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={featureImportance} layout="vertical">
-                      <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" horizontal={true} vertical={false} />
-                      <XAxis type="number" domain={[0, 0.3]} tickFormatter={(value) => `${(value * 100).toFixed(0)}%`} />
-                      <YAxis type="category" dataKey="feature" width={150} fontSize={12} />
+                      <CartesianGrid {...CHART.grid} horizontal={true} vertical={false} />
+                      <XAxis
+                        type="number"
+                        domain={[0, 0.3]}
+                        tickFormatter={(value) => `${(value * 100).toFixed(0)}%`}
+                        stroke={CHART.axis.stroke}
+                        tick={CHART.axis.tick}
+                        tickLine={false}
+                        axisLine={false}
+                      />
+                      <YAxis
+                        type="category"
+                        dataKey="feature"
+                        width={150}
+                        stroke={CHART.axis.stroke}
+                        tick={CHART.axis.tick}
+                        tickLine={false}
+                        axisLine={false}
+                      />
                       <Tooltip
                         formatter={(value: number) => `${(value * 100).toFixed(1)}%`}
-                        contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                        {...CHART.tooltip}
                       />
-                      <Bar dataKey="importance" radius={[0, 4, 4, 0]}>
-                        {featureImportance.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={`hsl(${220 - index * 20}, 70%, 50%)`} />
-                        ))}
-                      </Bar>
+                      {/* One measure (importance) — one hue; magnitude is the bar length */}
+                      <Bar dataKey="importance" fill={CHART.data} radius={CHART.barRadiusHorizontal} maxBarSize={16} />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
@@ -1015,18 +1033,19 @@ export default function MLPerformanceDashboard() {
           <CardContent>
             <div className="h-[350px] w-full">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={failureClassPerformance}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
-                  <XAxis dataKey="horizon" />
-                  <YAxis domain={[0, 1]} tickFormatter={(value) => `${(value * 100).toFixed(0)}%`} />
+                <BarChart data={failureClassPerformance} barGap={2}>
+                  <CartesianGrid {...CHART.grid} vertical={false} />
+                  <XAxis dataKey="horizon" stroke={CHART.axis.stroke} tick={CHART.axis.tick} tickLine={false} axisLine={false} />
+                  <YAxis domain={[0, 1]} tickFormatter={(value) => `${(value * 100).toFixed(0)}%`} stroke={CHART.axis.stroke} tick={CHART.axis.tick} tickLine={false} axisLine={false} />
                   <Tooltip
                     formatter={(value: number) => `${(value * 100).toFixed(1)}%`}
-                    contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                    {...CHART.tooltip}
                   />
-                  <Legend />
-                  <Bar dataKey="precision" fill="#3b82f6" name="Precision (failure)" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="recall" fill="#10b981" name="Recall (failure)" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="f1" fill="#8b5cf6" name="F1 (failure)" radius={[4, 4, 0, 0]} />
+                  <Legend wrapperStyle={{ fontSize: 12 }} iconType="circle" iconSize={8} />
+                  {/* Three measures — fixed categorical order, never cycled */}
+                  <Bar dataKey="precision" fill={CHART.categorical[0]} name="Precision (failure)" radius={CHART.barRadius} maxBarSize={28} />
+                  <Bar dataKey="recall" fill={CHART.categorical[1]} name="Recall (failure)" radius={CHART.barRadius} maxBarSize={28} />
+                  <Bar dataKey="f1" fill={CHART.categorical[2]} name="F1 (failure)" radius={CHART.barRadius} maxBarSize={28} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -1068,18 +1087,18 @@ export default function MLPerformanceDashboard() {
                     <thead>
                       <tr className="text-xs text-muted-foreground">
                         <th className="p-2 text-left font-medium">Actual \ Predicted</th>
-                        <th className="p-2 text-center font-medium text-red-700">Failure</th>
-                        <th className="p-2 text-center font-medium text-green-700">No failure</th>
+                        <th className="p-2 text-center font-medium text-risk-high">Failure</th>
+                        <th className="p-2 text-center font-medium text-risk-low">No failure</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y text-sm">
                       <tr>
-                        <td className="p-2 font-medium text-red-700">Failure</td>
+                        <td className="p-2 font-medium text-risk-high">Failure</td>
                         <td className="p-2 text-center font-bold bg-green-50">{r.confusion.tp.toLocaleString()}</td>
-                        <td className="p-2 text-center font-bold text-red-600">{r.confusion.fn.toLocaleString()}</td>
+                        <td className="p-2 text-center font-bold text-risk-high">{r.confusion.fn.toLocaleString()}</td>
                       </tr>
                       <tr>
-                        <td className="p-2 font-medium text-green-700">No failure</td>
+                        <td className="p-2 font-medium text-risk-low">No failure</td>
                         <td className="p-2 text-center font-bold">{r.confusion.fp.toLocaleString()}</td>
                         <td className="p-2 text-center font-bold bg-green-50">{r.confusion.tn.toLocaleString()}</td>
                       </tr>
@@ -1089,14 +1108,14 @@ export default function MLPerformanceDashboard() {
               ))}
               <div className="space-y-2 text-xs">
                 <div className="flex items-start gap-2">
-                  <AlertCircle className="h-4 w-4 text-red-600 mt-0.5" />
+                  <AlertCircle className="h-4 w-4 text-risk-high mt-0.5" />
                   <div>
                     <strong>False negatives</strong> (top-right, red) are missed failures — the operationally
                     expensive error in maintenance scheduling.
                   </div>
                 </div>
                 <div className="flex items-start gap-2">
-                  <CheckCircle2 className="h-4 w-4 text-green-600 mt-0.5" />
+                  <CheckCircle2 className="h-4 w-4 text-risk-low mt-0.5" />
                   <div><strong>Diagonal cells</strong> (highlighted) are correct predictions.</div>
                 </div>
               </div>
@@ -1115,17 +1134,16 @@ export default function MLPerformanceDashboard() {
             <div className="h-[280px] w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={predictionHistory}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                  <XAxis dataKey="date" />
-                  <YAxis />
-                  <Tooltip
-                    contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                  />
-                  <Legend />
-                  <Line type="monotone" dataKey="high" stroke="#ef4444" strokeWidth={2} name="High Risk" />
-                  <Line type="monotone" dataKey="medium" stroke="#f97316" strokeWidth={2} name="Medium Risk" />
-                  <Line type="monotone" dataKey="low" stroke="#22c55e" strokeWidth={2} name="Low Risk" />
-                  <Line type="monotone" dataKey="total" stroke="#64748b" strokeWidth={2} strokeDasharray="5 5" name="Total" />
+                  <CartesianGrid {...CHART.grid} vertical={false} />
+                  <XAxis dataKey="date" stroke={CHART.axis.stroke} tick={CHART.axis.tick} tickLine={false} axisLine={false} />
+                  <YAxis stroke={CHART.axis.stroke} tick={CHART.axis.tick} tickLine={false} axisLine={false} />
+                  <Tooltip {...CHART.tooltip} />
+                  <Legend wrapperStyle={{ fontSize: 12 }} iconType="circle" iconSize={8} />
+                  {/* Risk bands wear the reserved semantic colors; the total is a recessive dashed neutral */}
+                  <Line type="monotone" dataKey="high" stroke={CHART.risk.high} strokeWidth={CHART.line.strokeWidth} dot={CHART.line.dot} activeDot={CHART.line.activeDot} name="High Risk" />
+                  <Line type="monotone" dataKey="medium" stroke={CHART.risk.medium} strokeWidth={CHART.line.strokeWidth} dot={CHART.line.dot} activeDot={CHART.line.activeDot} name="Medium Risk" />
+                  <Line type="monotone" dataKey="low" stroke={CHART.risk.low} strokeWidth={CHART.line.strokeWidth} dot={CHART.line.dot} activeDot={CHART.line.activeDot} name="Low Risk" />
+                  <Line type="monotone" dataKey="total" stroke={CHART.neutral} strokeWidth={1.5} strokeDasharray="5 5" dot={false} name="Total" />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -1142,7 +1160,7 @@ export default function MLPerformanceDashboard() {
         <Card>
           <CardHeader>
             <div className="flex items-center gap-2">
-              <Brain className="h-5 w-5 text-blue-600" />
+              <Brain className="h-5 w-5 text-primary" />
               <CardTitle>Model Information</CardTitle>
             </div>
           </CardHeader>
@@ -1183,7 +1201,7 @@ export default function MLPerformanceDashboard() {
         <Card>
           <CardHeader>
             <div className="flex items-center gap-2">
-              <Database className="h-5 w-5 text-purple-600" />
+              <Database className="h-5 w-5 text-muted-foreground" />
               <CardTitle>Hyperparameters</CardTitle>
             </div>
           </CardHeader>
@@ -1250,7 +1268,7 @@ export default function MLPerformanceDashboard() {
             return (
               <div key={r.key} className="flex items-start gap-2">
                 {ok
-                  ? <CheckCircle2 className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
+                  ? <CheckCircle2 className="h-5 w-5 text-primary mt-0.5 flex-shrink-0" />
                   : <AlertCircle className="h-5 w-5 text-orange-600 mt-0.5 flex-shrink-0" />
                 }
                 <div>
@@ -1268,7 +1286,7 @@ export default function MLPerformanceDashboard() {
           {/* Accuracy vs naive baseline — honest framing for imbalanced data */}
           {m30?.accuracy !== undefined && m30?.positiveRateTest !== undefined && (
             <div className="flex items-start gap-2">
-              <Target className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
+              <Target className="h-5 w-5 text-primary mt-0.5 flex-shrink-0" />
               <div>
                 <strong>Accuracy in context:</strong> 30d accuracy is {pct(m30.accuracy)}, vs{" "}
                 {pct(1 - m30.positiveRateTest)} for a naive "never fails" baseline that catches zero
@@ -1279,7 +1297,7 @@ export default function MLPerformanceDashboard() {
           {/* Top features */}
           {topFeature && secondFeature && (
             <div className="flex items-start gap-2">
-              <TrendingUp className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
+              <TrendingUp className="h-5 w-5 text-primary mt-0.5 flex-shrink-0" />
               <div>
                 <strong>Top predictive features:</strong> {topFeature} and {secondFeature} contribute{" "}
                 {topTwo.toFixed(0)}% of prediction power.

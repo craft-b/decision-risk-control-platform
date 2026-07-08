@@ -158,7 +158,7 @@ export default function SetupPage() {
         <Card className="w-full max-w-lg">
           <CardHeader className="text-center">
             <div className="mx-auto mb-3 h-12 w-12 rounded-full bg-blue-100 flex items-center justify-center">
-              <Database className="h-6 w-6 text-blue-600 animate-pulse" />
+              <Database className="h-6 w-6 text-primary animate-pulse" />
             </div>
             <CardTitle>Loading Demo Data</CardTitle>
             <CardDescription>
@@ -234,7 +234,7 @@ export default function SetupPage() {
       <div className="w-full max-w-2xl space-y-6">
         {/* Header */}
         <div className="text-center space-y-2">
-          <div className="mx-auto mb-4 h-14 w-14 rounded-full bg-blue-600 flex items-center justify-center shadow-lg">
+          <div className="mx-auto mb-4 h-14 w-14 rounded-full bg-primary flex items-center justify-center shadow-lg">
             <Truck className="h-7 w-7 text-white" />
           </div>
           <h1 className="text-2xl font-bold text-slate-900">Welcome to Enterprise Asset Intelligence</h1>
@@ -249,7 +249,7 @@ export default function SetupPage() {
           <Card className="border-2 hover:border-blue-400 transition-colors cursor-pointer group">
             <CardHeader className="pb-3">
               <div className="h-10 w-10 rounded-lg bg-blue-100 flex items-center justify-center mb-2 group-hover:bg-blue-200 transition-colors">
-                <Database className="h-5 w-5 text-blue-600" />
+                <Database className="h-5 w-5 text-primary" />
               </div>
               <CardTitle className="text-base">Load Demo Data</CardTitle>
               <CardDescription className="text-xs">
@@ -312,7 +312,7 @@ export default function SetupPage() {
                   "Full control over your data",
                 ].map((item) => (
                   <li key={item} className="flex items-start gap-1.5">
-                    <BarChart3 className="h-3.5 w-3.5 text-blue-500 mt-0.5 shrink-0" />
+                    <BarChart3 className="h-3.5 w-3.5 text-primary mt-0.5 shrink-0" />
                     {item}
                   </li>
                 ))}

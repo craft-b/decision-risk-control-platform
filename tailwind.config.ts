@@ -81,6 +81,12 @@ export default {
           busy: "rgb(239 68 68)",
           offline: "rgb(156 163 175)",
         },
+        // Semantic risk — the only saturated color family (DESIGN_SPEC §5)
+        risk: {
+          high: "hsl(var(--risk-high) / <alpha-value>)",
+          medium: "hsl(var(--risk-medium) / <alpha-value>)",
+          low: "hsl(var(--risk-low) / <alpha-value>)",
+        },
       },
       fontFamily: {
         sans: ["var(--font-sans)"],

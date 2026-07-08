@@ -5,10 +5,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
-import { Truck, Loader2 } from "lucide-react";
+import { Loader2, Boxes } from "lucide-react";
 
 import landingImg from "@assets/pexels-apasaric-1238864_1767415604985.jpg";
-import { FaTruckMonster } from "react-icons/fa";
 
 export default function Login() {
   const [isRegister, setIsRegister] = useState(false);
@@ -18,11 +17,10 @@ export default function Login() {
   const [, setLocation] = useLocation();
 
   useEffect(() => {
-  if (user) {
-    setLocation("/");
-  }
-}, [user, setLocation]);
-
+    if (user) {
+      setLocation("/");
+    }
+  }, [user, setLocation]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -37,54 +35,71 @@ export default function Login() {
 
   return (
     <div className="min-h-screen grid lg:grid-cols-2">
-      {/* Left: Branding */}
-      <div className="hidden lg:flex flex-col bg-slate-900 text-white p-12 justify-between relative overflow-hidden">
-        {/* Dark Wash Overlay */}
-        <div className="absolute inset-0 bg-black/40 z-[1]" />
-        
-        <div className="z-10">
-          <div className="flex items-center gap-2 mb-8">
-            <FaTruckMonster  className="h-10 w-10 text-primary" />
-            <span className="text-2xl font-bold font-display tracking-widest text-primary">SMASH & CRAFT</span>
-          </div>
-          <h1 className="text-5xl font-bold mb-6 leading-tight">
-            Building the Future <br/>
-            <span className="text-primary">One Rental at a Time.</span>
-          </h1>
-          <p className="text-slate-100 text-lg max-w-md">
-            Professional equipment management system for the modern construction industry. Track assets, manage rentals, and optimize utilization.
-          </p>
-        </div>
-
-        {/* Decorative background circle */}
-        <div className="absolute -bottom-48 -right-48 w-96 h-96 bg-primary/20 rounded-full blur-3xl z-[1]" />
-        <div className="absolute top-24 right-24 w-64 h-64 bg-blue-500/10 rounded-full blur-3xl z-[1]" />
-        
-        {/* Background Image */}
+      {/* Left: Brand panel */}
+      <div className="hidden lg:flex relative flex-col justify-between overflow-hidden bg-slate-950 p-12 text-white">
+        {/* Background image, held down by a slate wash so type stays primary */}
         <div
-          className="absolute inset-0 z-0"
+          className="absolute inset-0 z-0 opacity-40"
           style={{
             backgroundImage: `url(${landingImg})`,
             backgroundSize: 'cover',
-            backgroundPosition: 'center'
+            backgroundPosition: 'center',
           }}
         />
+        <div className="absolute inset-0 z-[1] bg-gradient-to-t from-slate-950 via-slate-950/85 to-slate-950/60" />
 
-        <div className="z-10 text-sm text-slate-300">
-          © 2024 Smash & Craft Construction Co. All rights reserved.
+        <div className="z-10">
+          <div className="mb-16 flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/15 ring-1 ring-inset ring-primary/30">
+              <Boxes className="h-5 w-5 text-blue-400" />
+            </div>
+            <div>
+              <p className="text-[15px] font-semibold tracking-tight leading-tight">Craft &amp; Smash</p>
+              <p className="text-[11px] font-medium tracking-wide text-slate-400 leading-tight">Asset Intelligence</p>
+            </div>
+          </div>
+
+          <h1 className="max-w-lg text-4xl font-semibold leading-[1.15] tracking-tight text-white">
+            Know which machine fails next —
+            <span className="text-slate-400"> before it costs you the jobsite.</span>
+          </h1>
+          <p className="mt-6 max-w-md text-[15px] leading-relaxed text-slate-300">
+            Calibrated multi-horizon failure prediction, dispatch risk guarding, and
+            maintenance economics for mixed construction fleets — one risk model across
+            every make on the yard.
+          </p>
+
+          <div className="mt-10 flex gap-8 text-sm">
+            <div>
+              <p className="font-mono text-xl font-semibold tabular-nums">3</p>
+              <p className="mt-0.5 text-slate-400">prediction horizons</p>
+            </div>
+            <div>
+              <p className="font-mono text-xl font-semibold tabular-nums">10 / 30 / 60d</p>
+              <p className="mt-0.5 text-slate-400">failure windows</p>
+            </div>
+            <div>
+              <p className="font-mono text-xl font-semibold tabular-nums">31</p>
+              <p className="mt-0.5 text-slate-400">engineered features</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="z-10 text-xs text-slate-500">
+          © 2026 Craft &amp; Smash Rental Systems
         </div>
       </div>
 
-      {/* Right: Auth Form */}
-      <div className="flex items-center justify-center p-8 bg-slate-50">
-        <Card className="w-full max-w-md shadow-xl border-slate-200">
+      {/* Right: Auth form */}
+      <div className="flex items-center justify-center bg-background p-8">
+        <Card className="w-full max-w-md">
           <CardHeader className="space-y-1">
-            <CardTitle className="text-2xl font-bold text-center">
+            <CardTitle className="text-center text-xl">
               {isRegister ? "Create an account" : "Sign in"}
             </CardTitle>
             <CardDescription className="text-center">
-              {isRegister 
-                ? "Enter your details to register" 
+              {isRegister
+                ? "Enter your details to register"
                 : "Enter your credentials to access the dashboard"}
             </CardDescription>
           </CardHeader>
@@ -92,9 +107,9 @@ export default function Login() {
             <CardContent className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="username">Username</Label>
-                <Input 
-                  id="username" 
-                  placeholder="admin" 
+                <Input
+                  id="username"
+                  placeholder="admin"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   disabled={isPending}
@@ -102,10 +117,10 @@ export default function Login() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="password">Password</Label>
-                <Input 
-                  id="password" 
-                  type="password" 
-                  placeholder="••••••••" 
+                <Input
+                  id="password"
+                  type="password"
+                  placeholder="••••••••"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   disabled={isPending}
@@ -113,9 +128,9 @@ export default function Login() {
               </div>
             </CardContent>
             <CardFooter className="flex flex-col space-y-4">
-              <Button 
-                type="submit" 
-                className="w-full bg-primary hover:bg-primary/90 text-primary-foreground font-semibold"
+              <Button
+                type="submit"
+                className="w-full font-semibold"
                 disabled={isPending}
               >
                 {isPending ? (
@@ -134,17 +149,17 @@ export default function Login() {
                 onClick={() => setIsRegister(!isRegister)}
                 disabled={isPending}
               >
-                {isRegister 
-                  ? "Already have an account? Sign in" 
+                {isRegister
+                  ? "Already have an account? Sign in"
                   : "Don't have an account? Register now"}
               </Button>
             </CardFooter>
           </form>
           {!isRegister && (
             <div className="px-8 pb-8 text-center text-xs text-muted-foreground">
-               <p>Demo Credentials:</p>
-               <p>Admin: <span className="font-mono">admin / admin123</span></p>
-               <p>Viewer: <span className="font-mono">viewer / viewer123</span></p>
+              <p>Demo Credentials:</p>
+              <p>Admin: <span className="font-mono">admin / admin123</span></p>
+              <p>Viewer: <span className="font-mono">viewer / viewer123</span></p>
             </div>
           )}
         </Card>
