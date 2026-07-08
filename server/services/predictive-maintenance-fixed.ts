@@ -11,6 +11,7 @@ import { db } from "../db";
 import { assetRiskPredictions, equipmentRiskScores, equipment } from "@shared/schema";
 import { eq, desc } from "drizzle-orm";
 import { enhancedFeatureService as featureEngineeringService } from "./feature-engineering-enhanced";
+import { IMPUTATION_DEFAULTS, COLD_START, isColdStart } from "./imputation";
 const ML_SERVICE_URL = process.env.ML_SERVICE_URL || "http://localhost:8000";
 const ML_TIMEOUT_MS  = 10_000;
 
@@ -104,7 +105,7 @@ function buildSnapshotPayload(
     maintenance_events_90d:      safe(snapshot.maintenanceEvents90d, 0),
     maintenance_cost_180d:       safe(snapshot.maintenanceCost180d, 0),
     avg_downtime_per_event:      safe(snapshot.avgDowntimePerEvent, 0),
-    days_since_last_maintenance: Math.max(0, safe(snapshot.daysSinceLastMaintenance, 999)),
+    days_since_last_maintenance: Math.max(0, safe(snapshot.daysSinceLastMaintenance, IMPUTATION_DEFAULTS.days_since_last_maintenance)),
     vendor_reliability_score:    safe(snapshot.vendorReliabilityScore, 0.5),
     jobsite_risk_score:          safe(snapshot.jobSiteRiskScore, 0.5),
     usage_intensity:             Math.min(safe(snapshot.usageIntensity, 1), 12),
@@ -117,7 +118,8 @@ function buildSnapshotPayload(
     maint_burden:                safe(snapshot.maintBurden, 0),
     mechanical_wear_score:       Math.min(safe(snapshot.mechanicalWearScore, 1), 10),
     abuse_score:                 Math.min(safe(snapshot.abuseScore, 1), 10),
-    neglect_score:               Math.min(Math.max(0, safe(snapshot.neglectScore, 1)), 10),    mean_time_between_failures:  safe(snapshot.meanTimeBetweenFailures, 500),
+    neglect_score:               Math.min(Math.max(0, safe(snapshot.neglectScore, 1)), 10),
+    mean_time_between_failures:  safe(snapshot.meanTimeBetweenFailures, IMPUTATION_DEFAULTS.mean_time_between_failures),
   };
 }
 
@@ -187,13 +189,15 @@ class PredictiveMaintenanceService {
 
         const snapshot = await featureEngineeringService.generateSnapshot(equipmentId, new Date());
 
-        // Short-circuit brand new equipment — model not trained on near-zero hour assets
-        if (snapshot.assetAgeYears < 1 && snapshot.totalHoursLifetime < 500) {
+        // Cold-start: brand-new assets are out-of-distribution for the model, so a
+        // deterministic rule scores them. Tagged with the rule modelVersion (ML-10)
+        // so the stored prediction is never mistaken for a model output.
+        if (isColdStart(snapshot.assetAgeYears, snapshot.totalHoursLifetime)) {
           const prediction: RiskPrediction = {
             equipmentId,
-            failureProbability: 0.05,
-            riskBand: 'LOW',
-            riskScore: 5,
+            failureProbability: COLD_START.probability,
+            riskBand: COLD_START.riskBand,
+            riskScore: Math.round(COLD_START.probability * 100),
             confidence: 0.95,
             topDrivers: [
               { feature: 'asset_age_years', impact: 0.01, description: 'New unit — minimal hours' },
@@ -201,7 +205,7 @@ class PredictiveMaintenanceService {
               { feature: 'days_since_last_maintenance', impact: 0.01, description: 'Low operational age' },
             ],
             snapshotTs: snapshot.snapshotTs,
-            modelVersion: 'v1.4',
+            modelVersion: COLD_START.modelTag,
             recommendation: 'Equipment is new and within safe operating parameters. Continue standard inspection schedule.',
           };
           await savePrediction(prediction);

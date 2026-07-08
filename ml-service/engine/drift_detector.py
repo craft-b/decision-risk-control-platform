@@ -175,74 +175,31 @@ class DriftDetector:
               f"model={self.ref_model_version}")
 
     def _ensure_tables(self):
+        # ARCH-1: DDL is owned exclusively by Drizzle migrations
+        # (shared/schema.ts → migrations/). The drift tables — drift_metrics,
+        # prediction_drift_metrics, bias_drift_metrics — are created by
+        # `drizzle-kit migrate`. This service is DML-only: it verifies the
+        # tables exist and warns if the migration hasn't been run, but never
+        # creates schema.
         try:
             from sqlalchemy import text as sqla_text
             engine = self._get_engine()
+            required = ["drift_metrics", "prediction_drift_metrics", "bias_drift_metrics"]
             with engine.connect() as conn:
-                # Feature drift table (existing)
-                conn.execute(sqla_text("""
-                    CREATE TABLE IF NOT EXISTS drift_metrics (
-                        id            BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-                        checked_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                        model_version VARCHAR(50),
-                        batch_size    INT NOT NULL,
-                        feature       VARCHAR(100) NOT NULL,
-                        psi           DECIMAL(10, 6) NOT NULL,
-                        status        ENUM('STABLE','WARNING','ALERT') NOT NULL,
-                        ref_mean      DECIMAL(14, 4),
-                        cur_mean      DECIMAL(14, 4),
-                        ref_std       DECIMAL(14, 4),
-                        cur_std       DECIMAL(14, 4),
-                        INDEX idx_checked_at (checked_at),
-                        INDEX idx_feature    (feature)
-                    )
-                """))
-
-                # Prediction drift table
-                conn.execute(sqla_text("""
-                    CREATE TABLE IF NOT EXISTS prediction_drift_metrics (
-                        id             BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-                        checked_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                        model_version  VARCHAR(50),
-                        batch_size     INT NOT NULL,
-                        horizon        SMALLINT NOT NULL,
-                        score_psi      DECIMAL(10, 6) NOT NULL,
-                        score_status   ENUM('STABLE','WARNING','ALERT') NOT NULL,
-                        high_pct       DECIMAL(5, 4),
-                        medium_pct     DECIMAL(5, 4),
-                        low_pct        DECIMAL(5, 4),
-                        ref_high_pct   DECIMAL(5, 4),
-                        ref_medium_pct DECIMAL(5, 4),
-                        ref_low_pct    DECIMAL(5, 4),
-                        INDEX idx_checked_at (checked_at),
-                        INDEX idx_horizon    (horizon)
-                    )
-                """))
-
-                # Bias drift table
-                conn.execute(sqla_text("""
-                    CREATE TABLE IF NOT EXISTS bias_drift_metrics (
-                        id           BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-                        checked_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                        model_version VARCHAR(50),
-                        batch_size   INT NOT NULL,
-                        category     VARCHAR(100) NOT NULL,
-                        horizon      SMALLINT NOT NULL,
-                        mean_score   DECIMAL(8, 6),
-                        high_pct     DECIMAL(5, 4),
-                        ref_high_pct DECIMAL(5, 4),
-                        deviation    DECIMAL(5, 4),
-                        alert        TINYINT(1) DEFAULT 0,
-                        INDEX idx_checked_at (checked_at),
-                        INDEX idx_category   (category)
-                    )
-                """))
-
-                conn.commit()
+                missing = []
+                for table in required:
+                    try:
+                        conn.execute(sqla_text(f"SELECT 1 FROM {table} LIMIT 1"))
+                    except Exception:
+                        missing.append(table)
             engine.dispose()
-            print("[DRIFT] All drift tables ready")
+            if missing:
+                print(f"[DRIFT] Missing tables: {', '.join(missing)} — "
+                      f"run `drizzle-kit migrate` (Drizzle owns DDL, ARCH-1)")
+            else:
+                print("[DRIFT] All drift tables present")
         except Exception as e:
-            print(f"[DRIFT] Table init warning: {e}")
+            print(f"[DRIFT] Table check warning: {e}")
 
     # ── Public API — Feature Drift ────────────────────────────────────────────
 

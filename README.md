@@ -340,8 +340,13 @@ AGENT_API_KEY=<python -c "import secrets; print(secrets.token_hex(32))">
 
 ```bash
 npm install
-npx drizzle-kit migrate
+npm run db:migrate     # applies migrations/ — creates the full schema on a clean DB
 ```
+
+Drizzle migrations (`shared/schema.ts` → `migrations/`) are the **single DDL owner**:
+one `drizzle-kit migrate` builds every table (equipment, rentals, feature
+snapshots, sensor logs, drift + model-metrics tables). The Node and Python
+services only read and write — neither creates tables at runtime.
 
 ### 3. Start services
 

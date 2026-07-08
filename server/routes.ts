@@ -17,6 +17,7 @@ import { assetRiskPredictions } from "@shared/schema";
 import { enhancedFeatureService } from "./services/feature-engineering-enhanced";
 import { evaluatePMSchedule, generatePMDescription, samplePMCost, MaintenanceTypeKey } from "./services/pm-scheduler";
 import { startSeedJob, getSeedStatus, getSystemStatus, resetSystem } from "./services/seed-orchestrator";
+import { IMPUTATION_DEFAULTS, isColdStart, coldStartMultiHorizon } from "./services/imputation";
 
 declare module "express-session" {
   interface SessionData {
@@ -864,8 +865,8 @@ export async function registerRoutes(
             maintenance_events_90d:      snapshot.maintenanceEvents90d,
             maintenance_cost_180d:       snapshot.maintenanceCost180d,
             avg_downtime_per_event:      snapshot.avgDowntimePerEvent,
-            days_since_last_maintenance: Math.max(0, snapshot.daysSinceLastMaintenance ?? 0),
-            mean_time_between_failures:  snapshot.meanTimeBetweenFailures ?? 999,
+            days_since_last_maintenance: Math.max(0, snapshot.daysSinceLastMaintenance ?? IMPUTATION_DEFAULTS.days_since_last_maintenance),
+            mean_time_between_failures:  snapshot.meanTimeBetweenFailures ?? IMPUTATION_DEFAULTS.mean_time_between_failures,
             vendor_reliability_score:    snapshot.vendorReliabilityScore,
             jobsite_risk_score:          snapshot.jobSiteRiskScore,
             usage_intensity:             Math.min(snapshot.usageIntensity, 12),
@@ -980,17 +981,15 @@ export async function registerRoutes(
       for (let i = 0; i < validSnapshots.length; i++) {
         const { equipmentId: eqId, snapshot } = validSnapshots[i];
 
-        if (snapshot.assetAgeYears < 1 && snapshot.totalHoursLifetime < 500) {
+        if (isColdStart(snapshot.assetAgeYears, snapshot.totalHoursLifetime)) {
+          // ML-10: rule-scored, tagged so it is never mistaken for model output
+          const cs = coldStartMultiHorizon(eqId);
           manualResults.push({
             equipmentId: eqId,
-            modelVersion: 'v1.14',
-            riskTrend: 'STABLE',
-            predictions: {
-              '10d': { failure_probability: 0.05, risk_level: 'LOW', risk_score: 5, model_confidence: 'high', top_risk_drivers: { 'New unit — minimal hours': 0.01 } },
-              '30d': { failure_probability: 0.05, risk_level: 'LOW', risk_score: 5, model_confidence: 'high', top_risk_drivers: { 'Recent inspection completed': 0.01 } },
-              '60d': { failure_probability: 0.05, risk_level: 'LOW', risk_score: 5, model_confidence: 'high', top_risk_drivers: { 'Low operational age': 0.01 } },
-            },
-            recommendation: 'New unit within safe operating parameters. Continue standard inspection schedule.',
+            modelVersion: cs.model_version,
+            riskTrend: cs.risk_trend,
+            predictions: cs.predictions,
+            recommendation: cs.recommendation,
           });
         } else {
           snapshotsToScore.push({
@@ -1006,8 +1005,8 @@ export async function registerRoutes(
             maintenance_events_90d:      snapshot.maintenanceEvents90d,
             maintenance_cost_180d:       snapshot.maintenanceCost180d,
             avg_downtime_per_event:      snapshot.avgDowntimePerEvent,
-            days_since_last_maintenance: Math.max(0, snapshot.daysSinceLastMaintenance ?? 999),
-            mean_time_between_failures:  snapshot.meanTimeBetweenFailures ?? 999,
+            days_since_last_maintenance: Math.max(0, snapshot.daysSinceLastMaintenance ?? IMPUTATION_DEFAULTS.days_since_last_maintenance),
+            mean_time_between_failures:  snapshot.meanTimeBetweenFailures ?? IMPUTATION_DEFAULTS.mean_time_between_failures,
             vendor_reliability_score:    snapshot.vendorReliabilityScore,
             jobsite_risk_score:          snapshot.jobSiteRiskScore,
             usage_intensity:             Math.min(snapshot.usageIntensity, 12),

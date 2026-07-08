@@ -1,4 +1,4 @@
-import { mysqlTable, varchar, serial, bigint, int, timestamp, decimal, date, text, mysqlEnum} from "drizzle-orm/mysql-core";
+import { mysqlTable, varchar, serial, bigint, int, smallint, tinyint, timestamp, decimal, date, text, mysqlEnum, index} from "drizzle-orm/mysql-core";
 import { relations } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -360,6 +360,97 @@ export const modelMetrics = mysqlTable("model_metrics", {
 });
 
 export type ModelMetricRow = typeof modelMetrics.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ARCH-1: tables previously created by runtime DDL (Node db-initializer and the
+// Python drift detector / training script) now live here — Drizzle is the single
+// DDL owner. Column definitions mirror the live schema exactly. The Python and
+// Node services only read/write these; they no longer CREATE them.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// High-volume sensor telemetry (simulator today; ingestion adapters in Phase B).
+export const sensorDataLogs = mysqlTable("sensor_data_logs", {
+  id: bigint("id", { mode: 'number', unsigned: true }).primaryKey().autoincrement(),
+  equipmentId: int("equipment_id").notNull(),
+  timestamp: timestamp("timestamp").notNull(),
+  engineRpm: int("engine_rpm"),
+  engineTemp: int("engine_temp"),
+  oilPressure: int("oil_pressure"),
+  coolantTemp: int("coolant_temp"),
+  fuelConsumption: decimal("fuel_consumption", { precision: 10, scale: 2 }),
+  hydraulicPressure: int("hydraulic_pressure"),
+  hydraulicTemp: int("hydraulic_temp"),
+  hydraulicFlowRate: int("hydraulic_flow_rate"),
+  vibrationX: decimal("vibration_x", { precision: 6, scale: 3 }),
+  vibrationY: decimal("vibration_y", { precision: 6, scale: 3 }),
+  vibrationZ: decimal("vibration_z", { precision: 6, scale: 3 }),
+  operatingHours: decimal("operating_hours", { precision: 10, scale: 2 }),
+  loadPercentage: int("load_percentage"),
+  idleTime: decimal("idle_time", { precision: 10, scale: 2 }),
+  ambientTemp: int("ambient_temp"),
+  errorCodes: text("error_codes"),
+  warningCount: int("warning_count"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (t) => ({
+  idxEquipmentTs: index("idx_equipment_ts").on(t.equipmentId, t.timestamp),
+  idxTimestamp: index("idx_timestamp").on(t.timestamp),
+}));
+
+// Feature drift — PSI per monitored feature vs. training distribution.
+export const driftMetrics = mysqlTable("drift_metrics", {
+  id: bigint("id", { mode: 'number', unsigned: true }).primaryKey().autoincrement(),
+  checkedAt: timestamp("checked_at").notNull().defaultNow(),
+  modelVersion: varchar("model_version", { length: 50 }),
+  batchSize: int("batch_size").notNull(),
+  feature: varchar("feature", { length: 100 }).notNull(),
+  psi: decimal("psi", { precision: 10, scale: 6 }).notNull(),
+  status: mysqlEnum("status", ["STABLE", "WARNING", "ALERT"]).notNull(),
+  refMean: decimal("ref_mean", { precision: 14, scale: 4 }),
+  curMean: decimal("cur_mean", { precision: 14, scale: 4 }),
+  refStd: decimal("ref_std", { precision: 14, scale: 4 }),
+  curStd: decimal("cur_std", { precision: 14, scale: 4 }),
+}, (t) => ({
+  idxCheckedAt: index("idx_checked_at").on(t.checkedAt),
+  idxFeature: index("idx_feature").on(t.feature),
+}));
+
+// Prediction drift — PSI on output score distribution, per horizon.
+export const predictionDriftMetrics = mysqlTable("prediction_drift_metrics", {
+  id: bigint("id", { mode: 'number', unsigned: true }).primaryKey().autoincrement(),
+  checkedAt: timestamp("checked_at").notNull().defaultNow(),
+  modelVersion: varchar("model_version", { length: 50 }),
+  batchSize: int("batch_size").notNull(),
+  horizon: smallint("horizon").notNull(),
+  scorePsi: decimal("score_psi", { precision: 10, scale: 6 }).notNull(),
+  scoreStatus: mysqlEnum("score_status", ["STABLE", "WARNING", "ALERT"]).notNull(),
+  highPct: decimal("high_pct", { precision: 5, scale: 4 }),
+  mediumPct: decimal("medium_pct", { precision: 5, scale: 4 }),
+  lowPct: decimal("low_pct", { precision: 5, scale: 4 }),
+  refHighPct: decimal("ref_high_pct", { precision: 5, scale: 4 }),
+  refMediumPct: decimal("ref_medium_pct", { precision: 5, scale: 4 }),
+  refLowPct: decimal("ref_low_pct", { precision: 5, scale: 4 }),
+}, (t) => ({
+  idxCheckedAt: index("idx_checked_at").on(t.checkedAt),
+  idxHorizon: index("idx_horizon").on(t.horizon),
+}));
+
+// Bias drift — per-category HIGH-rate deviation vs. baseline.
+export const biasDriftMetrics = mysqlTable("bias_drift_metrics", {
+  id: bigint("id", { mode: 'number', unsigned: true }).primaryKey().autoincrement(),
+  checkedAt: timestamp("checked_at").notNull().defaultNow(),
+  modelVersion: varchar("model_version", { length: 50 }),
+  batchSize: int("batch_size").notNull(),
+  category: varchar("category", { length: 100 }).notNull(),
+  horizon: smallint("horizon").notNull(),
+  meanScore: decimal("mean_score", { precision: 8, scale: 6 }),
+  highPct: decimal("high_pct", { precision: 5, scale: 4 }),
+  refHighPct: decimal("ref_high_pct", { precision: 5, scale: 4 }),
+  deviation: decimal("deviation", { precision: 5, scale: 4 }),
+  alert: tinyint("alert").default(0),
+}, (t) => ({
+  idxCheckedAt: index("idx_checked_at").on(t.checkedAt),
+  idxCategory: index("idx_category").on(t.category),
+}));
 
 export const maintenanceOverrides = mysqlTable("maintenance_overrides", {
   id: bigint("id", { mode: 'number', unsigned: true }).primaryKey().autoincrement(),
