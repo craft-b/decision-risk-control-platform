@@ -12,6 +12,7 @@ import { db } from "./db";
 import { equipment, equipmentFailurePredictions } from "@shared/schema";
 import { desc, sql } from "drizzle-orm";
 import { enhancedFeatureService } from "./services/feature-engineering-enhanced";
+import { IMPUTATION_DEFAULTS } from "./services/imputation";
 import { evaluatePMSchedule, generatePMDescription, samplePMCost, MaintenanceTypeKey } from "./services/pm-scheduler";
 
 const app = express();
@@ -171,8 +172,8 @@ async function runDriftRescore() {
           maintenance_events_90d:      snapshot.maintenanceEvents90d,
           maintenance_cost_180d:       snapshot.maintenanceCost180d,
           avg_downtime_per_event:      snapshot.avgDowntimePerEvent,
-          days_since_last_maintenance: Math.max(0, snapshot.daysSinceLastMaintenance ?? 999),
-          mean_time_between_failures:  snapshot.meanTimeBetweenFailures ?? 999,
+          days_since_last_maintenance: Math.max(0, snapshot.daysSinceLastMaintenance ?? IMPUTATION_DEFAULTS.days_since_last_maintenance),
+          mean_time_between_failures:  snapshot.meanTimeBetweenFailures ?? IMPUTATION_DEFAULTS.mean_time_between_failures,
           vendor_reliability_score:    snapshot.vendorReliabilityScore,
           jobsite_risk_score:          snapshot.jobSiteRiskScore,
           usage_intensity:             Math.min(snapshot.usageIntensity, 12),

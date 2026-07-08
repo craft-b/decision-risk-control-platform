@@ -4,11 +4,12 @@
 # Transforms mirror prepare_features() in train_model_multihorizon.py exactly.
 
 import json
-import numpy as np
 import pandas as pd
 import joblib
 from pathlib import Path
 from typing import Optional
+
+from engine.feature_transform import transform_features
 
 try:
     import shap
@@ -100,39 +101,58 @@ class MultiHorizonPredictor:
         self.feature_names: list = model_data_30["feature_names"]
         self.version: str = model_data_30["version"]
 
-        # Label encoder (shared)
-        encoder_path = REGISTRY / "label_encoder_category.pkl"
+        # ── ML-7: resolve EVERY preprocessing artifact by the loaded model's
+        # version, not latest-by-glob. Otherwise a pinned champion silently
+        # serves the challenger's encoder / clip thresholds after any retrain,
+        # defeating the champion/challenger guarantee. Unversioned files are a
+        # legacy fallback only.
+        resolved_version = self._pin_version or self.versions.get(30) or self.version
+
+        def _versioned_json(versioned_name: str, glob_pattern: str):
+            vp = REGISTRY / versioned_name
+            if vp.exists():
+                with open(vp) as f:
+                    return json.load(f), vp.name
+            files = sorted(REGISTRY.glob(glob_pattern), key=_version_key, reverse=True)
+            if files:
+                with open(files[0]) as f:
+                    return json.load(f), files[0].name
+            return None, None
+
+        # Label encoder — pinned, then unversioned legacy fallback
+        encoder_path = REGISTRY / f"label_encoder_category_{resolved_version}.pkl"
         if not encoder_path.exists():
-            raise FileNotFoundError(f"Label encoder not found: {encoder_path}")
+            encoder_path = REGISTRY / "label_encoder_category.pkl"
+        if not encoder_path.exists():
+            raise FileNotFoundError(
+                f"Label encoder not found for {resolved_version} (and no legacy fallback)"
+            )
         self.label_encoder = joblib.load(encoder_path)
 
-        # Feature columns (shared)
-        feature_cols_files = sorted(REGISTRY.glob("feature_cols_*.json"), key=_version_key, reverse=True)
-        if feature_cols_files:
-            with open(feature_cols_files[0]) as f:
-                self.expected_features: list = json.load(f)["feature_cols"]
-        else:
-            self.expected_features = self.feature_names
+        # Feature columns
+        fc, fc_name = _versioned_json(f"feature_cols_{resolved_version}.json", "feature_cols_*.json")
+        self.expected_features: list = fc["feature_cols"] if fc else self.feature_names
 
-        # Clip thresholds (shared)
-        clip_files = sorted(REGISTRY.glob("clip_thresholds_*.json"), key=_version_key, reverse=True)
-        if clip_files:
-            with open(clip_files[0]) as f:
-                self.clip_thresholds: Optional[dict] = json.load(f)["clip_thresholds"]
-            print(f"[MH-PREDICTOR] Clip thresholds loaded ({len(self.clip_thresholds)} cols)")
+        # Clip thresholds
+        clip, clip_name = _versioned_json(f"clip_thresholds_{resolved_version}.json", "clip_thresholds_*.json")
+        if clip:
+            self.clip_thresholds: Optional[dict] = clip["clip_thresholds"]
+            print(f"[MH-PREDICTOR] Clip thresholds loaded from {clip_name} ({len(self.clip_thresholds)} cols)")
         else:
             self.clip_thresholds = None
             print("[MH-PREDICTOR] WARNING: No clip thresholds — skipping outlier clipping")
 
-        # Feature importance per horizon
+        print(f"[MH-PREDICTOR] Preprocessing artifacts pinned to {resolved_version} "
+              f"(encoder={encoder_path.name}, feature_cols={fc_name})")
+
+        # Feature importance per horizon — pinned, then latest-by-glob fallback
         self.feature_importance = {}
         for h in HORIZONS:
-            fi_files = sorted(REGISTRY.glob(f"feature_importance_{h}d_*.json"), key=_version_key, reverse=True)
-            if fi_files:
-                with open(fi_files[0]) as f:
-                    self.feature_importance[h] = json.load(f)
-            else:
-                self.feature_importance[h] = {}
+            fi, _ = _versioned_json(
+                f"feature_importance_{h}d_{resolved_version}.json",
+                f"feature_importance_{h}d_*.json",
+            )
+            self.feature_importance[h] = fi or {}
 
         # Per-horizon metadata → hyperparameters + honest confidence labels.
         # Prefer the metadata file matching the loaded model's version; fall
@@ -261,51 +281,20 @@ class MultiHorizonPredictor:
 
     # ─────────────────────────────────────────────────────────────────────
     # PRIVATE — TRANSFORMS
-    # Must mirror prepare_features() in train_model_multihorizon.py exactly
+    # ML-6: delegates to the ONE shared transform used by training, so the
+    # ordered pipeline (usage cap → encode → log → clip) is identical here and
+    # in prepare_features(). No second implementation to drift out of sync.
     # ─────────────────────────────────────────────────────────────────────
 
     def _apply_transforms(self, df: pd.DataFrame) -> pd.DataFrame:
-        df = df.copy()
-
-        # 1. Label-encode category
-        if "category" in df.columns:
-            try:
-                df["category_encoded"] = self.label_encoder.transform(
-                    df["category"].fillna("Unknown")
-                )
-            except ValueError:
-                print(f"[MH-PREDICTOR] Unknown category: {df['category'].iloc[0]} — defaulting to 0")
-                df["category_encoded"] = 0
-            df.drop("category", axis=1, inplace=True)
-
-        # 2. Drop non-feature columns
-        cols_to_drop = ["equipment_id", "snapshot_ts"]
-        df.drop(columns=[c for c in cols_to_drop if c in df.columns], inplace=True)
-
-        # 3. Clip outliers using training distribution thresholds
-        if self.clip_thresholds:
-            for col, threshold in self.clip_thresholds.items():
-                if col in df.columns:
-                    df[col] = df[col].clip(upper=threshold)
-
-        # 4. Log-transform skewed features — must match train_model_multihorizon.py
-        log_cols = [
-            "total_hours_lifetime",
-            "hours_used_30d",
-            "hours_used_90d",
-            "maintenance_cost_180d",
-            "cost_per_event",
-            "maint_burden",
-            "mean_time_between_failures",
-        ]
-        for col in log_cols:
-            if col in df.columns:
-                df[f"log_{col}"] = np.log1p(df[col].clip(lower=0))
-
-        # 5. Fill NaN
-        df = df.fillna(0)
-
-        return df
+        transformed, _ = transform_features(
+            df,
+            label_encoder=self.label_encoder,
+            clip_thresholds=self.clip_thresholds,
+            fit=False,
+            drop_non_features=True,
+        )
+        return transformed
 
     # ─────────────────────────────────────────────────────────────────────
     # PRIVATE — SHAP ATTRIBUTION

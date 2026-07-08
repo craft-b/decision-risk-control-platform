@@ -137,6 +137,9 @@ MODEL_DIR.mkdir(parents=True, exist_ok=True)
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+# ML-6: the single shared feature transform, used identically at train and serve
+from engine.feature_transform import transform_features  # noqa: E402
+
 HORIZONS = [10, 30, 60]  # days
 
 # ── Operating point & shop-capacity budget (ML-3 operator metrics) ────────────
@@ -306,10 +309,8 @@ def load_training_data() -> pd.DataFrame:
         pos  = df[col].sum()
         print(f"[DATA]   {h}d: {rate:.1f}% positive ({pos:,} / {len(df):,})")
 
-    # Cap usage_intensity outliers
-    if (df['usage_intensity'] > 24).any():
-        df['usage_intensity'] = df['usage_intensity'].clip(upper=12)
-
+    # usage_intensity capping now lives in the shared transform (ML-6) so it is
+    # applied identically at train and serve — no separate step here.
     return df
 
 
@@ -342,47 +343,23 @@ def prepare_features(df: pd.DataFrame, model_version: str):
     label_cols = ['will_fail_10d', 'will_fail_30d', 'will_fail_60d', 'snapshot_ts', 'equipment_id']
     labels = {col: df.pop(col) for col in label_cols if col in df.columns}
 
-    # Encode category
+    # ML-6: the ONE ordered transform, shared with the predictor. fit=True fits
+    # the label encoder and clip thresholds on this (dev) frame; the identical
+    # function runs at serve time with fit=False.
     le = LabelEncoder()
-    df['category_encoded'] = le.fit_transform(df['category'].fillna('Unknown'))
-    df.drop('category', axis=1, inplace=True)
+    X, clip_thresholds = transform_features(
+        df, label_encoder=le, fit=True, drop_non_features=True
+    )
 
-    # Save encoder (shared across all horizons)
+    # Serialize the fitted encoder (versioned + unversioned legacy fallback).
+    # Clip thresholds are serialized by the caller via save_clip_thresholds().
     joblib.dump(le, MODEL_DIR / f"label_encoder_category_{model_version}.pkl")
     joblib.dump(le, MODEL_DIR / "label_encoder_category.pkl")
 
-    # Log-transform skewed features
-    log_cols = [
-        'total_hours_lifetime', 'hours_used_30d', 'hours_used_90d',
-        'maintenance_cost_180d', 'cost_per_event', 'maint_burden',
-        'mean_time_between_failures'
-    ]
-    for col in log_cols:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-            df[f'log_{col}'] = np.log1p(df[col].clip(lower=0))
-            # Drop raw column — log version captures the same signal
-            # without letting the model double-count it and without
-            # the raw skewed distribution distorting split decisions
-            df.drop(col, axis=1, inplace=True)
-                 
-    # Clip outliers — compute from full training set
-    clip_thresholds = {}
-    for col in df.select_dtypes(include=[np.number]).columns:
-        p99 = df[col].quantile(0.99)
-        if p99 > 0:
-            threshold = float(p99 * 1.5)
-            clip_thresholds[col] = threshold
-            df[col] = df[col].clip(upper=threshold)
+    feature_names = X.columns.tolist()
+    print(f"[FEATURES] {len(feature_names)} features after engineering (shared transform)")
 
-    df = df.fillna(0)
-    for col in df.columns:
-        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-
-    feature_names = df.columns.tolist()
-    print(f"[FEATURES] {len(feature_names)} features after engineering")
-
-    return df, labels, feature_names, clip_thresholds
+    return X, labels, feature_names, clip_thresholds
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -890,24 +867,9 @@ def save_metrics_to_db(all_metrics: dict, dataset_size: int, model_version: str)
     try:
         engine = get_db_connection()
         with engine.connect() as conn:
-            # TEMPORARY DDL: created here until ARCH-1 (Group 2) moves this
-            # table into the Drizzle migration baseline as the single DDL owner.
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS model_metrics (
-                    id            BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-                    model_version VARCHAR(50)  NOT NULL,
-                    horizon_days  INT          NOT NULL,
-                    split         VARCHAR(20)  NOT NULL DEFAULT 'temporal',
-                    metric        VARCHAR(60)  NOT NULL,
-                    value         DECIMAL(14,6) NOT NULL,
-                    trained_at    TIMESTAMP    NOT NULL,
-                    dataset_size  INT,
-                    created_at    TIMESTAMP    DEFAULT NOW(),
-                    INDEX idx_version (model_version),
-                    INDEX idx_version_horizon (model_version, horizon_days)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-            """))
-
+            # ARCH-1: model_metrics is owned by Drizzle (shared/schema.ts →
+            # migrations/). This training run is DML-only — it inserts rows, it
+            # does not create the table. Fresh installs run `drizzle-kit migrate`.
             rows = []
             for h, m in all_metrics.items():
                 cm = m['confusion_matrix']
