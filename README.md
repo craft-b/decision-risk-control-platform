@@ -26,7 +26,7 @@ This is the second of two portfolio repositories, deliberately built to be compl
 - **Three-layer drift detection** — Data drift (PSI on monitored features), prediction drift (distribution shift in 30d output scores), and bias drift (disparity in HIGH-rate across equipment categories); all persisted to `drift_metrics` table; dashboard surfaces per-feature PSI with STABLE / WARNING / ALERT status
 - **Champion-challenger model governance** — Newly trained models enter registry as challengers; shadow-score every batch alongside champion without persisting results; admin promotes challenger to champion via `POST /api/ml/models/promote` with zero downtime (in-memory hot-swap); full audit history in `model_registry.json`
 - **Pre-training data quality gate** — 8-check validator (row count, label completeness, class balance, null rates, physical bounds, non-zero required features, temporal spread, duplicate snapshots) blocks training on FAIL, warns on marginal data, PASS/WARN/FAIL summary in training log
-- **SMOTE oversampling** — Applied per-horizon on training fold minority class to address class imbalance before RF fitting; improves recall on failure class
+- **Prevalence-honest calibration** — Random Forests calibrated (`CalibratedClassifierCV`) on the untouched, real-prevalence dev set with `class_weight='balanced'` (no SMOTE), so the emitted failure probability isn't inflated by resampling; Brier score + expected calibration error published per horizon
 - **Agent API** — Bearer-token authenticated endpoints (`GET /api/agent/model-health`, `POST /api/agent/actions`) for programmatic and LLM agent access; returns consolidated health snapshot with machine-readable `recommended_action`
 - **Automated monitoring** — `monitor.py` cron script polls model health, logs three-layer drift per feature, auto-triggers retraining or reference recomputation based on drift state, and fires Slack webhook alerts when action is needed or any drift layer reaches WARNING/ALERT; supports `--loop` mode for continuous polling
 - **GenAI recommendations** — Groq LLM turns risk scores into plain-English maintenance actions per asset
@@ -71,7 +71,7 @@ React SPA (Vite, port 5173)
 
 ---
 
-## ML Models — v1.15
+## ML Models — v1.16
 
 > **⚠️ Data source: simulated.** Every number below is **pipeline verification on synthetic data**,
 > not field predictive performance. All operational data comes from a fleet simulator whose failure
@@ -80,41 +80,58 @@ React SPA (Vite, port 5173)
 > nothing more. See [docs/REAL_DATA_VALIDATION.md](docs/REAL_DATA_VALIDATION.md) for what has to
 > happen before any metric can be quoted as predictive performance.
 
-Three separate binary classifiers, one per prediction horizon. Each is a calibrated Random Forest
-trained on an embargoed temporal holdout split with TimeSeriesSplit cross-validation, plus a
-by-asset grouped evaluation (GroupKFold over equipment).
+Three separate binary classifiers, one per prediction horizon. Each is a Random Forest calibrated on
+the **real class prevalence** (no resampling — see calibration note below), trained on an embargoed
+temporal holdout split with TimeSeriesSplit cross-validation, plus a by-asset grouped evaluation
+(GroupKFold over equipment). One shared feature transform runs at train and serve time, and each
+model serves its own version-pinned preprocessing artifacts.
 
 **Training data:** 10,828 observed-outcome snapshots · 31 features · 2024–2032 simulation timeline
 (45 rows censored for in-window predictive interventions, 630 horizon-censored). Labels derive only
 from `REACTIVE_REPAIR` breakdown events in `(ts, ts+h]` — scheduled PM and model-driven
 interventions are never counted as failures.
 
-**v1.15 performance (simulated data):**
+**v1.16 performance (simulated data):**
 
-| Horizon | Split | ROC-AUC | PR-AUC | Recall @ HIGH | Precision@budget | Lead time (median) | Positive rate |
-|---|---|---|---|---|---|---|---|
-| 10d | temporal | 0.9311 | 0.8279 | 89.2% | 76.6% | 6d | 40.9% |
-| 10d | by-asset | 0.9582 | 0.9434 | 85.3% | 90.6% | 6d | 40.9% |
-| 30d | temporal | 0.8750 | 0.8013 | 77.2% | 90.0% | 26d | 50.0% |
-| 30d | by-asset | 0.9346 | 0.9461 | 78.2% | 98.3% | 26d | 50.0% |
-| 60d | temporal | 0.8203 | 0.8058 | 64.1% | 95.8% | 55d | 57.8% |
-| 60d | by-asset | 0.8878 | 0.9363 | 72.9% | 99.0% | 56d | 57.8% |
+| Horizon | Split | ROC-AUC | PR-AUC | Recall @ HIGH | Brier | ECE |
+|---|---|---|---|---|---|---|
+| 10d | temporal | 0.9270 | 0.8109 | 89.2% | 0.072 | 0.074 |
+| 10d | by-asset | 0.9599 | — | — | — | — |
+| 30d | temporal | 0.8728 | 0.8009 | 77.2% | 0.080 | **0.034** ✓ |
+| 30d | by-asset | 0.9343 | — | — | — | — |
+| 60d | temporal | 0.8091 | 0.7889 | 64.1% | 0.121 | 0.053 |
+| 60d | by-asset | 0.9042 | — | — | — | — |
 
-Recall @ HIGH = failure-class recall at the 0.60 HIGH-band operating threshold.
-Precision@budget = precision inside the weekly top-10%-of-fleet work queue (the shop's realistic
-capacity). Lead time = median days from first HIGH flag to the failure event; the **temporal split**
-answers "same fleet, next quarter", the **by-asset split** (every asset scored by a model that never
-saw it) answers "a new customer's fleet, day one".
+Recall @ HIGH = failure-class recall at the 0.60 HIGH-band operating threshold. ECE = expected
+calibration error (gate: < 0.05). The **temporal split** answers "same fleet, next quarter"; the
+**by-asset split** (every asset scored by a model that never saw it) answers "a new customer's fleet,
+day one". Precision@budget and lead-time (operator metrics) are on the ML dashboard per horizon.
+
+**Calibration (ML-5) — before/after dropping SMOTE.** SMOTE was applied before the calibrator, so it
+fit on a ~50% synthetic prevalence and the emitted probability was systematically inflated. Measured
+on the holdout (mean predicted probability − actual failure rate):
+
+| Horizon | Inflation before (SMOTE) | Inflation after (no SMOTE) | ECE before → after |
+|---|---|---|---|
+| 10d | +0.025 | +0.073 | 0.027 → 0.074 |
+| 30d | +0.085 | **+0.005** | 0.085 → **0.034** |
+| 60d | +0.066 | **−0.001** | 0.066 → 0.053 |
+
+Dropping SMOTE eliminates the resampling-driven inflation at 30d/60d (the 30d probability goes from
++8.5 points over-confident to essentially honest, and clears the ECE gate). The 10d row moves the
+other way: its calibrator is fit on the 41%-positive dev set but the 10d holdout is only 22% positive
+(the aging fleet shifts prevalence across the temporal boundary), so residual over-prediction there is
+distribution shift, not resampling — the by-asset and CV numbers are the fairer read for 10d.
 
 **Honest observations these numbers surface:**
 
 - The 10d model's median lead time (~6 days) sits *below* the ~7-day PM scheduling latency — the
   30d model (26-day median lead) is the operationally actionable horizon.
-- These metrics are substantially lower than the previously published v1.14 numbers
-  (e.g. 30d holdout ROC-AUC 0.9297 → 0.8750, CV 0.9853 → 0.9204). The v1.14 numbers were inflated by
-  three defects, all fixed in v1.15: feature windows unbounded by snapshot date (features could see
-  the label event — ML-1), no embargo at the holdout boundary (ML-3), and a training set where 52%
-  of rows were snapshots of assets before they existed — trivially predictable filler (11,713 of
+- These metrics are substantially lower than the originally published v1.14 numbers
+  (e.g. 30d holdout ROC-AUC 0.9297 → 0.8728, CV 0.9853 → 0.9232). The v1.14 numbers were inflated by
+  three defects, all fixed from v1.15 on: feature windows unbounded by snapshot date (features could
+  see the label event — ML-1), no embargo at the holdout boundary (ML-3), and a training set where
+  52% of rows were snapshots of assets before they existed — trivially predictable filler (11,713 of
   22,585 rows, removed in regeneration).
 - Positive rates (41–58%) are far above real fleet failure rates. That is the simulator's hazard
   process, and one more reason none of this is quotable as field performance.
@@ -159,7 +176,7 @@ All four stages are triggerable from the admin panel in the UI (ADMINISTRATOR ro
 ```
 1. Generate Snapshots   →  Backfills feature vectors across full simulation timeline (7-day intervals)
 2. Label Snapshots      →  Marks 10d/30d/60d failure outcomes on each snapshot
-3. Retrain Models       →  Trains v1.15+ models, hot-swaps on completion (~3 min)
+3. Retrain Models       →  Trains v1.16+ models, hot-swaps on completion (~3 min)
 4. Run Predictions      →  Scores all active fleet units with latest models
 ```
 
@@ -220,11 +237,11 @@ A discrete-event simulator advances a cursor date day by day:
 │   │   ├── test_data_quality.py       # all 8 DQ checks + report structure
 │   │   └── test_model_registry.py     # champion/challenger/promote/metrics (in-memory)
 │   └── registry/                  # Versioned model artifacts
-│       ├── rf_{h}d_v1.15.pkl
-│       ├── clip_thresholds_v1.15.json
-│       ├── feature_cols_v1.15.json
-│       ├── metadata_{h}d_v1.15.json
-│       └── feature_importance_{h}d_v1.15.json
+│       ├── rf_{h}d_v1.16.pkl
+│       ├── clip_thresholds_v1.16.json
+│       ├── feature_cols_v1.16.json
+│       ├── metadata_{h}d_v1.16.json
+│       └── feature_importance_{h}d_v1.16.json
 │
 ├── monitor.py                     # Local cron script — polls agent API, auto-triggers retrain; --loop mode
 ├── .github/workflows/ml-ci.yml   # CI: lint (ruff), ML smoke-test, typecheck (tsc), Node unit tests (vitest)

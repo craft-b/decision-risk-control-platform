@@ -62,6 +62,7 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       # Resolved via Docker DNS — never use localhost here
       ML_SERVICE_URL: http://ml-service:8000
+      ML_SERVICE_TOKEN: ${ML_SERVICE_TOKEN}
       MODEL_VERSION: ${MODEL_VERSION:-v1}
     healthcheck:
       test:
@@ -84,11 +85,16 @@ services:
     build:
       context: .
       dockerfile: infrastructure/docker/Dockerfile.ml-service
-    ports:
-      - "8000:8000"
+    # SEC-1: no host `ports:` mapping — the ML plane is reachable only from other
+    # containers on the internal network (via `http://ml-service:8000`), never
+    # from the host. Combined with the X-Service-Token check this closes the
+    # "anyone can trigger training / promote a model" exposure.
+    expose:
+      - "8000"
     environment:
       ENVIRONMENT: production          # Python convention, not NODE_ENV
       ML_SERVICE_PORT: 8000
+      ML_SERVICE_TOKEN: ${ML_SERVICE_TOKEN}
       # Supply either DATABASE_URL or the individual DB_* vars — not both.
       # Individual vars are used by SQLAlchemy connection pooling in ml-service.
       DATABASE_URL: ${DATABASE_URL}
@@ -125,7 +131,7 @@ services:
 # ── Shared network ───────────────────────────────────────────────────────────
 # All three containers join this network automatically.
 # Inter-service calls use service name as hostname (e.g. http://ml-service:8000).
-# Only ports listed under `ports:` above are exposed to the host machine.
+# The ML service is `expose`-only (internal), so it is never bound to the host.
 networks:
   default:
     name: enterprise-asset-network

@@ -25,6 +25,9 @@ export interface HorizonHoldoutMetrics {
   precisionAtBudget?: number;
   leadTimeMedianDays?: number;
   leadTimeFailuresFlaggedPct?: number;
+  // Calibration quality (ML-5)
+  brier?: number;
+  ece?: number;
   confusion: { tn: number; fp: number; fn: number; tp: number };
 }
 

@@ -5,13 +5,15 @@
 
 import os
 import sys
+import hmac
 import subprocess
 import asyncio
 from pathlib import Path
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.schemas.prediction import (
@@ -107,6 +109,39 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SEC-1: service-to-service auth
+# The ML plane is private (no host port in compose). Every request must carry the
+# shared X-Service-Token; admin verbs are audit-logged with the caller's identity
+# (X-Actor, forwarded from the Node session). Health/docs are exempt so the
+# compose healthcheck and Swagger UI work without the token.
+# ─────────────────────────────────────────────────────────────────────────────
+
+ML_SERVICE_TOKEN = os.getenv("ML_SERVICE_TOKEN", "").strip()
+_AUTH_EXEMPT = {"/health", "/docs", "/redoc", "/openapi.json"}
+_ADMIN_PATHS = {"/train", "/models/promote", "/drift/compute-reference"}
+
+if not ML_SERVICE_TOKEN:
+    print("[AUTH] ⚠️  ML_SERVICE_TOKEN not set — ML service is UNAUTHENTICATED. "
+          "Set it (and the matching Node env var) before any non-local deployment.")
+
+
+@app.middleware("http")
+async def service_auth(request: Request, call_next):
+    path = request.url.path
+    if path not in _AUTH_EXEMPT and ML_SERVICE_TOKEN:
+        provided = request.headers.get("X-Service-Token", "")
+        # Timing-safe comparison — never leak token length/prefix via early exit.
+        if not hmac.compare_digest(provided, ML_SERVICE_TOKEN):
+            return JSONResponse(status_code=401, content={"detail": "Invalid or missing service token"})
+
+    if path in _ADMIN_PATHS:
+        actor = request.headers.get("X-Actor", "unknown")
+        print(f"[AUDIT] actor={actor} action={request.method} {path}")
+
+    return await call_next(request)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
