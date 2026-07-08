@@ -3,12 +3,13 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from "recharts";
 import { DollarSign, Wrench, TrendingUp, BarChart2 } from "lucide-react";
 import { useTable } from "@/hooks/use-table";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { TablePagination } from "@/components/ui/table-pagination";
+import { CHART, fmtMoney, fmtMoneyCompact } from "@/lib/chart-theme";
 
 function useMaintCostReport() {
   return useQuery({
@@ -26,8 +27,6 @@ function useMaintCostReport() {
     staleTime: 5 * 60 * 1000,
   });
 }
-
-const CATEGORY_COLORS = ['#3b82f6', '#ef4444', '#22c55e', '#f59e0b', '#8b5cf6', '#ec4899', '#14b8a6'];
 
 export default function MaintenanceCostReport() {
   const { data, isLoading } = useMaintCostReport();
@@ -59,44 +58,44 @@ export default function MaintenanceCostReport() {
         <p className="text-muted-foreground">Fleet maintenance spend analysis — 12-month rolling view</p>
       </div>
 
-      {/* Summary Cards */}
+      {/* Summary — neutral stat tiles; cost is data, not danger */}
       <div className="grid gap-4 md:grid-cols-3">
-        <Card className="border-l-4 border-l-red-500">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Maintenance Spend</CardTitle>
-            <DollarSign className="h-4 w-4 text-red-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-red-600">
-              ${Number(summary?.totalCost ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+        <Card>
+          <CardContent className="pt-5">
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Total Maintenance Spend</p>
+              <DollarSign className="h-4 w-4 text-muted-foreground/60" />
             </div>
-            <p className="text-xs text-muted-foreground">All-time total</p>
+            <div className="mt-2 font-mono text-[26px] font-semibold leading-none tracking-tight">
+              {fmtMoney(Number(summary?.totalCost ?? 0))}
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">All-time total</p>
           </CardContent>
         </Card>
 
-        <Card className="border-l-4 border-l-blue-500">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Events</CardTitle>
-            <Wrench className="h-4 w-4 text-blue-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-blue-600">
+        <Card>
+          <CardContent className="pt-5">
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Total Events</p>
+              <Wrench className="h-4 w-4 text-muted-foreground/60" />
+            </div>
+            <div className="mt-2 font-mono text-[26px] font-semibold leading-none tracking-tight">
               {Number(summary?.totalEvents ?? 0).toLocaleString()}
             </div>
-            <p className="text-xs text-muted-foreground">All maintenance records</p>
+            <p className="mt-2 text-xs text-muted-foreground">All maintenance records</p>
           </CardContent>
         </Card>
 
-        <Card className="border-l-4 border-l-green-500">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Avg Cost / Event</CardTitle>
-            <TrendingUp className="h-4 w-4 text-green-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-green-600">
+        <Card>
+          <CardContent className="pt-5">
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Avg Cost / Event</p>
+              <TrendingUp className="h-4 w-4 text-muted-foreground/60" />
+            </div>
+            <div className="mt-2 font-mono text-[26px] font-semibold leading-none tracking-tight">
               ${Number(summary?.avgCostPerEvent ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </div>
-            <p className="text-xs text-muted-foreground">Per maintenance event</p>
+            <p className="mt-2 text-xs text-muted-foreground">Per maintenance event</p>
           </CardContent>
         </Card>
       </div>
@@ -105,7 +104,7 @@ export default function MaintenanceCostReport() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <BarChart2 className="h-5 w-5" />
+            <BarChart2 className="h-5 w-5 text-muted-foreground" />
             Monthly Maintenance Spend (12 Months)
           </CardTitle>
           <CardDescription>Cost trend over the last 12 months</CardDescription>
@@ -114,17 +113,17 @@ export default function MaintenanceCostReport() {
           <div className="h-[280px]">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={byMonth}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                <XAxis dataKey="month" stroke="#888888" fontSize={12} tickLine={false} />
-                <YAxis stroke="#888888" fontSize={12} tickLine={false} tickFormatter={(v) => `$${v >= 1000 ? `${(v/1000).toFixed(1)}k` : v}`} />
+                <CartesianGrid {...CHART.grid} vertical={false} />
+                <XAxis dataKey="month" stroke={CHART.axis.stroke} tick={CHART.axis.tick} tickLine={false} axisLine={false} />
+                <YAxis stroke={CHART.axis.stroke} tick={CHART.axis.tick} tickLine={false} axisLine={false} tickFormatter={fmtMoneyCompact} />
                 <Tooltip
                   formatter={(value: any, name: string) => [
-                    name === 'cost' ? `$${Number(value).toFixed(2)}` : value,
+                    name === 'cost' ? fmtMoney(Number(value)) : value,
                     name === 'cost' ? 'Spend' : 'Events',
                   ]}
-                  contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                  {...CHART.tooltip}
                 />
-                <Bar dataKey="cost" fill="#ef4444" radius={[4, 4, 0, 0]} name="cost" />
+                <Bar dataKey="cost" fill={CHART.data} radius={CHART.barRadius} name="cost" maxBarSize={28} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -140,16 +139,13 @@ export default function MaintenanceCostReport() {
           <CardContent>
             <div className="h-[240px]">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={(data?.byCategory ?? []).map((d: any, i: number) => ({ ...d, totalCost: Number(d.totalCost), color: CATEGORY_COLORS[i % CATEGORY_COLORS.length] }))} layout="vertical">
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" horizontal={false} />
-                  <XAxis type="number" stroke="#888888" fontSize={12} tickLine={false} tickFormatter={(v) => `$${v >= 1000 ? `${(v/1000).toFixed(1)}k` : v}`} />
-                  <YAxis type="category" dataKey="category" stroke="#888888" fontSize={11} tickLine={false} width={90} />
-                  <Tooltip formatter={(v: any) => [`$${Number(v).toFixed(2)}`, 'Total Cost']} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} />
-                  <Bar dataKey="totalCost" radius={[0, 4, 4, 0]}>
-                    {(data?.byCategory ?? []).map((_: any, i: number) => (
-                      <Cell key={i} fill={CATEGORY_COLORS[i % CATEGORY_COLORS.length]} />
-                    ))}
-                  </Bar>
+                <BarChart data={(data?.byCategory ?? []).map((d: any) => ({ ...d, totalCost: Number(d.totalCost) }))} layout="vertical">
+                  <CartesianGrid {...CHART.grid} horizontal={false} />
+                  <XAxis type="number" stroke={CHART.axis.stroke} tick={CHART.axis.tick} tickLine={false} axisLine={false} tickFormatter={fmtMoneyCompact} />
+                  <YAxis type="category" dataKey="category" stroke={CHART.axis.stroke} tick={CHART.axis.tick} tickLine={false} axisLine={false} width={90} />
+                  <Tooltip formatter={(v: any) => [fmtMoney(Number(v)), 'Total Cost']} {...CHART.tooltip} />
+                  {/* One measure, one hue — identity is the category label */}
+                  <Bar dataKey="totalCost" fill={CHART.data} radius={CHART.barRadiusHorizontal} maxBarSize={16} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -166,7 +162,7 @@ export default function MaintenanceCostReport() {
               {(data?.byEquipment ?? []).slice(0, 6).map((item: any, index: number) => (
                 <div key={item.id} className="flex items-center justify-between py-1.5 border-b last:border-0">
                   <div className="flex items-center gap-3">
-                    <div className="w-6 h-6 rounded-full bg-red-100 text-red-700 font-bold text-xs flex items-center justify-center">
+                    <div className="w-6 h-6 rounded-md bg-muted font-mono font-semibold text-xs text-muted-foreground flex items-center justify-center">
                       {index + 1}
                     </div>
                     <div>
@@ -175,8 +171,8 @@ export default function MaintenanceCostReport() {
                     </div>
                   </div>
                   <div className="text-right">
-                    <p className="text-sm font-bold text-red-600">${Number(item.totalCost).toFixed(2)}</p>
-                    <p className="text-xs text-muted-foreground">${Number(item.avgCostPerEvent).toFixed(2)}/event</p>
+                    <p className="text-sm font-mono font-semibold tabular-nums">{fmtMoney(Number(item.totalCost))}</p>
+                    <p className="text-xs text-muted-foreground font-mono tabular-nums">${Number(item.avgCostPerEvent).toFixed(0)}/event</p>
                   </div>
                 </div>
               ))}
@@ -218,11 +214,11 @@ export default function MaintenanceCostReport() {
                   <TableCell>
                     <Badge variant="outline" className="text-xs">{item.category}</Badge>
                   </TableCell>
-                  <TableCell className="text-right">{item.eventCount}</TableCell>
-                  <TableCell className="text-right font-medium text-red-600">
-                    ${Number(item.totalCost).toFixed(2)}
+                  <TableCell className="text-right font-mono tabular-nums">{item.eventCount}</TableCell>
+                  <TableCell className="text-right font-mono font-medium tabular-nums">
+                    {fmtMoney(Number(item.totalCost))}
                   </TableCell>
-                  <TableCell className="text-right text-muted-foreground">
+                  <TableCell className="text-right font-mono tabular-nums text-muted-foreground">
                     ${Number(item.avgCostPerEvent).toFixed(2)}
                   </TableCell>
                 </TableRow>

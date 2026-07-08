@@ -33,6 +33,7 @@ import {
   Target,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { CHART } from "@/lib/chart-theme";
 import {
   Dialog,
   DialogContent,
@@ -91,28 +92,31 @@ const HORIZON_LABELS: Record<Horizon, string> = {
   "60d": "Next 60 Days",
 };
 
+// Discrimination is best at the short horizon and decays with distance —
+// matches the trained models' holdout metrics (see ML dashboard), not vibes.
 const HORIZON_CONFIDENCE: Record<Horizon, string> = {
-  "10d": "Moderate confidence",
-  "30d": "High confidence",
-  "60d": "Very high confidence",
+  "10d": "Highest model accuracy",
+  "30d": "High model accuracy",
+  "60d": "Moderate model accuracy",
 };
 
+// Semantic risk tokens — the only saturated hues in the UI (DESIGN_SPEC §5)
 const RISK_COLORS: Record<RiskLevel, string> = {
-  HIGH:   "bg-red-100 text-red-800 border-red-300",
-  MEDIUM: "bg-orange-100 text-orange-800 border-orange-300",
-  LOW:    "bg-green-100 text-green-800 border-green-300",
+  HIGH:   "bg-risk-high-surface text-risk-high border-risk-high",
+  MEDIUM: "bg-risk-medium-surface text-risk-medium border-risk-medium",
+  LOW:    "bg-risk-low-surface text-risk-low border-risk-low",
 };
 
 const RISK_ROW_COLORS: Record<RiskLevel, string> = {
-  HIGH:   "border-red-200 bg-red-50",
-  MEDIUM: "border-orange-200 bg-orange-50",
-  LOW:    "border-green-200 bg-green-50",
+  HIGH:   "border-risk-high bg-risk-high-surface",
+  MEDIUM: "border-risk-medium bg-risk-medium-surface",
+  LOW:    "border-risk-low bg-risk-low-surface",
 };
 
 function TrendIcon({ trend }: { trend: RiskTrend }) {
-  if (trend === "INCREASING") return <TrendingUp className="h-4 w-4 text-red-500" />;
-  if (trend === "DECREASING") return <TrendingDown className="h-4 w-4 text-green-500" />;
-  return <Minus className="h-4 w-4 text-slate-400" />;
+  if (trend === "INCREASING") return <TrendingUp className="h-4 w-4 text-risk-high" />;
+  if (trend === "DECREASING") return <TrendingDown className="h-4 w-4 text-risk-low" />;
+  return <Minus className="h-4 w-4 text-muted-foreground" />;
 }
 
 function RiskBadge({ level }: { level: RiskLevel }) {
@@ -223,16 +227,16 @@ function ProjectionSparkline({ equipmentId }: { equipmentId: number }) {
         <span className="text-sm font-medium">60-Day Failure Trajectory</span>
         {crossingDay !== null ? (
           crossingDay === 0 ? (
-            <span className="text-xs font-medium text-red-600 bg-red-50 border border-red-200 px-2 py-0.5 rounded-full">
+            <span className="text-xs font-medium text-risk-high bg-risk-high-surface border border-risk-high px-2 py-0.5 rounded-full">
               Already HIGH risk
             </span>
           ) : (
-            <span className="text-xs font-medium text-orange-600 bg-orange-50 border border-orange-200 px-2 py-0.5 rounded-full">
+            <span className="text-xs font-medium text-risk-medium bg-risk-medium-surface border border-risk-medium px-2 py-0.5 rounded-full">
               Crosses HIGH in {crossingDay}d
             </span>
           )
         ) : (
-          <span className="text-xs font-medium text-green-600 bg-green-50 border border-green-200 px-2 py-0.5 rounded-full">
+          <span className="text-xs font-medium text-risk-low bg-risk-low-surface border border-risk-low px-2 py-0.5 rounded-full">
             Stays below HIGH threshold
           </span>
         )}
@@ -240,24 +244,27 @@ function ProjectionSparkline({ equipmentId }: { equipmentId: number }) {
 
       <ResponsiveContainer width="100%" height={120}>
         <LineChart data={data.curve} margin={{ top: 4, right: 4, bottom: 4, left: -20 }}>
-          <XAxis dataKey="day" tickLine={false} axisLine={false} tick={{ fontSize: 10 }} tickFormatter={(v) => `${v}d`} />
-          <YAxis domain={[0, 1]} tickLine={false} axisLine={false} tick={{ fontSize: 10 }} tickFormatter={(v) => `${Math.round(v * 100)}%`} />
+          <XAxis dataKey="day" tickLine={false} axisLine={false} tick={CHART.axis.tick} tickFormatter={(v) => `${v}d`} />
+          <YAxis domain={[0, 1]} tickLine={false} axisLine={false} tick={CHART.axis.tick} tickFormatter={(v) => `${Math.round(v * 100)}%`} />
           <RechartsTooltip
             formatter={(value: number, name: string) => [`${Math.round(value * 100)}%`, name]}
             labelFormatter={(label) => `Day ${label}`}
+            {...CHART.tooltip}
           />
-          <ReferenceLine y={0.60} stroke="#ef4444" strokeDasharray="3 3" strokeWidth={1} />
-          <Line type="monotone" dataKey="10d" stroke="#f97316" strokeWidth={1.5} dot={false} name="10d" />
-          <Line type="monotone" dataKey="30d" stroke="#8b5cf6" strokeWidth={1.5} dot={false} name="30d" />
-          <Line type="monotone" dataKey="60d" stroke="#3b82f6" strokeWidth={2} dot={false} name="60d" />
+          {/* HIGH band threshold — the only semantic color on this plot */}
+          <ReferenceLine y={0.60} stroke={CHART.risk.high} strokeDasharray="3 3" strokeWidth={1} />
+          {/* Horizons are identities → fixed categorical order */}
+          <Line type="monotone" dataKey="10d" stroke={CHART.categorical[0]} strokeWidth={1.5} dot={false} name="10d" />
+          <Line type="monotone" dataKey="30d" stroke={CHART.categorical[1]} strokeWidth={1.5} dot={false} name="30d" />
+          <Line type="monotone" dataKey="60d" stroke={CHART.categorical[2]} strokeWidth={2} dot={false} name="60d" />
         </LineChart>
       </ResponsiveContainer>
 
       <div className="flex gap-4 text-xs text-muted-foreground justify-center">
-        <span className="flex items-center gap-1"><span className="w-3 h-0.5 bg-orange-400 inline-block"/>10d</span>
-        <span className="flex items-center gap-1"><span className="w-3 h-0.5 bg-violet-500 inline-block"/>30d</span>
-        <span className="flex items-center gap-1"><span className="w-3 h-0.5 bg-blue-500 inline-block"/>60d</span>
-        <span className="flex items-center gap-1"><span className="w-3 h-0.5 border-t border-dashed border-red-400 inline-block"/>HIGH threshold</span>
+        <span className="flex items-center gap-1"><span className="w-3 h-0.5 inline-block" style={{ backgroundColor: CHART.categorical[0] }}/>10d</span>
+        <span className="flex items-center gap-1"><span className="w-3 h-0.5 inline-block" style={{ backgroundColor: CHART.categorical[1] }}/>30d</span>
+        <span className="flex items-center gap-1"><span className="w-3 h-0.5 inline-block" style={{ backgroundColor: CHART.categorical[2] }}/>60d</span>
+        <span className="flex items-center gap-1"><span className="w-3 h-0.5 border-t border-dashed inline-block" style={{ borderColor: CHART.risk.high }}/>HIGH threshold</span>
       </div>
     </div>
   );

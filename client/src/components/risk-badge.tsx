@@ -9,6 +9,8 @@ interface RiskBadgeProps {
   showIcon?: boolean;
 }
 
+// Semantic risk badge — colors come from the risk tokens (DESIGN_SPEC §5:
+// HIGH/MEDIUM/LOW are the only saturated hues in the UI and appear nowhere else).
 export function RiskBadge({ score, level, size = "md", showIcon = true }: RiskBadgeProps) {
   const sizeClasses = {
     sm: "text-[10px] px-1.5 py-0.5",
@@ -28,11 +30,11 @@ export function RiskBadge({ score, level, size = "md", showIcon = true }: RiskBa
     <Badge
       variant="outline"
       className={cn(
-        "font-semibold uppercase tracking-wider",
+        "font-semibold uppercase tracking-wider tabular-nums",
         sizeClasses[size],
-        level === "LOW" && "bg-green-50 text-green-700 border-green-200",
-        level === "MEDIUM" && "bg-yellow-50 text-yellow-700 border-yellow-200",
-        level === "HIGH" && "bg-red-50 text-red-700 border-red-200"
+        level === "LOW" && "bg-risk-low-surface text-risk-low border-risk-low",
+        level === "MEDIUM" && "bg-risk-medium-surface text-risk-medium border-risk-medium",
+        level === "HIGH" && "bg-risk-high-surface text-risk-high border-risk-high"
       )}
     >
       {showIcon && <Icon className={cn("mr-1", iconSizes[size])} />}
