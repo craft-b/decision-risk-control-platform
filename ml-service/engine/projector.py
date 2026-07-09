@@ -26,11 +26,6 @@ STEP_DAYS   = 7    # project in 7-day increments
 MAX_DAYS    = 60   # maximum projection horizon
 HIGH_THRESHOLD_DEFAULT = 0.60  # fallback if not in RISK_THRESHOLDS
 
-# maintenance_config.recommended_interval_days effective default. Kept as a
-# constant because the projection has no access to the per-category config row;
-# used only to advance the binary maint_overdue flag and neglect_acceleration.
-MAINT_INTERVAL_DAYS = 90
-
 
 # ── Closed-form feature derivations — mirror feature-engineering-enhanced.ts ──
 # Kept tiny and exact so an aged raw input maps to the same value the TS layer
@@ -53,12 +48,6 @@ def _wear_rate(total_hours: float, age_years: float, fallback: float) -> float:
 def _neglect_score(days_since: float, maint_overdue: int) -> float:
     neglect_days_factor = min(days_since / 120, 1) if days_since is not None else 0.5
     return min(max(0, neglect_days_factor * 7 + (3 if maint_overdue else 0)), 10)
-
-
-def _neglect_acceleration(days_since: float) -> float:
-    if days_since is None or MAINT_INTERVAL_DAYS <= 0:
-        return 1.0
-    return min(days_since / MAINT_INTERVAL_DAYS, 3.0)
 
 
 def _age_snapshot(base: dict, step: int) -> dict:
@@ -86,10 +75,19 @@ def _age_snapshot(base: dict, step: int) -> dict:
     # ── Closed-form derivations (correct scale + type) ────────────────────────
     s["aging_factor"] = _aging_factor(age)
     s["wear_rate"] = _wear_rate(total_hours, age, base.get("wear_rate", 0))
-    s["maint_overdue"] = 1 if days_since > MAINT_INTERVAL_DAYS else int(base.get("maint_overdue", 0))
     s["mechanical_wear_score"] = _mechanical_wear_score(total_hours, age)
-    s["neglect_score"] = _neglect_score(days_since, s["maint_overdue"])
-    s["neglect_acceleration"] = _neglect_acceleration(days_since)
+
+    # maint_overdue and neglect_acceleration both depend on the per-category
+    # maintenance interval (recommended_interval_days, 90-180 days). The projection
+    # only has the feature snapshot, not the config row, so it can't compute them on
+    # the same schedule the model was trained on. Hold them fixed at their day-0
+    # value rather than assume one interval and age them off-schedule (that would
+    # feed the model out-of-distribution inputs — the exact skew this engine avoids).
+    # Both are low-importance; neglect_score still advances via its days-since term.
+    maint_overdue = int(base.get("maint_overdue", 0))
+    s["maint_overdue"] = maint_overdue                 # held fixed
+    s["neglect_score"] = _neglect_score(days_since, maint_overdue)
+    # neglect_acceleration is left at its base value (already copied via dict(base)).
 
     # Everything else (abuse_score, sensor_degradation_rate, usage_*, cost_*,
     # maintenance_*, rental_*, vendor/jobsite scores) is held fixed — projection
