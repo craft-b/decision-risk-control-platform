@@ -103,11 +103,22 @@ jobs:
           df = make_synthetic_df(600)
           X, labels, feature_names, _ = prepare_features(df, "ci")
 
+          import pandas as pd
+          _empty_fail = pd.DataFrame({
+              "equipment_id": pd.Series(dtype=int),
+              "maintenance_date": pd.Series(dtype="datetime64[ns]"),
+          })
+
           rows = ["| Horizon | ROC-AUC | PR-AUC | Recall (fail) | Precision (fail) |",
                   "|---------|---------|--------|---------------|-----------------|"]
           for h in HORIZONS:
               y = labels[f"will_fail_{h}d"]
-              _, m = train_horizon_model(X, y, h)
+              _, m = train_horizon_model(
+                  X, y, h,
+                  snapshot_ts=labels["snapshot_ts"],
+                  equipment_ids=labels["equipment_id"],
+                  failures_df=_empty_fail,
+              )
               rows.append(
                   f"| {h}d | {m['roc_auc']:.3f} | {m['pr_auc']:.3f} "
                   f"| {m['recall'][1]:.3f} | {m['precision'][1]:.3f} |"
