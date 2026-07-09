@@ -19,9 +19,18 @@ HORIZONS = [10, 30, 60]
 # FIXTURES
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _has_trained_model() -> bool:
+    reg = Path(__file__).parent.parent / "registry"
+    return bool(list(reg.glob("rf_30d_*.pkl")))
+
+
 @pytest.fixture(scope="module")
 def predictor():
-    """Load predictor once — mirrors production startup."""
+    """Load predictor once — mirrors production startup. Skips when no model is
+    present (OPS-2: pickles are build artifacts, untracked from git — a fresh
+    clone trains one via the seed pipeline)."""
+    if not _has_trained_model():
+        pytest.skip("no trained model in ml-service/registry/ — run training first")
     return MultiHorizonPredictor()
 
 
@@ -301,3 +310,36 @@ class TestSchema:
         snap = SnapshotInput(**low_risk_snapshot)
         assert snap.avg_vibration is None
         assert snap.error_code_count is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PROJECTION ENGINE (ML-8)
+# The forward projection must age only raw fields and let the predictor derive
+# the rest. Its acceptance property: a day-0 projection equals a live prediction.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestProjector:
+    def test_day0_equals_live_prediction(self, predictor, low_risk_snapshot):
+        from engine.projector import project
+        live = predictor.predict_multi_horizon(low_risk_snapshot)["predictions"]
+        curve = project(low_risk_snapshot, predictor)["curve"]
+        day0 = curve[0]
+        assert day0["day"] == 0
+        for h in HORIZONS:
+            assert day0[f"{h}d"] == round(live[f"{h}d"]["failure_probability"], 4), (
+                f"day-0 projection diverges from live prediction at {h}d — "
+                "the projector is feeding the model different inputs than serve."
+            )
+
+    def test_curve_ends_at_max_no_overshoot(self, predictor, low_risk_snapshot):
+        from engine.projector import project
+        curve = project(low_risk_snapshot, predictor)["curve"]
+        days = [pt["day"] for pt in curve]
+        assert days[0] == 0 and days[-1] == 60, f"curve must span 0..60, got {days}"
+        assert all(d <= 60 for d in days), f"projection overshoots past 60: {days}"
+
+    def test_probabilities_stay_in_unit_interval(self, predictor, low_risk_snapshot):
+        from engine.projector import project
+        for pt in project(low_risk_snapshot, predictor)["curve"]:
+            for h in HORIZONS:
+                assert 0.0 <= pt[f"{h}d"] <= 1.0

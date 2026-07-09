@@ -83,7 +83,7 @@ async function checkMLServiceHealth(): Promise<boolean> {
   }
 }
 
-function buildSnapshotPayload(
+export function buildSnapshotPayload(
   equipmentId: number,
   snapshot: Record<string, unknown>
 ): Record<string, unknown> {

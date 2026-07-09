@@ -13,6 +13,16 @@ GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 
+# LLM-1: recommendations are OFF by default. The deterministic template in the
+# predictor is the baseline; the LLM only augments single-asset detail views when
+# this flag is explicitly enabled AND a provider is reachable. Batch scoring never
+# calls the LLM (one network round-trip per asset would blow the batch budget).
+RECOMMENDATIONS_ENABLED = os.getenv("GENAI_RECOMMENDATIONS", "off").lower() in ("on", "true", "1")
+
+# Reject LLM output that is obviously unusable (empty, truncated, or a refusal).
+_MIN_RECOMMENDATION_CHARS = 40
+_MAX_RECOMMENDATION_CHARS = 1200
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PROMPT BUILDER
@@ -20,7 +30,7 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 # it easy to test and tune without touching provider logic.
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _build_prompt(snapshot: dict, prediction: dict) -> str:
+def _build_prompt(snapshot: dict, prediction: dict, horizon_days: int = 30) -> str:
     risk_level = prediction["risk_level"]
     prob = prediction["failure_probability"]
     drivers = prediction.get("top_risk_drivers", [])
@@ -47,7 +57,7 @@ EQUIPMENT PROFILE:
 
 RISK ASSESSMENT:
 - Risk level: {risk_level}
-- Failure probability (30-day window): {prob*100:.1f}%
+- Failure probability ({horizon_days}-day window): {prob*100:.1f}%
 - Mechanical wear score: {wear:.1f}/10
 - Operational stress score: {abuse:.1f}/10
 - Maintenance neglect score: {neglect:.1f}/10
@@ -107,28 +117,38 @@ def _call_ollama(prompt: str) -> str:
 # PUBLIC API
 # ─────────────────────────────────────────────────────────────────────────────
 
-def generate_recommendation(snapshot: dict, prediction: dict) -> Optional[str]:
-    """
-    Generate a plain-English maintenance recommendation using the configured LLM.
+def _validate(text: Optional[str]) -> Optional[str]:
+    """Reject empty / truncated / over-long output; trim to a sane bound."""
+    if not text:
+        return None
+    text = text.strip()
+    if len(text) < _MIN_RECOMMENDATION_CHARS:
+        print(f"[ADVISOR] Output too short ({len(text)} chars) — discarding")
+        return None
+    return text[:_MAX_RECOMMENDATION_CHARS].strip()
 
-    Returns None gracefully if:
-    - LLM_PROVIDER is set to "none"
-    - API key is missing
-    - LLM call fails for any reason (network, rate limit, etc.)
 
-    The caller (api/main.py) should always handle None — the prediction
-    is still valid and useful without the recommendation.
+def generate_recommendation(snapshot: dict, prediction: dict, horizon_days: int = 30) -> Optional[str]:
     """
-    if LLM_PROVIDER == "none":
+    Generate a plain-English maintenance recommendation using the configured LLM,
+    grounded in the structured risk facts for the given horizon.
+
+    Returns None gracefully (caller falls back to the deterministic template) if:
+    - recommendations are not enabled (GENAI_RECOMMENDATIONS)
+    - LLM_PROVIDER is "none" or unknown
+    - API key is missing / provider unreachable
+    - the call fails, or the output fails validation
+    """
+    if not RECOMMENDATIONS_ENABLED or LLM_PROVIDER == "none":
         return None
 
-    prompt = _build_prompt(snapshot, prediction)
+    prompt = _build_prompt(snapshot, prediction, horizon_days=horizon_days)
 
     try:
         if LLM_PROVIDER == "groq":
-            return _call_groq(prompt)
+            return _validate(_call_groq(prompt))
         elif LLM_PROVIDER == "ollama":
-            return _call_ollama(prompt)
+            return _validate(_call_ollama(prompt))
         else:
             print(f"[ADVISOR] Unknown LLM_PROVIDER: {LLM_PROVIDER} — skipping recommendation")
             return None
@@ -140,8 +160,12 @@ def generate_recommendation(snapshot: dict, prediction: dict) -> Optional[str]:
 
 
 def is_available() -> bool:
-    """Quick check for health endpoint — does not make an LLM call."""
-    if LLM_PROVIDER == "none":
+    """
+    Health-endpoint check — true only when recommendations are enabled AND the
+    provider is configured. Does not make an LLM call. When false, the service
+    serves the deterministic template and advertises nothing it can't deliver.
+    """
+    if not RECOMMENDATIONS_ENABLED or LLM_PROVIDER == "none":
         return False
     if LLM_PROVIDER == "groq":
         return bool(os.getenv("GROQ_API_KEY"))
