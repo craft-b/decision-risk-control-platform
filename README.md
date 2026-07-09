@@ -29,7 +29,7 @@ This is the second of two portfolio repositories, deliberately built to be compl
 - **Prevalence-honest calibration** — Random Forests calibrated (`CalibratedClassifierCV`) on the untouched, real-prevalence dev set with `class_weight='balanced'` (no SMOTE), so the emitted failure probability isn't inflated by resampling; Brier score + expected calibration error published per horizon
 - **Agent API** — Bearer-token authenticated endpoints (`GET /api/agent/model-health`, `POST /api/agent/actions`) for programmatic and LLM agent access; returns consolidated health snapshot with machine-readable `recommended_action`
 - **Automated monitoring** — `monitor.py` cron script polls model health, logs three-layer drift per feature, auto-triggers retraining or reference recomputation based on drift state, and fires Slack webhook alerts when action is needed or any drift layer reaches WARNING/ALERT; supports `--loop` mode for continuous polling
-- **GenAI recommendations** — Groq LLM turns risk scores into plain-English maintenance actions per asset
+- **GenAI recommendations (opt-in)** — with `GENAI_RECOMMENDATIONS=on` and a provider key, the Groq LLM turns a single asset's structured risk facts (worst horizon, drivers) into plain-English maintenance prose, validated and falling back to a deterministic template on any failure; **off by default**, and batch scoring always uses the template
 - **ML metrics dashboard** — Live feature importance, confusion matrix, per-class precision/recall/F1, prediction distribution over time, hyperparameter display, drift monitor card, champion-challenger comparison table, and data quality report card
 
 ---
@@ -71,7 +71,7 @@ React SPA (Vite, port 5173)
 
 ---
 
-## ML Models — v1.16
+## ML Models — v1.17
 
 > **⚠️ Data source: simulated.** Every number below is **pipeline verification on synthetic data**,
 > not field predictive performance. All operational data comes from a fleet simulator whose failure
@@ -91,16 +91,20 @@ model serves its own version-pinned preprocessing artifacts.
 from `REACTIVE_REPAIR` breakdown events in `(ts, ts+h]` — scheduled PM and model-driven
 interventions are never counted as failures.
 
-**v1.16 performance (simulated data):**
+**v1.17 performance (simulated data):**
 
 | Horizon | Split | ROC-AUC | PR-AUC | Recall @ HIGH | Brier | ECE |
 |---|---|---|---|---|---|---|
-| 10d | temporal | 0.9270 | 0.8109 | 89.2% | 0.072 | 0.074 |
-| 10d | by-asset | 0.9599 | — | — | — | — |
-| 30d | temporal | 0.8728 | 0.8009 | 77.2% | 0.080 | **0.034** ✓ |
-| 30d | by-asset | 0.9343 | — | — | — | — |
-| 60d | temporal | 0.8091 | 0.7889 | 64.1% | 0.121 | 0.053 |
-| 60d | by-asset | 0.9042 | — | — | — | — |
+| 10d | temporal | 0.9272 | 0.8111 | 89.2% | 0.072 | 0.074 |
+| 10d | by-asset | 0.9602 | — | — | — | — |
+| 30d | temporal | 0.8823 | 0.8079 | 77.2% | 0.080 | **0.032** ✓ |
+| 30d | by-asset | 0.9335 | — | — | — | — |
+| 60d | temporal | 0.8024 | 0.7847 | 64.1% | 0.122 | 0.054 |
+| 60d | by-asset | 0.9030 | — | — | — | — |
+
+*(v1.17 = v1.16 + the ML-12 config fix — `maintenance_config.recommended_interval_days` now
+actually drives `maint_overdue`/`neglect_score`. Both are low-importance features, so metrics are
+within noise of v1.16; the point is that train and serve now compute them identically.)*
 
 Recall @ HIGH = failure-class recall at the 0.60 HIGH-band operating threshold. ECE = expected
 calibration error (gate: < 0.05). The **temporal split** answers "same fleet, next quarter"; the
@@ -176,7 +180,7 @@ All four stages are triggerable from the admin panel in the UI (ADMINISTRATOR ro
 ```
 1. Generate Snapshots   →  Backfills feature vectors across full simulation timeline (7-day intervals)
 2. Label Snapshots      →  Marks 10d/30d/60d failure outcomes on each snapshot
-3. Retrain Models       →  Trains v1.16+ models, hot-swaps on completion (~3 min)
+3. Retrain Models       →  Trains v1.17+ models, hot-swaps on completion (~3 min)
 4. Run Predictions      →  Scores all active fleet units with latest models
 ```
 
@@ -237,11 +241,11 @@ A discrete-event simulator advances a cursor date day by day:
 │   │   ├── test_data_quality.py       # all 8 DQ checks + report structure
 │   │   └── test_model_registry.py     # champion/challenger/promote/metrics (in-memory)
 │   └── registry/                  # Versioned model artifacts
-│       ├── rf_{h}d_v1.16.pkl
-│       ├── clip_thresholds_v1.16.json
-│       ├── feature_cols_v1.16.json
-│       ├── metadata_{h}d_v1.16.json
-│       └── feature_importance_{h}d_v1.16.json
+│       ├── rf_{h}d_v1.17.pkl
+│       ├── clip_thresholds_v1.17.json
+│       ├── feature_cols_v1.17.json
+│       ├── metadata_{h}d_v1.17.json
+│       └── feature_importance_{h}d_v1.17.json
 │
 ├── monitor.py                     # Local cron script — polls agent API, auto-triggers retrain; --loop mode
 ├── .github/workflows/ml-ci.yml   # CI: lint (ruff), ML smoke-test, typecheck (tsc), Node unit tests (vitest)

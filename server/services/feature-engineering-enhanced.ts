@@ -313,7 +313,11 @@ class EnhancedFeatureEngineeringService {
       .where(eq(maintenanceConfig.equipmentCategory, equip.category || 'Default'))
       .limit(1);
 
-    const intervalDays = (configRecord[0] as any)?.inspectionIntervalDays ?? 90;
+    // ML-12: read the real column (recommended_interval_days). The old code read
+    // `inspectionIntervalDays`, which doesn't exist on maintenance_config — the
+    // `as any` cast hid it, so intervalDays was always the 90-day fallback and
+    // maintenance_config never influenced maint_overdue / neglect_acceleration.
+    const intervalDays = configRecord[0]?.recommendedIntervalDays ?? 90;
     const maintOverdue = daysSinceLastMaintenance !== null && daysSinceLastMaintenance > intervalDays ? 1 : 0;
 
     const costPerEvent = maintenanceEvents90d > 0 ? maintenanceCost180d / maintenanceEvents90d : 0;

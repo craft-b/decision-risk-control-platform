@@ -13,3 +13,6 @@ server/public
 vite.config.ts.*
 *.tar.gz
 .env
+
+# OPS-2: model pickles are produced by training — not tracked (were ~280MB)
+ml-service/registry/*.pkl

@@ -105,7 +105,10 @@ services:
       DB_NAME: ${DB_NAME}
       LLM_PROVIDER: ${LLM_PROVIDER:-groq}
       GROQ_API_KEY: ${GROQ_API_KEY}
-      GROQ_MODEL: ${GROQ_MODEL:-llama3-8b-8192}
+      # llama3-8b-8192 is deprecated on Groq — default to the current model
+      GROQ_MODEL: ${GROQ_MODEL:-llama-3.1-8b-instant}
+      # LLM-1: recommendations are opt-in; off = deterministic template only
+      GENAI_RECOMMENDATIONS: ${GENAI_RECOMMENDATIONS:-off}
       MODEL_VERSION: ${MODEL_VERSION:-v1}
     volumes:
       # Model artifacts persist across container rebuilds.

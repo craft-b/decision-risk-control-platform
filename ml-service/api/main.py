@@ -22,7 +22,7 @@ from api.schemas.prediction import (
     HealthResponse,
 )
 
-from engine.genai_advisor import is_available, LLM_PROVIDER
+from engine.genai_advisor import is_available, LLM_PROVIDER, generate_recommendation
 from engine.predictor_multihorizon import MultiHorizonPredictor
 from engine.projector import project as project_trajectory
 from engine.drift_detector import DriftDetector
@@ -171,6 +171,28 @@ async def predict_multi_horizon(snapshot: SnapshotInput):
     try:
         snapshot_dict = snapshot.model_dump()
         result = mh_predictor.predict_multi_horizon(snapshot_dict)
+
+        # LLM-1: augment the deterministic template with an LLM recommendation
+        # ONLY on this single-asset path and ONLY when explicitly enabled
+        # (never in batch). Falls back silently to the template on any failure.
+        # Grounded in the worst horizon's structured facts.
+        if is_available():
+            worst_key = max(result["predictions"], key=lambda k: result["predictions"][k]["failure_probability"])
+            worst = result["predictions"][worst_key]
+            llm_text = generate_recommendation(
+                snapshot_dict,
+                {"risk_level": worst["risk_level"],
+                 "failure_probability": worst["failure_probability"],
+                 "top_risk_drivers": worst.get("top_risk_drivers", {})},
+                horizon_days=int(worst_key.rstrip("d")),
+            )
+            if llm_text:
+                result["recommendation"] = llm_text
+                result["recommendation_source"] = "llm"
+            else:
+                result["recommendation_source"] = "template"
+        else:
+            result["recommendation_source"] = "template"
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Multi-horizon prediction failed: {str(e)}")

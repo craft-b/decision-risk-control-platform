@@ -1,6 +1,6 @@
 // server/services/data-logger.ts
 // Writes sensor readings to sensor_data_logs table.
-// Used by sensor-simulator and ml-pipeline-orchestrator.
+// Used by the sensor simulator.
 
 import { db } from "../db";
 import { sql } from "drizzle-orm";
