@@ -16,3 +16,10 @@ vite.config.ts.*
 
 # OPS-2: model pickles are produced by training — not tracked (were ~280MB)
 ml-service/registry/*.pkl
+
+# AI-assistant instructions & scratch — not part of the public portfolio
+CLAUDE.md
+/AssetIntelligence_Builder_Prompt.md
+/AssetIntelligence_Fable_Prompt.md
+.claude/
+attached_assets/
