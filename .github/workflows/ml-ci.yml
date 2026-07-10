@@ -64,10 +64,13 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          # Install ML core without DB drivers or heavy optional deps
+          # ML core for the in-memory smoke test. sqlalchemy is required because
+          # train_model_multihorizon imports it at module level (DB helpers); the
+          # MySQL driver (pymysql) is still omitted — the smoke test never connects.
+          # imbalanced-learn was dropped with SMOTE (ML-5).
           pip install \
             scikit-learn==1.8.0 \
-            imbalanced-learn==0.14.1 \
+            sqlalchemy==2.0.46 \
             numpy==2.4.1 \
             pandas==2.3.3 \
             joblib==1.5.3 \
