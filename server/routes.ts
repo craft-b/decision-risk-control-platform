@@ -908,6 +908,9 @@ export async function registerRoutes(
               topDrivers10d:  JSON.stringify(Object.keys(p['10d'].top_risk_drivers || {})),
               topDrivers30d:  JSON.stringify(Object.keys(p['30d'].top_risk_drivers || {})),
               topDrivers60d:  JSON.stringify(Object.keys(p['60d'].top_risk_drivers || {})),
+              shapAttribution10d: JSON.stringify(p['10d'].shap_attribution || {}),
+              shapAttribution30d: JSON.stringify(p['30d'].shap_attribution || {}),
+              shapAttribution60d: JSON.stringify(p['60d'].shap_attribution || {}),
               recommendation: pred.recommendation,
             });
             console.log(`[MAINTENANCE] Risk rescore complete for EQ-${input.equipmentId}`);
@@ -1064,6 +1067,9 @@ export async function registerRoutes(
           topDrivers10d:  JSON.stringify(Object.keys(p['10d'].top_risk_drivers || {})),
           topDrivers30d:  JSON.stringify(Object.keys(p['30d'].top_risk_drivers || {})),
           topDrivers60d:  JSON.stringify(Object.keys(p['60d'].top_risk_drivers || {})),
+          shapAttribution10d: JSON.stringify(p['10d'].shap_attribution || {}),
+          shapAttribution30d: JSON.stringify(p['30d'].shap_attribution || {}),
+          shapAttribution60d: JSON.stringify(p['60d'].shap_attribution || {}),
           recommendation: result.recommendation,
         });
       }
