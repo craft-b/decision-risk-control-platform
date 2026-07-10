@@ -8,6 +8,7 @@ import { Loader2 } from "lucide-react";
 import { useSystemStatus } from "@/hooks/use-system-status";
 
 import Login from "@/pages/login";
+import CommandCenter from "@/pages/command-center";
 import Dashboard from "@/pages/dashboard";
 import EquipmentList from "@/pages/equipment-list";
 import RentalsList from "@/pages/rentals-list";
@@ -58,6 +59,9 @@ function Router() {
 
       {/* Protected Routes */}
       <Route path="/">
+        <ProtectedRoute component={CommandCenter} />
+      </Route>
+      <Route path="/financial">
         <ProtectedRoute component={Dashboard} />
       </Route>
       <Route path="/equipment">
