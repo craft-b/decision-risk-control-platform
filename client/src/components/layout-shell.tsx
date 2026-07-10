@@ -14,6 +14,7 @@ import {
   TrendingUp,
   BarChart2,
   Boxes,
+  DollarSign,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -31,7 +32,7 @@ const NAV_SECTIONS: NavSection[] = [
   {
     label: "Operations",
     items: [
-      { name: "Dashboard", href: "/", icon: LayoutDashboard },
+      { name: "Command Center", href: "/", icon: LayoutDashboard },
       { name: "Equipment", href: "/equipment", icon: Truck },
       { name: "Rentals", href: "/rentals", icon: CalendarRange },
       { name: "Job Sites", href: "/job-sites", icon: MapPin },
@@ -43,6 +44,7 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { name: "Maintenance Log", href: "/maintenance", icon: Wrench },
       { name: "Cost Analysis", href: "/maintenance-costs", icon: BarChart2 },
+      { name: "Financial", href: "/financial", icon: DollarSign },
     ],
   },
   {
@@ -171,7 +173,7 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
       </div>
 
       {/* Main Content */}
-      <main className="min-h-screen flex-1 pt-14 md:ml-60 md:pt-0">
+      <main className="min-h-screen flex-1 min-w-0 pt-14 md:ml-60 md:pt-0">
         <div className="mx-auto max-w-7xl p-4 md:p-8 lg:p-10">
           {children}
         </div>

@@ -31,9 +31,18 @@ import {
   Wrench,
   DollarSign,
   Target,
+  ChevronRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CHART } from "@/lib/chart-theme";
+import {
+  type RiskLevel,
+  RISK_COLORS,
+  RISK_FILL,
+  RISK_HOVER,
+  humanizeDriver,
+  topDriverLabel,
+} from "@/lib/risk-format";
 import {
   Dialog,
   DialogContent,
@@ -64,7 +73,6 @@ import { MaintenanceForm } from "@/components/maintenance-form";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type RiskLevel = "LOW" | "MEDIUM" | "HIGH";
 type Horizon = "10d" | "30d" | "60d";
 type RiskTrend = "INCREASING" | "DECREASING" | "STABLE";
 
@@ -100,13 +108,8 @@ const HORIZON_CONFIDENCE: Record<Horizon, string> = {
   "60d": "Moderate model accuracy",
 };
 
-// Semantic risk tokens — the only saturated hues in the UI (DESIGN_SPEC §5)
-const RISK_COLORS: Record<RiskLevel, string> = {
-  HIGH:   "bg-risk-high-surface text-risk-high border-risk-high",
-  MEDIUM: "bg-risk-medium-surface text-risk-medium border-risk-medium",
-  LOW:    "bg-risk-low-surface text-risk-low border-risk-low",
-};
-
+// Semantic risk tokens live in @/lib/risk-format (shared with the command
+// center). Only the row-outline treatment is specific to this dashboard.
 const RISK_ROW_COLORS: Record<RiskLevel, string> = {
   HIGH:   "border-risk-high bg-risk-high-surface",
   MEDIUM: "border-risk-medium bg-risk-medium-surface",
@@ -652,16 +655,16 @@ export default function PredictiveMaintenanceDashboard() {
         </div>
         <div className="flex gap-4 text-sm">
           <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded-full bg-red-500" />
-            <span className="text-muted-foreground">High: <strong>{horizonDistribution.HIGH}</strong></span>
+            <div className="w-2.5 h-2.5 rounded-full bg-risk-high" />
+            <span className="text-muted-foreground">High: <strong className="text-foreground">{horizonDistribution.HIGH}</strong></span>
           </div>
           <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded-full bg-orange-400" />
-            <span className="text-muted-foreground">Medium: <strong>{horizonDistribution.MEDIUM}</strong></span>
+            <div className="w-2.5 h-2.5 rounded-full bg-risk-medium" />
+            <span className="text-muted-foreground">Medium: <strong className="text-foreground">{horizonDistribution.MEDIUM}</strong></span>
           </div>
           <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded-full bg-green-500" />
-            <span className="text-muted-foreground">Low: <strong>{horizonDistribution.LOW}</strong></span>
+            <div className="w-2.5 h-2.5 rounded-full bg-risk-low" />
+            <span className="text-muted-foreground">Low: <strong className="text-foreground">{horizonDistribution.LOW}</strong></span>
           </div>
         </div>
       </div>
@@ -679,29 +682,33 @@ export default function PredictiveMaintenanceDashboard() {
               No predictions yet. Click <strong>Run Predictions</strong> to generate multi-horizon forecasts.
             </div>
           ) : (
-            <div className="space-y-0.5">
+            <div>
+              {/* Column header — reads as an enterprise data table */}
+              <div className="hidden md:flex items-center gap-4 px-3 pb-2 mb-1 border-b border-border text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <div className="w-[240px] shrink-0">Asset</div>
+                <div className="flex-1 min-w-0 hidden lg:block">Primary risk driver</div>
+                <div className="w-[228px] shrink-0 text-center">Failure probability · 10 / 30 / 60d</div>
+                <div className="w-[176px] shrink-0 text-right pr-9">Status</div>
+              </div>
+
+              <div className="space-y-0.5">
               {sortedResults.map((result) => {
                 const pred = result.predictions?.[selectedHorizon];
                 if (!pred) return null;
                 const riskLevel = pred.risk_level;
+                const driver = topDriverLabel(pred);
                 return (
                   <div
                     key={result.equipmentId}
                     onClick={() => setSelectedResult(result)}
                     className={cn(
-                      "flex items-center justify-between px-3 py-2.5 rounded-md cursor-pointer transition-colors group",
-                      riskLevel === "HIGH"   && "hover:bg-red-50",
-                      riskLevel === "MEDIUM" && "hover:bg-orange-50",
-                      riskLevel === "LOW"    && "hover:bg-green-50",
+                      "flex items-center gap-4 px-3 py-2.5 rounded-md cursor-pointer transition-colors group border border-transparent",
+                      RISK_HOVER[riskLevel],
                     )}
                   >
-                    <div className="min-w-0 mr-3">
-                      <p className={cn(
-                        "text-sm font-medium truncate",
-                        riskLevel === "HIGH"   && "group-hover:text-red-900",
-                        riskLevel === "MEDIUM" && "group-hover:text-orange-900",
-                        riskLevel === "LOW"    && "group-hover:text-green-900",
-                      )}>
+                    {/* Asset */}
+                    <div className="w-[240px] shrink-0 min-w-0">
+                      <p className="text-sm font-medium truncate text-foreground">
                         {result.name}
                       </p>
                       <p className="text-xs text-muted-foreground font-mono">
@@ -709,7 +716,16 @@ export default function PredictiveMaintenanceDashboard() {
                       </p>
                     </div>
 
-                    <div className="hidden md:flex items-center gap-6 mx-6">
+                    {/* Primary driver — plain language, fills available width */}
+                    <div className="hidden lg:flex flex-1 min-w-0 items-center gap-2">
+                      <span className={cn("h-1.5 w-1.5 rounded-full shrink-0", RISK_FILL[riskLevel])} />
+                      <span className="truncate text-sm text-muted-foreground">
+                        {driver ?? <span className="italic opacity-70">No dominant driver</span>}
+                      </span>
+                    </div>
+
+                    {/* Tri-horizon failure probability bars */}
+                    <div className="hidden md:flex items-center gap-3 shrink-0 w-[228px] justify-center">
                       {(["10d", "30d", "60d"] as Horizon[]).map((h) => {
                         const p = result.predictions?.[h];
                         if (!p) return null;
@@ -717,20 +733,15 @@ export default function PredictiveMaintenanceDashboard() {
                           <TooltipProvider key={h}>
                             <Tooltip>
                               <TooltipTrigger asChild>
-                                <div className="flex flex-col items-center gap-1 w-14">
-                                  <div className="text-xs text-muted-foreground">{h}</div>
-                                  <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                                <div className="flex flex-col items-center gap-1 w-16">
+                                  <div className="text-[10px] font-medium text-muted-foreground">{h}</div>
+                                  <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
                                     <div
-                                      className={cn(
-                                        "h-full rounded-full",
-                                        p.risk_level === "HIGH"   && "bg-red-500",
-                                        p.risk_level === "MEDIUM" && "bg-orange-400",
-                                        p.risk_level === "LOW"    && "bg-green-500"
-                                      )}
+                                      className={cn("h-full rounded-full", RISK_FILL[p.risk_level])}
                                       style={{ width: `${Math.round(p.failure_probability * 100)}%` }}
                                     />
                                   </div>
-                                  <div className="text-xs font-medium">
+                                  <div className="text-xs font-semibold font-mono tabular-nums text-foreground">
                                     {Math.round(p.failure_probability * 100)}%
                                   </div>
                                 </div>
@@ -744,11 +755,12 @@ export default function PredictiveMaintenanceDashboard() {
                       })}
                     </div>
 
-                    <div className="flex items-center gap-3 shrink-0">
+                    {/* Status + one-click action */}
+                    <div className="flex items-center justify-end gap-2 shrink-0 w-[176px]">
                       <TooltipProvider>
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <div className="flex items-center gap-1">
+                            <div className="flex items-center">
                               <TrendIcon trend={result.riskTrend ?? "STABLE"} />
                             </div>
                           </TooltipTrigger>
@@ -758,10 +770,25 @@ export default function PredictiveMaintenanceDashboard() {
                         </Tooltip>
                       </TooltipProvider>
                       <RiskBadge level={riskLevel} />
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2 text-xs opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setShowSchedulePM(true);
+                          setSelectedResult(result);
+                        }}
+                      >
+                        <Wrench className="h-3.5 w-3.5 mr-1" />
+                        Schedule
+                      </Button>
+                      <ChevronRight className="h-4 w-4 text-muted-foreground/60 shrink-0" />
                     </div>
                   </div>
                 );
               })}
+              </div>
             </div>
           )}
         </CardContent>
@@ -943,9 +970,9 @@ export default function PredictiveMaintenanceDashboard() {
                 {selectedResult.category} · {selectedResult.equipmentCode} ·{" "}
                 <span className={cn(
                   "font-medium",
-                  selectedResult.riskTrend === "INCREASING" && "text-red-600",
-                  selectedResult.riskTrend === "DECREASING" && "text-green-600",
-                  selectedResult.riskTrend === "STABLE"     && "text-slate-600",
+                  selectedResult.riskTrend === "INCREASING" && "text-risk-high",
+                  selectedResult.riskTrend === "DECREASING" && "text-risk-low",
+                  selectedResult.riskTrend === "STABLE"     && "text-muted-foreground",
                 )}>
                   Risk {selectedResult.riskTrend?.toLowerCase() ?? "stable"} across horizons
                 </span>
@@ -1007,11 +1034,9 @@ export default function PredictiveMaintenanceDashboard() {
                           <div key={idx} className="flex items-center gap-2 text-sm">
                             <div className={cn(
                               "w-2 h-2 rounded-full flex-shrink-0",
-                              pred?.risk_level === "HIGH"   && "bg-red-500",
-                              pred?.risk_level === "MEDIUM" && "bg-orange-400",
-                              pred?.risk_level === "LOW"    && "bg-green-500",
+                              pred ? RISK_FILL[pred.risk_level] : "bg-muted-foreground",
                             )} />
-                            {driver}
+                            {humanizeDriver(driver)}
                           </div>
                         ))}
                       </div>
