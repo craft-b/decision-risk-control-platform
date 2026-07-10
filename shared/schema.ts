@@ -30,6 +30,12 @@ export const equipmentFailurePredictions = mysqlTable("equipment_failure_predict
   topDrivers10d: text("top_drivers_10d"),
   topDrivers30d: text("top_drivers_30d"),
   topDrivers60d: text("top_drivers_60d"),
+  // Per-prediction SHAP attribution (JSON: feature → signed log-odds contribution,
+  // top 5 by |value|). Sign and rank are reliable; magnitudes are NOT probabilities.
+  // Empty/NULL for cold-start rule-scored rows — the UI must show its no-attribution state.
+  shapAttribution10d: text("shap_attribution_10d"),
+  shapAttribution30d: text("shap_attribution_30d"),
+  shapAttribution60d: text("shap_attribution_60d"),
   recommendation: text("recommendation"),
 });
 

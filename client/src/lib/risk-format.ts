@@ -79,9 +79,12 @@ export function humanizeDriver(key: string): string {
     .trim();
   // Already a human-readable phrase (has whitespace or a colon)? Pass through.
   if (/[\s:]/.test(s)) return s;
-  // Otherwise treat as a raw model feature key.
-  if (DRIVER_LABELS[s]) return DRIVER_LABELS[s];
-  return s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  // Otherwise treat as a raw model feature key. SHAP attribution keys carry the
+  // pipeline's transform prefix (log_maintenance_cost_180d) — the transform is
+  // irrelevant to a mechanic, so map back to the underlying feature's phrase.
+  const base = s.replace(/^log_/, "");
+  if (DRIVER_LABELS[base]) return DRIVER_LABELS[base];
+  return base.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 type DriverCarrier = { top_risk_drivers?: Record<string, number> | string[] } | undefined | null;

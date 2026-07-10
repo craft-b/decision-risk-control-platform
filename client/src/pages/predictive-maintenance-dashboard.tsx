@@ -81,7 +81,11 @@ interface HorizonPrediction {
   risk_level: RiskLevel;
   risk_score: number;
   model_confidence: string;
-  top_risk_drivers: Record<string, number>;
+  top_risk_drivers: Record<string, number> | string[];
+  // Signed SHAP attribution (log-odds space): positive pushes toward failure,
+  // negative is protective. Sign and rank are reliable; magnitudes are NOT
+  // probabilities — render as share of attribution, never as "% risk".
+  shap_attribution?: Record<string, number>;
 }
 
 interface MultiHorizonResult {
@@ -115,6 +119,71 @@ const RISK_ROW_COLORS: Record<RiskLevel, string> = {
   MEDIUM: "border-risk-medium bg-risk-medium-surface",
   LOW:    "border-risk-low bg-risk-low-surface",
 };
+
+function parseJsonArray(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw as string[];
+  if (typeof raw !== "string") return [];
+  try {
+    const d = JSON.parse(raw || "[]");
+    return Array.isArray(d) ? d : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseJsonObject(raw: unknown): Record<string, number> {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw as Record<string, number>;
+  if (typeof raw !== "string") return {};
+  try {
+    const d = JSON.parse(raw || "{}");
+    return d && typeof d === "object" && !Array.isArray(d) ? d : {};
+  } catch {
+    return {};
+  }
+}
+
+// ─── SHAP attribution bars (DESIGN_SPEC §5 item 3) ───────────────────────────
+// One attribution source: per-prediction SHAP from the ML service. Values are
+// signed log-odds contributions — sign and rank are trustworthy, magnitudes are
+// not probabilities, so bars show each feature's SHARE of total |attribution|.
+function ShapDriverBars({ attribution }: { attribution: Record<string, number> }) {
+  const entries = Object.entries(attribution)
+    .filter(([, v]) => Number.isFinite(v) && v !== 0)
+    .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+  if (entries.length === 0) return null;
+  const totalAbs = entries.reduce((s, [, v]) => s + Math.abs(v), 0);
+  const maxAbs = Math.abs(entries[0][1]);
+  return (
+    <div className="space-y-1.5">
+      {entries.map(([feat, val]) => {
+        const share = Math.round((Math.abs(val) / totalAbs) * 100);
+        const width = Math.max(4, Math.round((Math.abs(val) / maxAbs) * 100));
+        const pushesTowardFailure = val > 0;
+        return (
+          <div key={feat} className="flex items-center gap-2 text-sm">
+            <span className="w-[46%] min-w-0 truncate" title={humanizeDriver(feat)}>
+              {humanizeDriver(feat)}
+            </span>
+            <span
+              className={cn(
+                "w-10 shrink-0 text-right font-mono text-xs tabular-nums font-medium",
+                pushesTowardFailure ? "text-risk-high" : "text-risk-low",
+              )}
+            >
+              {pushesTowardFailure ? "+" : "−"}{share}%
+            </span>
+            <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
+              <div
+                className={cn("h-full rounded-full", pushesTowardFailure ? "bg-risk-high" : "bg-risk-low")}
+                style={{ width: `${width}%` }}
+              />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 function TrendIcon({ trend }: { trend: RiskTrend }) {
   if (trend === "INCREASING") return <TrendingUp className="h-4 w-4 text-risk-high" />;
@@ -559,14 +628,18 @@ export default function PredictiveMaintenanceDashboard() {
     return {
       ...result,
       equipmentId: result.equipmentId ?? result.equipment_id,
+      modelVersion: result.modelVersion ?? result.model_version ?? "",
+      riskTrend: result.riskTrend ?? result.risk_trend ?? "STABLE",
       name:          equip?.name ?? result.name ?? `Equipment ${result.equipmentId ?? result.equipment_id}`,
       equipmentCode: equip?.equipmentId ?? result.equipment_code ?? "",
       category:      equip?.category ?? result.category ?? "",
       status:        equip?.status ?? result.status ?? "",
       predictions: result.predictions ?? {
-        "10d": { failure_probability: Number(result.prob_10d), risk_level: result.risk_level_10d, risk_score: Math.round(Number(result.prob_10d) * 100), model_confidence: "moderate", top_risk_drivers: (() => { try { const d = JSON.parse(result.top_drivers_10d || "[]"); return Array.isArray(d) ? Object.fromEntries(d.map((k: string) => [k, 0.05])) : d; } catch { return {}; } })() },
-        "30d": { failure_probability: Number(result.prob_30d), risk_level: result.risk_level_30d, risk_score: Math.round(Number(result.prob_30d) * 100), model_confidence: "high",     top_risk_drivers: (() => { try { const d = JSON.parse(result.top_drivers_30d || "[]"); return Array.isArray(d) ? Object.fromEntries(d.map((k: string) => [k, 0.05])) : d; } catch { return {}; } })() },
-        "60d": { failure_probability: Number(result.prob_60d), risk_level: result.risk_level_60d, risk_score: Math.round(Number(result.prob_60d) * 100), model_confidence: "very high", top_risk_drivers: (() => { try { const d = JSON.parse(result.top_drivers_60d || "[]"); return Array.isArray(d) ? Object.fromEntries(d.map((k: string) => [k, 0.05])) : d; } catch { return {}; } })() },
+        // Reconstructed from a persisted /latest row. Drivers stay a plain name
+        // list (no fabricated weights); attribution comes only from real SHAP.
+        "10d": { failure_probability: Number(result.prob_10d), risk_level: result.risk_level_10d, risk_score: Math.round(Number(result.prob_10d) * 100), model_confidence: "moderate", top_risk_drivers: parseJsonArray(result.top_drivers_10d), shap_attribution: parseJsonObject(result.shap_attribution_10d) },
+        "30d": { failure_probability: Number(result.prob_30d), risk_level: result.risk_level_30d, risk_score: Math.round(Number(result.prob_30d) * 100), model_confidence: "high",     top_risk_drivers: parseJsonArray(result.top_drivers_30d), shap_attribution: parseJsonObject(result.shap_attribution_30d) },
+        "60d": { failure_probability: Number(result.prob_60d), risk_level: result.risk_level_60d, risk_score: Math.round(Number(result.prob_60d) * 100), model_confidence: "very high", top_risk_drivers: parseJsonArray(result.top_drivers_60d), shap_attribution: parseJsonObject(result.shap_attribution_60d) },
       },
     };
   });
@@ -1016,30 +1089,49 @@ export default function PredictiveMaintenanceDashboard() {
                 </AlertDescription>
               </Alert>
 
-              {/* Risk drivers */}
+              {/* Explanation panel — SHAP-only attribution (DESIGN_SPEC §5 item 3) */}
               <div className="space-y-4">
-                <h3 className="font-semibold">Key Risk Drivers by Horizon</h3>
+                <div className="flex items-baseline justify-between gap-2">
+                  <h3 className="font-semibold">Why this risk score</h3>
+                  <span className="text-xs text-muted-foreground">
+                    Share of model attribution · <span className="text-risk-high">+ pushes toward failure</span> · <span className="text-risk-low">− protective</span>
+                  </span>
+                </div>
                 {(["10d", "30d", "60d"] as Horizon[]).map((h) => {
                   const pred = selectedResult.predictions?.[h];
-                  const drivers = pred?.top_risk_drivers ?? {};
-                  const driverKeys = Array.isArray(drivers) ? drivers : Object.keys(drivers);
-                  if (driverKeys.length === 0) return null;
+                  if (!pred) return null;
+                  const shap = pred.shap_attribution ?? {};
+                  const hasShap = Object.values(shap).some((v) => Number.isFinite(v) && v !== 0);
+                  const driverKeys = Array.isArray(pred.top_risk_drivers)
+                    ? pred.top_risk_drivers
+                    : Object.keys(pred.top_risk_drivers ?? {});
+                  if (!hasShap && driverKeys.length === 0) return null;
                   return (
                     <div key={h}>
                       <div className="text-sm font-medium text-muted-foreground mb-2">
                         {HORIZON_LABELS[h]}
                       </div>
-                      <div className="space-y-1">
-                        {driverKeys.slice(0, 3).map((driver: string, idx: number) => (
-                          <div key={idx} className="flex items-center gap-2 text-sm">
-                            <div className={cn(
-                              "w-2 h-2 rounded-full flex-shrink-0",
-                              pred ? RISK_FILL[pred.risk_level] : "bg-muted-foreground",
-                            )} />
-                            {humanizeDriver(driver)}
-                          </div>
-                        ))}
-                      </div>
+                      {hasShap ? (
+                        <ShapDriverBars attribution={shap} />
+                      ) : (
+                        <div className="space-y-1">
+                          {/* Honest fallback: no per-prediction attribution stored
+                              (cold-start rule score or pre-SHAP row) — names only,
+                              never fabricated weights. */}
+                          {driverKeys.slice(0, 3).map((driver: string, idx: number) => (
+                            <div key={idx} className="flex items-center gap-2 text-sm">
+                              <div className={cn(
+                                "w-2 h-2 rounded-full flex-shrink-0",
+                                RISK_FILL[pred.risk_level],
+                              )} />
+                              {humanizeDriver(driver)}
+                            </div>
+                          ))}
+                          <p className="text-xs text-muted-foreground italic">
+                            Per-prediction attribution unavailable — re-run predictions to compute SHAP values.
+                          </p>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -1119,7 +1211,7 @@ export default function PredictiveMaintenanceDashboard() {
               )}
 
               <div className="pt-2 border-t text-xs text-muted-foreground">
-                Model version: {selectedResult.modelVersion} · Multi-horizon Random Forest (calibrated)
+                {selectedResult.modelVersion} · Multi-horizon Random Forest · calibrated · attribution: per-prediction SHAP (TreeExplainer)
               </div>
             </div>
           </DialogContent>
