@@ -38,6 +38,56 @@ export function useEquipmentItem(id: number) {
   });
 }
 
+export interface SensorTrendPoint {
+  day: string;
+  engine_temp: number | null;
+  oil_pressure: number | null;
+  hydraulic_pressure: number | null;
+  vibration: number | null;
+  warnings: number | null;
+}
+
+export interface SensorTrends {
+  equipmentId: number;
+  days: number;
+  asOf: string;
+  points: SensorTrendPoint[];
+}
+
+/** Daily sensor aggregates for the asset detail page, anchored to the sim cursor. */
+export function useSensorTrends(id: number, days = 90) {
+  return useQuery<SensorTrends>({
+    queryKey: ["/api/equipment/:id/sensor-trends", id, days],
+    queryFn: async () => {
+      const res = await fetch(`/api/equipment/${id}/sensor-trends?days=${days}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch sensor trends");
+      return res.json();
+    },
+    enabled: !!id,
+  });
+}
+
+export interface FeatureBaseline {
+  equipmentId: number;
+  asOf: string | null;
+  unit: Record<string, number>;
+  fleet: Record<string, number>;
+}
+
+/** Latest-snapshot feature values for one unit vs. fleet averages — backs the
+ *  expandable SHAP bars ("wear score 7.9 vs fleet avg 4.1"). */
+export function useFeatureBaseline(id: number) {
+  return useQuery<FeatureBaseline>({
+    queryKey: ["/api/equipment/:id/feature-baseline", id],
+    queryFn: async () => {
+      const res = await fetch(`/api/equipment/${id}/feature-baseline`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch feature baseline");
+      return res.json();
+    },
+    enabled: !!id,
+  });
+}
+
 export function useCreateEquipment() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -67,6 +117,33 @@ export function useCreateEquipment() {
     },
     onError: (err) => {
       toast({ title: "Error creating equipment", description: err.message, variant: "destructive" });
+    },
+  });
+}
+
+export function useDeleteEquipment() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: async (id: number) => {
+      const url = buildUrl(api.equipment.delete.path, { id });
+      const res = await fetch(url, {
+        method: api.equipment.delete.method,
+        credentials: "include",
+      });
+      if (res.status === 409) {
+        const err = await res.json();
+        throw new Error(err.message);
+      }
+      if (!res.ok) throw new Error("Failed to delete equipment");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [api.equipment.list.path] });
+      toast({ title: "Equipment deleted" });
+    },
+    onError: (err) => {
+      toast({ title: "Cannot delete equipment", description: err.message, variant: "destructive" });
     },
   });
 }

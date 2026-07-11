@@ -8,10 +8,11 @@
 //   routes.ts → predictiveMaintenanceService → FastAPI /predict → DB
 
 import { db } from "../db";
-import { assetRiskPredictions, equipment } from "@shared/schema";
+import { assetRiskPredictions, equipmentRiskScores, equipment } from "@shared/schema";
 import { eq, desc } from "drizzle-orm";
 import { enhancedFeatureService as featureEngineeringService } from "./feature-engineering-enhanced";
-const ML_SERVICE_URL = process.env.ML_SERVICE_URL || "http://localhost:8000";
+import { IMPUTATION_DEFAULTS, COLD_START, isColdStart } from "./imputation";
+import { mlFetch, ML_SERVICE_URL } from "./ml-client";
 const ML_TIMEOUT_MS  = 10_000;
 
 // ── Public types (unchanged from previous implementation) ─────────────────────
@@ -33,19 +34,21 @@ export interface RiskPrediction {
 async function callMLService(
   snapshot: Record<string, unknown>
 ): Promise<{
-  equipment_id:       number;
-  failure_probability: number;
-  predicted_failure:  boolean;
-  risk_level:         "LOW" | "MEDIUM" | "HIGH";
-  model_version:      string;
-  top_risk_drivers:   Record<string, number> | string[];
-  recommendation:     string | null;
+  equipment_id:  number;
+  model_version: string;
+  risk_trend:    string;
+  predictions: {
+    "10d": { failure_probability: number; risk_level: "LOW" | "MEDIUM" | "HIGH"; risk_score: number; top_risk_drivers: Record<string, number> };
+    "30d": { failure_probability: number; risk_level: "LOW" | "MEDIUM" | "HIGH"; risk_score: number; top_risk_drivers: Record<string, number> };
+    "60d": { failure_probability: number; risk_level: "LOW" | "MEDIUM" | "HIGH"; risk_score: number; top_risk_drivers: Record<string, number> };
+  };
+  recommendation: string | null;
 }> {
   const controller = new AbortController();
   const timeout    = setTimeout(() => controller.abort(), ML_TIMEOUT_MS);
 
   try {
-    const response = await fetch(`${ML_SERVICE_URL}/predict`, {
+    const response = await mlFetch(`/predict/multi-horizon`, {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
       body:    JSON.stringify(snapshot),
@@ -54,6 +57,11 @@ async function callMLService(
 
     if (!response.ok) {
       const text = await response.text();
+      console.error(`[PM] ML service ${response.status} error body:`, text);
+      // Pretty-print if JSON
+      try {
+        console.error(`[PM] Parsed:`, JSON.stringify(JSON.parse(text), null, 2));
+      } catch {}
       throw new Error(`ML service returned ${response.status}: ${text}`);
     }
 
@@ -67,7 +75,7 @@ async function checkMLServiceHealth(): Promise<boolean> {
   try {
     const controller = new AbortController();
     const timeout    = setTimeout(() => controller.abort(), 3_000);
-    const response   = await fetch(`${ML_SERVICE_URL}/health`, { signal: controller.signal });
+    const response   = await mlFetch(`/health`, { signal: controller.signal });
     clearTimeout(timeout);
     return response.ok;
   } catch {
@@ -75,39 +83,43 @@ async function checkMLServiceHealth(): Promise<boolean> {
   }
 }
 
-function buildSnapshotPayload(
+export function buildSnapshotPayload(
   equipmentId: number,
   snapshot: Record<string, unknown>
 ): Record<string, unknown> {
-  // Map camelCase TypeScript snapshot → snake_case Python API
+  const safe = (val: unknown, fallback: number): number => {
+    const n = Number(val);
+    return isNaN(n) || val === null || val === undefined ? fallback : n;
+  };
+
   return {
-    equipment_id:                 equipmentId,
-    asset_age_years:              snapshot.assetAgeYears,
-    category:                     snapshot.category ?? "Unknown",
-    total_hours_lifetime:         snapshot.totalHoursLifetime,
-    hours_used_30d:               snapshot.hoursUsed30d,
-    hours_used_90d:               snapshot.hoursUsed90d,
-    rental_days_30d:              snapshot.rentalDays30d,
-    rental_days_90d:              snapshot.rentalDays90d,
-    avg_rental_duration:          snapshot.avgRentalDuration,
-    maintenance_events_90d:       snapshot.maintenanceEvents90d,
-    maintenance_cost_180d:        snapshot.maintenanceCost180d,
-    avg_downtime_per_event:       snapshot.avgDowntimePerEvent,
-    days_since_last_maintenance:  snapshot.daysSinceLastMaintenance ?? 999,
-    mean_time_between_failures:   snapshot.meanTimeBetweenFailures ?? 500,
-    vendor_reliability_score:     snapshot.vendorReliabilityScore,
-    jobsite_risk_score:           snapshot.jobSiteRiskScore,
-    usage_intensity:              snapshot.usageIntensity,
-    usage_trend:                  snapshot.usageTrend,
-    utilization_vs_expected:      snapshot.utilizationVsExpected,
-    wear_rate:                    snapshot.wearRate,
-    aging_factor:                 snapshot.agingFactor,
-    maint_overdue:                snapshot.maintOverdue,
-    cost_per_event:               snapshot.costPerEvent,
-    maint_burden:                 snapshot.maintBurden,
-    mechanical_wear_score:        snapshot.mechanicalWearScore,
-    abuse_score:                  snapshot.abuseScore,
-    neglect_score:                snapshot.neglectScore,
+    equipment_id:                equipmentId,
+    asset_age_years:             safe(snapshot.assetAgeYears, 1),
+    category:                    String(snapshot.category ?? "Unknown"),
+    total_hours_lifetime:        safe(snapshot.totalHoursLifetime, 0),
+    hours_used_30d:              safe(snapshot.hoursUsed30d, 0),
+    hours_used_90d:              safe(snapshot.hoursUsed90d, 0),
+    rental_days_30d:             Math.round(safe(snapshot.rentalDays30d, 0)),
+    rental_days_90d:             Math.round(safe(snapshot.rentalDays90d, 0)),
+    avg_rental_duration:         safe(snapshot.avgRentalDuration, 1),
+    maintenance_events_90d:      safe(snapshot.maintenanceEvents90d, 0),
+    maintenance_cost_180d:       safe(snapshot.maintenanceCost180d, 0),
+    avg_downtime_per_event:      safe(snapshot.avgDowntimePerEvent, 0),
+    days_since_last_maintenance: Math.max(0, safe(snapshot.daysSinceLastMaintenance, IMPUTATION_DEFAULTS.days_since_last_maintenance)),
+    vendor_reliability_score:    safe(snapshot.vendorReliabilityScore, 0.5),
+    jobsite_risk_score:          safe(snapshot.jobSiteRiskScore, 0.5),
+    usage_intensity:             Math.min(safe(snapshot.usageIntensity, 1), 12),
+    usage_trend:                 Math.min(Math.max(safe(snapshot.usageTrend, 1), 0.5), 3.0),
+    utilization_vs_expected:     safe(snapshot.utilizationVsExpected, 1),
+    wear_rate:                   safe(snapshot.wearRate, 0),
+    aging_factor:                Math.min(safe(snapshot.agingFactor, 0.1), 1.0),
+    maint_overdue:               safe(snapshot.maintOverdue, 0),
+    cost_per_event:              safe(snapshot.costPerEvent, 0),
+    maint_burden:                safe(snapshot.maintBurden, 0),
+    mechanical_wear_score:       Math.min(safe(snapshot.mechanicalWearScore, 1), 10),
+    abuse_score:                 Math.min(safe(snapshot.abuseScore, 1), 10),
+    neglect_score:               Math.min(Math.max(0, safe(snapshot.neglectScore, 1)), 10),
+    mean_time_between_failures:  safe(snapshot.meanTimeBetweenFailures, IMPUTATION_DEFAULTS.mean_time_between_failures),
   };
 }
 
@@ -140,23 +152,18 @@ function convertMLResponse(
   result: Awaited<ReturnType<typeof callMLService>>,
   snapshotTs: Date
 ): RiskPrediction {
+  const p30d = result.predictions["30d"];
   return {
     equipmentId:        result.equipment_id,
-    failureProbability: result.failure_probability,
-    riskBand:           result.risk_level,
-    riskScore:          Math.round(result.failure_probability * 100),
-    confidence:         0.85, // FastAPI model confidence — could be added to API response later
-    topDrivers: (() => {
-      const drivers = result.top_risk_drivers;
-      if (Array.isArray(drivers)) {
-        return drivers.map(d => ({ feature: d, impact: 0, description: d }));
-      }
-      return Object.entries(drivers).map(([key, val]) => ({
-        feature:     key,
-        impact:      typeof val === 'number' ? val : Number(val),
-        description: key,
-      }));
-    })(),
+    failureProbability: p30d.failure_probability,
+    riskBand:           p30d.risk_level,
+    riskScore:          Math.round(p30d.failure_probability * 100),
+    confidence:         0.85,
+    topDrivers: Object.entries(p30d.top_risk_drivers || {}).map(([key, val]) => ({
+      feature:     key,
+      impact:      typeof val === 'number' ? val : Number(val),
+      description: key,
+    })),
     snapshotTs,
     modelVersion:  result.model_version,
     recommendation: result.recommendation,
@@ -173,27 +180,58 @@ class PredictiveMaintenanceService {
    */
   async predictRisk(equipmentId: number): Promise<RiskPrediction> {
     const healthy = await checkMLServiceHealth();
-    if (!healthy) {
-      throw new Error(
-        `ML service unavailable at ${ML_SERVICE_URL}. ` +
-        `Ensure the FastAPI service is running: cd ml-service && python run.py`
-      );
-    }
+        if (!healthy) {
+          throw new Error(
+            `ML service unavailable at ${ML_SERVICE_URL}. ` +
+            `Ensure the FastAPI service is running: cd ml-service && python run.py`
+          );
+        }
 
-    const snapshot    = await featureEngineeringService.generateSnapshot(equipmentId, new Date());
-    const payload     = buildSnapshotPayload(equipmentId, snapshot as unknown as Record<string, unknown>);
-    const result      = await callMLService(payload);
-    const prediction  = convertMLResponse(result, snapshot.snapshotTs);
+        const snapshot = await featureEngineeringService.generateSnapshot(equipmentId, new Date());
 
-    await savePrediction(prediction, result.top_risk_drivers);
+        // Cold-start: brand-new assets are out-of-distribution for the model, so a
+        // deterministic rule scores them. Tagged with the rule modelVersion (ML-10)
+        // so the stored prediction is never mistaken for a model output.
+        if (isColdStart(snapshot.assetAgeYears, snapshot.totalHoursLifetime)) {
+          const prediction: RiskPrediction = {
+            equipmentId,
+            failureProbability: COLD_START.probability,
+            riskBand: COLD_START.riskBand,
+            riskScore: Math.round(COLD_START.probability * 100),
+            confidence: 0.95,
+            topDrivers: [
+              { feature: 'asset_age_years', impact: 0.01, description: 'New unit — minimal hours' },
+              { feature: 'total_hours_lifetime', impact: 0.01, description: 'Recent inspection completed' },
+              { feature: 'days_since_last_maintenance', impact: 0.01, description: 'Low operational age' },
+            ],
+            snapshotTs: snapshot.snapshotTs,
+            modelVersion: COLD_START.modelTag,
+            recommendation: 'Equipment is new and within safe operating parameters. Continue standard inspection schedule.',
+          };
+          await savePrediction(prediction);
+          return prediction;
+        }
 
-    console.log(
-      `[PM] EQ-${equipmentId} → ${prediction.riskBand} ` +
-      `(${(prediction.failureProbability * 100).toFixed(1)}%)`
-    );
+        const payload = buildSnapshotPayload(equipmentId, snapshot as unknown as Record<string, unknown>);
 
-    return prediction;
+        const invalidFields = Object.entries(payload).filter(([, v]) =>
+          typeof v === 'number' && isNaN(v as number)
+        );
+        if (invalidFields.length > 0) {
+          console.error(`[PM] NaN fields in payload for EQ-${equipmentId}:`, invalidFields.map(([k]) => k));
+        }
+
+        const result = await callMLService(payload);
+        const prediction = convertMLResponse(result, snapshot.snapshotTs);
+        await savePrediction(prediction, result.predictions["30d"].top_risk_drivers);
+
+        console.log(
+          `[PM] EQ-${equipmentId} → ${prediction.riskBand} ` +
+          `(${(prediction.failureProbability * 100).toFixed(1)}%)`
+        );
+        return prediction;
   }
+  
 
   /**
    * Returns the latest stored prediction for an equipment item.
@@ -232,25 +270,42 @@ class PredictiveMaintenanceService {
    * Runs predictions for all equipment. Skips individual failures gracefully.
    */
   async predictAllEquipment(): Promise<RiskPrediction[]> {
-    const healthy = await checkMLServiceHealth();
-    if (!healthy) {
-      console.warn(`[PM] ML service unavailable — skipping batch predictions`);
-      return [];
-    }
-
-    const allEquipment = await db.select({ id: equipment.id }).from(equipment);
-    const predictions: RiskPrediction[] = [];
-
-    for (const equip of allEquipment) {
-      try {
-        predictions.push(await this.predictRisk(equip.id));
-      } catch (err) {
-        console.error(`[PM] Failed prediction for equipment ${equip.id}:`, err);
+      const healthy = await checkMLServiceHealth();
+      if (!healthy) {
+        console.warn(`[PM] ML service unavailable — skipping batch predictions`);
+        return [];
       }
-    }
+      const allEquipment = await db.select({ id: equipment.id }).from(equipment);
+      const predictions: RiskPrediction[] = [];
 
-    console.log(`[PM] Batch complete — ${predictions.length}/${allEquipment.length} succeeded`);
-    return predictions;
+      for (const equip of allEquipment) {
+        try {
+          const prediction = await this.predictRisk(equip.id);
+          predictions.push(prediction);
+
+          // Sync to equipment_risk_scores so Risk Analytics stays aligned
+          await db.insert(equipmentRiskScores).values({
+            equipmentId: prediction.equipmentId,
+            riskScore: prediction.riskScore,
+            riskLevel: prediction.riskBand,
+            drivers: JSON.stringify(prediction.topDrivers.map(d => d.description)),
+            modelVersion: prediction.modelVersion,
+          }).onDuplicateKeyUpdate({
+            set: {
+              riskScore: prediction.riskScore,
+              riskLevel: prediction.riskBand,
+              drivers: JSON.stringify(prediction.topDrivers.map(d => d.description)),
+              modelVersion: prediction.modelVersion,
+            }
+          });
+        } catch (err) {
+          console.error(`[PM] Failed prediction for equipment ${equip.id}:`, err);
+        }
+      }
+
+      console.log(`[PM] Batch complete — ${predictions.length}/${allEquipment.length} succeeded`);
+      return predictions;
+    
   }
 
   /**

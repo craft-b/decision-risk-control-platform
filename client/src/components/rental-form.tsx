@@ -1,10 +1,11 @@
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { insertRentalSchema, InsertRental } from "@shared/schema";
-import { useCreateRental, useUpdateRental } from "@/hooks/use-rentals";
+import { useCreateRental, useUpdateRental, useNextPoNumber } from "@/hooks/use-rentals";
 import { useEquipment } from "@/hooks/use-equipment";
 import { useJobSites } from "@/hooks/use-jobsites";
 import { useVendors } from "@/hooks/use-vendors";
+import { useLatestMultiHorizonPredictions } from "@/hooks/use-risk-score";
 import { Button } from "@/components/ui/button";
 import {
   Form,
@@ -24,10 +25,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Loader2, AlertCircle } from "lucide-react";
+import { Loader2, AlertCircle, AlertTriangle } from "lucide-react";
 import { DialogFooter } from "@/components/ui/dialog";
 import { Textarea } from "./ui/textarea";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { cn } from "@/lib/utils";
 
 type RentalFormProps = {
   onSuccess: () => void;
@@ -46,11 +48,22 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
   const isEditing = !!initialData?.id;
   const createMutation = useCreateRental();
   const updateMutation = useUpdateRental();
-  
+  const { data: nextPo } = useNextPoNumber();
+
+  // ── Risk guard state ───────────────────────────────────────────────────────
+  const [dispatchConfirmed, setDispatchConfirmed] = useState(false);
+
   // Fetch data for dropdowns
-  const { data: equipmentList, isLoading: isLoadingEquipment } = useEquipment({ status: "AVAILABLE" });
+  // Edit mode: fetch all equipment so the currently-RENTED piece appears in the selector.
+  // New mode: only AVAILABLE to prevent double-booking.
+  const { data: equipmentList, isLoading: isLoadingEquipment, isError: isEquipmentError } = useEquipment(
+    isEditing ? undefined : { status: "AVAILABLE" }
+  );
   const { data: jobSites, isLoading: isLoadingJobSites } = useJobSites();
   const { data: vendors, isLoading: isLoadingVendors } = useVendors();
+
+  // Latest multi-horizon predictions for risk guard
+  const { data: latestPredictions } = useLatestMultiHorizonPredictions();
 
   const form = useForm<any>({
     resolver: zodResolver(insertRentalSchema),
@@ -67,18 +80,81 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
       returnDocument: "",
       buyRent: "RENT",
       status: "ACTIVE",
-      notes: ""
+      operatorName: "",
+      deliveryMethod: "CUSTOMER_PICKUP",
+      notes: "",
     },
   });
 
-  const receiveDate = form.watch("receiveDate");
-  const returnDate = form.watch("returnDate");
+  // Use simulation cursor as default receive date so new rentals are consistent
+  // with the simulation timeline, not the real wall clock (~2026 vs ~2032).
+  useEffect(() => {
+    if (!isEditing) {
+      fetch('/api/simulate/state', { credentials: 'include' })
+        .then(r => r.ok ? r.json() : null)
+        .then(state => {
+          const d = state?.cursor_date;
+          if (d) form.setValue('receiveDate', String(d).substring(0, 10));
+        })
+        .catch(() => {});
+    }
+  }, []);
+
+  const receiveDate       = form.watch("receiveDate");
+  const returnDate        = form.watch("returnDate");
+  const watchedEquipmentId = form.watch("equipmentId");
+
+  // ── Derive risk level for selected equipment ───────────────────────────────
+  const equipmentRisk = latestPredictions?.find(
+    (p: any) => (p.equipmentId ?? p.equipment_id) === watchedEquipmentId
+  );
+
+  const riskLevel30d: string | undefined =
+    equipmentRisk?.predictions?.["30d"]?.risk_level ??
+    equipmentRisk?.risk_level_30d;
+
+  const failureProb30d: number = Number(
+    equipmentRisk?.predictions?.["30d"]?.failure_probability ??
+    equipmentRisk?.prob_30d ??
+    0
+  );
+
+  // Estimate rental duration for contextual messaging
+  const rentalDays = (() => {
+    if (!returnDate || !receiveDate) return null;
+    const diff =
+      (new Date(returnDate).getTime() - new Date(receiveDate).getTime()) /
+      86_400_000;
+    return diff > 0 ? Math.round(diff) : null;
+  })();
+
+  // Reset acknowledgement whenever dispatcher picks a different piece of equipment
+  useEffect(() => {
+    setDispatchConfirmed(false);
+  }, [watchedEquipmentId]);
+
+  // Auto-populate receiveHours from selected equipment's current mileage
+  useEffect(() => {
+    if (!isEditing && watchedEquipmentId && equipmentList) {
+      const equip = equipmentList.find((e: any) => e.id === watchedEquipmentId);
+      if (equip?.currentMileage) {
+        form.setValue("receiveHours", equip.currentMileage);
+      }
+    }
+  }, [watchedEquipmentId, equipmentList, isEditing]);
+
+  // Auto-populate PO number for new rentals once the server-generated value arrives
+  useEffect(() => {
+    if (!isEditing && nextPo && !form.getValues("poNumber")) {
+      form.setValue("poNumber", nextPo);
+    }
+  }, [nextPo, isEditing]);
 
   useEffect(() => {
     if (receiveDate && returnDate && returnDate < receiveDate) {
       form.setError("returnDate", {
         type: "manual",
-        message: "Return date must be after receive date"
+        message: "Return date must be after receive date",
       });
     } else {
       form.clearErrors("returnDate");
@@ -98,13 +174,15 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
 
     const payload = {
       ...data,
+      buyRent: "RENT",
       receiveDate: formatDate(data.receiveDate) || getTodayDate(),
-      returnDate: formatDate(data.returnDate),
+      returnDate: formatDate(data.returnDate) ?? undefined,
+      operatorName: data.operatorName || null,
     };
-    
+
     if (isEditing && initialData?.id) {
       updateMutation.mutate(
-        { id: initialData.id, data: payload },
+        { id: initialData.id, data: payload as any },
         { onSuccess }
       );
     } else {
@@ -112,18 +190,23 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
         onSuccess: () => {
           form.reset();
           onSuccess();
-        }
+        },
       });
     }
   };
 
   const isPending = createMutation.isPending || updateMutation.isPending;
-  const hasAvailableEquipment = equipmentList && equipmentList.length > 0;
+  const hasAvailableEquipment = !isEquipmentError && equipmentList && equipmentList.length > 0;
   const hasJobSites = jobSites && jobSites.length > 0;
+
+  // Submit is blocked when equipment is HIGH risk and dispatcher hasn't acknowledged
+  const isBlockedByRisk = riskLevel30d === "HIGH" && !dispatchConfirmed;
 
   return (
     <Form {...form as any}>
       <form onSubmit={form.handleSubmit(onSubmit as any)} className="space-y-4" noValidate>
+
+        {/* ── Mutation errors ──────────────────────────────────────────────── */}
         {(createMutation.isError || updateMutation.isError) && (
           <Alert variant="destructive">
             <AlertCircle className="h-4 w-4" />
@@ -133,7 +216,16 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
           </Alert>
         )}
 
-        {!isLoadingEquipment && !hasAvailableEquipment && (
+        {isEquipmentError && (
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>
+              Failed to load equipment list. Please close and reopen the form.
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {!isLoadingEquipment && !isEquipmentError && !hasAvailableEquipment && !isEditing && (
           <Alert>
             <AlertCircle className="h-4 w-4" />
             <AlertDescription>
@@ -151,6 +243,7 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
           </Alert>
         )}
 
+        {/* ── Equipment selector ───────────────────────────────────────────── */}
         <FormField
           control={form.control as any}
           name="equipmentId"
@@ -158,8 +251,8 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
             <FormItem>
               <FormLabel>Equipment</FormLabel>
               <FormControl>
-                <Select 
-                  onValueChange={(val) => field.onChange(Number(val))} 
+                <Select
+                  onValueChange={(val) => field.onChange(Number(val))}
                   value={field.value?.toString()}
                   disabled={isLoadingEquipment || !hasAvailableEquipment}
                 >
@@ -182,6 +275,67 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
           )}
         />
 
+        {/* ── Track G: Risk Guard ──────────────────────────────────────────── */}
+        {watchedEquipmentId > 0 && equipmentRisk && (
+          <div className="space-y-2">
+
+            {/* HIGH risk — blocking warning */}
+            {riskLevel30d === "HIGH" && (
+              <Alert className="border-red-300 bg-red-50">
+                <AlertTriangle className="h-4 w-4 text-red-600 mt-0.5 flex-shrink-0" />
+                <AlertDescription className="text-red-800">
+                  <div className="font-semibold mb-1">
+                    ⚠ High Failure Risk — {Math.round(failureProb30d * 100)}% probability within 30 days
+                  </div>
+                  <div className="text-xs space-y-1">
+                    <div>This equipment is flagged HIGH risk by the predictive maintenance model.</div>
+                    {rentalDays && rentalDays > 10 && (
+                      <div>
+                        Planned rental of <strong>{rentalDays} days</strong> extends
+                        into the high-risk window.
+                      </div>
+                    )}
+                    <div className="pt-1">
+                      Recommend scheduling maintenance before dispatch or selecting alternate equipment.
+                    </div>
+                  </div>
+
+                  {!dispatchConfirmed ? (
+                    <button
+                      type="button"
+                      onClick={() => setDispatchConfirmed(true)}
+                      className="mt-2 text-xs underline text-red-700 hover:text-red-900 transition-colors"
+                    >
+                      I understand the risk — proceed anyway
+                    </button>
+                  ) : (
+                    <div className="mt-2 text-xs font-medium text-red-700 flex items-center gap-1">
+                      <AlertCircle className="h-3 w-3" />
+                      Risk acknowledged — dispatch confirmed
+                    </div>
+                  )}
+                </AlertDescription>
+              </Alert>
+            )}
+
+            {/* MEDIUM risk — advisory only, no block */}
+            {riskLevel30d === "MEDIUM" && (
+              <Alert className="border-orange-200 bg-orange-50">
+                <AlertTriangle className="h-4 w-4 text-orange-500 flex-shrink-0" />
+                <AlertDescription className="text-orange-800 text-sm">
+                  <span className="font-medium">Medium failure risk</span> —{" "}
+                  {Math.round(failureProb30d * 100)}% probability within 30 days.{" "}
+                  {rentalDays && rentalDays > 20
+                    ? "Consider scheduling a service check mid-rental."
+                    : "Monitor closely during the rental period."}
+                </AlertDescription>
+              </Alert>
+            )}
+
+          </div>
+        )}
+
+        {/* ── Job site ─────────────────────────────────────────────────────── */}
         <FormField
           control={form.control as any}
           name="jobSiteId"
@@ -189,8 +343,8 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
             <FormItem>
               <FormLabel>Job Site</FormLabel>
               <FormControl>
-                <Select 
-                  onValueChange={(val) => field.onChange(Number(val))} 
+                <Select
+                  onValueChange={(val) => field.onChange(Number(val))}
                   value={field.value?.toString()}
                   disabled={isLoadingJobSites || !hasJobSites}
                 >
@@ -216,6 +370,7 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
           )}
         />
 
+        {/* ── Vendor ───────────────────────────────────────────────────────── */}
         <FormField
           control={form.control as any}
           name="vendorId"
@@ -223,8 +378,8 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
             <FormItem>
               <FormLabel>Vendor (Optional)</FormLabel>
               <FormControl>
-                <Select 
-                  onValueChange={(val) => field.onChange(val === "none" ? null : Number(val))} 
+                <Select
+                  onValueChange={(val) => field.onChange(val === "none" ? null : Number(val))}
                   value={field.value?.toString() || "none"}
                   disabled={isLoadingVendors}
                 >
@@ -248,47 +403,29 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
           )}
         />
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <FormField
-            control={form.control as any}
-            name="poNumber"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>PO Number (Optional)</FormLabel>
-                <FormControl>
-                  <Input 
-                    placeholder="PO-12345" 
-                    {...field}
-                    value={field.value ?? ""}
-                  />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-          <FormField
-            control={form.control as any}
-            name="buyRent"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Type</FormLabel>
-                <FormControl>
-                  <Select onValueChange={field.onChange} value={field.value}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select type" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="RENT">Rent</SelectItem>
-                      <SelectItem value="BUY">Buy</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-        </div>
+        {/* ── PO Number ────────────────────────────────────────────────────── */}
+        <FormField
+          control={form.control as any}
+          name="poNumber"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>PO Number</FormLabel>
+              <FormControl>
+                <Input
+                  placeholder={nextPo ?? "PO-2032-0001"}
+                  {...field}
+                  value={field.value ?? ""}
+                />
+              </FormControl>
+              <FormDescription className="text-xs">
+                Auto-generated. You may override with a custom PO number.
+              </FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
 
+        {/* ── Dates ────────────────────────────────────────────────────────── */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <FormField
             control={form.control as any}
@@ -297,8 +434,8 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
               <FormItem>
                 <FormLabel>Receive Date</FormLabel>
                 <FormControl>
-                  <Input 
-                    type="date" 
+                  <Input
+                    type="date"
                     value={field.value || getTodayDate()}
                     onChange={(e) => field.onChange(e.target.value)}
                   />
@@ -312,20 +449,19 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
             name="receiveHours"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Receive Hours (Optional)</FormLabel>
+                <FormLabel>Hours at Dispatch</FormLabel>
                 <FormControl>
-                  <Input 
+                  <Input
                     type="number"
                     step="0.1"
-                    placeholder="0.0" 
-                    {...field}
+                    placeholder="Auto-populated on equipment select"
+                    readOnly
+                    className="bg-muted cursor-not-allowed"
                     value={field.value ?? ""}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      field.onChange(val === "" ? null : val);
-                    }}
+                    onChange={() => {}}
                   />
                 </FormControl>
+                <FormDescription>Current equipment hours at time of dispatch</FormDescription>
                 <FormMessage />
               </FormItem>
             )}
@@ -338,12 +474,12 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
             name="returnDate"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Return Date (Optional)</FormLabel>
+                <FormLabel>Return Date</FormLabel>
                 <FormControl>
-                  <Input 
-                    type="date" 
+                  <Input
+                    type="date"
                     value={field.value || ""}
-                    onChange={(e) => field.onChange(e.target.value || null)}
+                    onChange={(e) => field.onChange(e.target.value)}
                   />
                 </FormControl>
                 <FormMessage />
@@ -355,19 +491,60 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
             name="returnHours"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Return Hours (Optional)</FormLabel>
+                <FormLabel>Hours at Return</FormLabel>
                 <FormControl>
-                  <Input 
+                  <Input
                     type="number"
                     step="0.1"
-                    placeholder="0.0" 
+                    readOnly
+                    className="bg-muted cursor-not-allowed"
+                    placeholder="Auto-calculated on completion"
+                    value={field.value ?? ""}
+                    onChange={() => {}}
+                  />
+                </FormControl>
+                <FormDescription>Dispatch hours + round-trip distance + daily usage</FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        </div>
+
+        {/* ── Operator + Delivery Method ───────────────────────────────────── */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <FormField
+            control={form.control as any}
+            name="operatorName"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Operator / Driver (Optional)</FormLabel>
+                <FormControl>
+                  <Input
+                    placeholder="Name of equipment operator"
                     {...field}
                     value={field.value ?? ""}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      field.onChange(val === "" ? null : val);
-                    }}
                   />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control as any}
+            name="deliveryMethod"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Delivery Method</FormLabel>
+                <FormControl>
+                  <Select onValueChange={field.onChange} value={field.value || "CUSTOMER_PICKUP"}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select delivery method" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="CUSTOMER_PICKUP">Customer Pickup</SelectItem>
+                      <SelectItem value="COMPANY_DELIVERY">Company Delivery</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -375,29 +552,33 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
           />
         </div>
 
-        <FormField
-          control={form.control as any}
-          name="status"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Status</FormLabel>
-              <FormControl>
-                <Select onValueChange={field.onChange} value={field.value}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select status" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="ACTIVE">Active</SelectItem>
-                    <SelectItem value="COMPLETED">Completed</SelectItem>
-                    <SelectItem value="CANCELLED">Cancelled</SelectItem>
-                  </SelectContent>
-                </Select>
-              </FormControl>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
+        {/* ── Status (edit only) ───────────────────────────────────────────── */}
+        {isEditing && (
+          <FormField
+            control={form.control as any}
+            name="status"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Status</FormLabel>
+                <FormControl>
+                  <Select onValueChange={field.onChange} value={field.value}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ACTIVE">Active</SelectItem>
+                      <SelectItem value="COMPLETED">Completed</SelectItem>
+                      <SelectItem value="CANCELLED">Cancelled</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        )}
 
+        {/* ── Notes ────────────────────────────────────────────────────────── */}
         <FormField
           control={form.control as any}
           name="notes"
@@ -405,8 +586,8 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
             <FormItem>
               <FormLabel>Notes (Optional)</FormLabel>
               <FormControl>
-                <Textarea 
-                  placeholder="Any special instructions..." 
+                <Textarea
+                  placeholder="Any special instructions..."
                   {...field}
                   value={field.value ?? ""}
                   rows={3}
@@ -417,16 +598,30 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
           )}
         />
 
+        {/* ── Submit ───────────────────────────────────────────────────────── */}
         <DialogFooter>
-          <Button 
-            type="submit" 
-            disabled={isPending || (!isEditing && (!hasAvailableEquipment || !hasJobSites))} 
-            className="w-full"
+          <Button
+            type="submit"
+            disabled={
+              isPending ||
+              (!isEditing && (!hasAvailableEquipment || !hasJobSites)) ||
+              isBlockedByRisk
+            }
+            className={cn(
+              "w-full",
+              isBlockedByRisk && "opacity-50 cursor-not-allowed",
+              riskLevel30d === "HIGH" && dispatchConfirmed && "bg-red-600 hover:bg-red-700"
+            )}
           >
             {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            {isEditing ? "Update Rental" : "Create Rental"}
+            {isBlockedByRisk
+              ? "Acknowledge Risk to Dispatch"
+              : riskLevel30d === "HIGH" && dispatchConfirmed
+              ? isEditing ? "Update Rental" : "Dispatch Anyway"
+              : isEditing ? "Update Rental" : "Create Rental"}
           </Button>
         </DialogFooter>
+
       </form>
     </Form>
   );

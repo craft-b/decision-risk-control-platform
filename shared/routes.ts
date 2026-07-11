@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { 
   insertEquipmentSchema, insertRentalSchema, insertUserSchema, 
   insertJobSiteSchema, insertVendorSchema, insertInvoiceSchema,
-  users, jobSites, vendors, equipment, rentals, invoices 
+  EVENT_SOURCE_VALUES,
 } from './schema';
 
 // Types for build-time safety
@@ -180,7 +180,7 @@ export const api = {
           address: z.string().nullable(),
           contactPerson: z.string().nullable(),
           contactPhone: z.string().nullable(),
-          createdAt: z.string().nullable(), // Changed from z.date()
+          createdAt: z.string().nullable(),
           _count: z.object({
             rentals: z.number(),
           }).optional(),
@@ -198,12 +198,12 @@ export const api = {
           address: z.string().nullable(),
           contactPerson: z.string().nullable(),
           contactPhone: z.string().nullable(),
-          createdAt: z.string().nullable(), // Changed from z.date()
+          createdAt: z.string().nullable(),
           rentals: z.array(z.object({
             id: z.number(),
             status: z.string(),
-            receiveDate: z.string(), // Changed from z.date()
-            returnDate: z.string().nullable(), // Changed from z.date()
+            receiveDate: z.string(),
+            returnDate: z.string().nullable(),
             equipment: z.object({
               id: z.number(),
               name: z.string(),
@@ -226,7 +226,7 @@ export const api = {
           address: z.string().nullable(),
           contactPerson: z.string().nullable(),
           contactPhone: z.string().nullable(),
-          createdAt: z.string().nullable(), // Changed from z.date()
+          createdAt: z.string().nullable(),
         }),
         400: z.object({ message: z.string() }),
       },
@@ -243,7 +243,7 @@ export const api = {
           address: z.string().nullable(),
           contactPerson: z.string().nullable(),
           contactPhone: z.string().nullable(),
-          createdAt: z.string().nullable(), // Changed from z.date()
+          createdAt: z.string().nullable(),
         }),
         404: z.object({ message: z.string() }),
       },
@@ -254,7 +254,7 @@ export const api = {
       responses: {
         200: z.object({ message: z.string() }),
         404: z.object({ message: z.string() }),
-        409: z.object({ message: z.string() }), // Has active rentals
+        409: z.object({ message: z.string() }),
       },
     },
   },
@@ -270,7 +270,7 @@ export const api = {
           address: z.string().nullable(),
           salesPerson: z.string().nullable(),
           contact: z.string().nullable(),
-          createdAt: z.string().nullable(), // Changed from z.date()
+          createdAt: z.string().nullable(),
           _count: z.object({
             rentals: z.number(),
           }).optional(),
@@ -288,12 +288,12 @@ export const api = {
           address: z.string().nullable(),
           salesPerson: z.string().nullable(),
           contact: z.string().nullable(),
-          createdAt: z.string().nullable(), // Changed from z.date()
+          createdAt: z.string().nullable(),
           rentals: z.array(z.object({
             id: z.number(),
             status: z.string(),
-            receiveDate: z.string(), // Changed from z.date()
-            returnDate: z.string().nullable(), // Changed from z.date()
+            receiveDate: z.string(),
+            returnDate: z.string().nullable(),
             equipment: z.object({
               id: z.number(),
               name: z.string(),
@@ -316,7 +316,7 @@ export const api = {
           address: z.string().nullable(),
           salesPerson: z.string().nullable(),
           contact: z.string().nullable(),
-          createdAt: z.string().nullable(), // Changed from z.date()
+          createdAt: z.string().nullable(),
         }),
         400: z.object({ message: z.string() }),
       },
@@ -333,7 +333,7 @@ export const api = {
           address: z.string().nullable(),
           salesPerson: z.string().nullable(),
           contact: z.string().nullable(),
-          createdAt: z.string().nullable(), // Changed from z.date()
+          createdAt: z.string().nullable(),
         }),
         404: z.object({ message: z.string() }),
       },
@@ -344,7 +344,7 @@ export const api = {
       responses: {
         200: z.object({ message: z.string() }),
         404: z.object({ message: z.string() }),
-        409: z.object({ message: z.string() }), // Has active rentals
+        409: z.object({ message: z.string() }),
       },
     },
   },
@@ -396,6 +396,15 @@ export const api = {
         200: z.custom<Rental>(),
         404: errorSchemas.notFound,
       }
+    },
+    delete: {
+      method: 'DELETE' as const,
+      path: '/api/rentals/:id',
+      responses: {
+        200: z.object({ message: z.string() }),
+        404: errorSchemas.notFound,
+        409: z.object({ message: z.string() }),
+      }
     }
   },
   invoices: {
@@ -404,6 +413,42 @@ export const api = {
       path: '/api/invoices',
       input: insertInvoiceSchema,
       responses: { 201: z.custom<Invoice>() },
+    },
+  },
+  swaps: {
+    create: {
+      method: 'POST' as const,
+      path: '/api/rentals/:id/swap',
+      input: z.object({
+        replacementEquipmentId: z.number(),
+        reason: z.string().optional(),
+        swappedBy: z.string().optional(),
+        notes: z.string().optional(),
+      }),
+      responses: {
+        200: z.object({ message: z.string() }),
+        400: z.object({ message: z.string() }),
+        404: z.object({ message: z.string() }),
+      },
+    },
+    list: {
+      method: 'GET' as const,
+      path: '/api/rentals/:id/swaps',
+      responses: {
+        200: z.array(z.object({
+          id: z.number(),
+          rentalId: z.number(),
+          originalEquipmentId: z.number(),
+          replacementEquipmentId: z.number(),
+          swapDate: z.string(),
+          reason: z.string().nullable(),
+          swappedBy: z.string().nullable(),
+          notes: z.string().nullable(),
+          createdAt: z.string().nullable(),
+          originalEquipment: z.object({ id: z.number(), name: z.string(), equipmentId: z.string() }).optional(),
+          replacementEquipment: z.object({ id: z.number(), name: z.string(), equipmentId: z.string() }).optional(),
+        })),
+      },
     },
   },
   reports: {
@@ -505,9 +550,16 @@ export const api = {
       path: '/api/maintenance',
       input: z.object({
         equipmentId: z.string().optional(),
+        limit: z.string().optional(),
+        offset: z.string().optional(),
       }).optional(),
       responses: {
-        200: z.array(z.custom<MaintenanceEvent>()),
+        200: z.object({
+          events: z.array(z.custom<MaintenanceEvent>()),
+          total: z.number(),
+          limit: z.number(),
+          offset: z.number(),
+        }),
       },
     },
     create: {
@@ -517,6 +569,8 @@ export const api = {
         equipmentId: z.number(),
         maintenanceDate: z.string(),
         maintenanceType: z.enum(['INSPECTION', 'MINOR_SERVICE', 'MAJOR_SERVICE']),
+        // WHY the maintenance was triggered — feeds the ML feedback loop
+        eventSource: z.enum(EVENT_SOURCE_VALUES).optional().default('SCHEDULED_PM'),
         description: z.string().optional(),
         performedBy: z.string().optional(),
         cost: z.string().optional(),
@@ -532,6 +586,21 @@ export const api = {
       path: '/api/maintenance/equipment/:id',
       responses: {
         200: z.array(z.custom<MaintenanceEvent>()),
+      },
+    },
+    dueSoon: {
+      method: 'GET' as const,
+      path: '/api/maintenance/due-soon',
+      responses: {
+        200: z.array(z.object({
+          id: z.number(),
+          name: z.string(),
+          equipmentId: z.string(),
+          category: z.string(),
+          status: z.string(),
+          nextDueDate: z.string(),
+          daysUntilDue: z.number(),
+        })),
       },
     },
   },

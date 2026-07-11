@@ -1,0 +1,17 @@
+{
+  "clip_thresholds": {
+    "asset_age_years": 18.09,
+    "maintenance_events_90d": 96.0,
+    "days_since_last_maintenance": 1498.5,
+    "vendor_reliability_score": 1.125,
+    "jobsite_risk_score": 0.75,
+    "maint_frequency_trend": 1.5,
+    "cost_trend": 1.5,
+    "hours_velocity": 1.5,
+    "neglect_acceleration": 1.5,
+    "category_encoded": 13.5,
+    "log_maintenance_cost_180d": 17.778230966016253,
+    "log_mean_time_between_failures": 9.324909151627297
+  },
+  "version": "v1.11"
+}

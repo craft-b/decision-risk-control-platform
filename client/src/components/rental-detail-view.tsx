@@ -2,15 +2,18 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Package, MapPin, Building2, Calendar, FileText, DollarSign } from "lucide-react";
+import { Package, MapPin, Building2, Calendar, FileText, DollarSign, ArrowRightLeft } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
+import { useSwapHistory } from "@/hooks/use-rentals";
 
 type RentalDetailViewProps = {
   rental: any; // The full rental object with relations
 };
 
 export function RentalDetailView({ rental }: RentalDetailViewProps) {
+  const { data: swapHistory } = useSwapHistory(rental?.id ?? 0);
+
   if (!rental) {
     return (
       <div className="text-center py-12 text-muted-foreground">
@@ -255,13 +258,55 @@ export function RentalDetailView({ rental }: RentalDetailViewProps) {
                   <div>
                     <div className="font-mono text-sm font-medium">{invoice.invoiceNumber}</div>
                     <div className="text-xs text-muted-foreground">
-                      {format(new Date(invoice.invoiceDate), 'MMM d, yyyy')} • 
+                      {format(new Date(invoice.invoiceDate), 'MMM d, yyyy')} •
                       {format(new Date(invoice.periodFrom), 'MMM d')} - {format(new Date(invoice.periodTo), 'MMM d, yyyy')}
                     </div>
                   </div>
                   <div className="text-lg font-semibold text-green-600">
                     ${Number(invoice.amount).toFixed(2)}
                   </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Swap History (if any) */}
+      {swapHistory && swapHistory.length > 0 && (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <ArrowRightLeft className="h-5 w-5 text-muted-foreground" />
+              <CardTitle>Equipment Swap History</CardTitle>
+              <Badge variant="outline" className="ml-auto">
+                {swapHistory.length}
+              </Badge>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {swapHistory.map((swap: any) => (
+                <div key={swap.id} className="p-3 border rounded-lg space-y-1">
+                  <div className="flex items-center justify-between">
+                    <div className="text-sm font-medium">
+                      <span className="text-slate-600">{swap.originalEquipment?.name ?? `#${swap.originalEquipmentId}`}</span>
+                      <span className="mx-2 text-muted-foreground">→</span>
+                      <span className="text-purple-700">{swap.replacementEquipment?.name ?? `#${swap.replacementEquipmentId}`}</span>
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {swap.swapDate ? format(new Date(swap.swapDate), 'MMM d, yyyy') : ''}
+                    </div>
+                  </div>
+                  {swap.reason && (
+                    <div className="text-xs text-muted-foreground">Reason: {swap.reason}</div>
+                  )}
+                  {swap.swappedBy && (
+                    <div className="text-xs text-muted-foreground">By: {swap.swappedBy}</div>
+                  )}
+                  {swap.notes && (
+                    <div className="text-xs text-muted-foreground">{swap.notes}</div>
+                  )}
                 </div>
               ))}
             </div>

@@ -1,72 +1,162 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Oswald:wght@500;600;700&display=swap');
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  /* Professional Industrial Palette */
-  /* Primary: Bold Construction Orange/Yellow */
-  --primary: 36 100% 50%;
-  --primary-foreground: 222 47% 11%;
-  
-  /* Secondary: Industrial Steel Blue/Grey */
-  --secondary: 215 16% 47%;
-  --secondary-foreground: 210 40% 98%;
+/* ─────────────────────────────────────────────────────────────────────────────
+   Design tokens — DESIGN_SPEC §5 design language
+   Neutral slate surface ramp. Semantic risk is the ONLY saturated color
+   family (HIGH #DC2626 · MEDIUM #D97706 · LOW #059669); one blue is reserved
+   for interactive elements; chart data hues are validated (CVD + contrast)
+   in both modes. Fonts: Inter (UI) + JetBrains Mono (numerals/IDs).
+   ──────────────────────────────────────────────────────────────────────────── */
 
-  /* Backgrounds: Clean, high contrast */
+:root {
+  /* Surfaces — slate ramp */
   --background: 210 20% 98%;
   --foreground: 222 47% 11%;
-  
-  --muted: 210 40% 96%;
-  --muted-foreground: 215 16% 47%;
-  
-  --accent: 210 40% 96%;
+
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 47% 11%;
+
+  --muted: 210 25% 95%;
+  --muted-foreground: 215 16% 44%;
+
+  --accent: 214 32% 94%;
   --accent-foreground: 222 47% 11%;
-  
-  --destructive: 0 84% 60%;
+
+  /* Interactive blue — the one non-risk saturated color */
+  --primary: 224 71% 44%;
+  --primary-foreground: 210 40% 98%;
+
+  --secondary: 215 25% 27%;
+  --secondary-foreground: 210 40% 98%;
+
+  --destructive: 0 72% 51%;
   --destructive-foreground: 210 40% 98%;
 
-  --border: 214 32% 91%;
-  --input: 214 32% 91%;
-  --ring: 36 100% 50%;
-  
+  --border: 215 24% 89%;
+  --input: 215 24% 85%;
+  --ring: 224 71% 44%;
+  --card-border: 215 24% 90%;
+  --popover-border: 215 24% 87%;
+
   --radius: 0.5rem;
-  
-  --font-sans: 'Inter', sans-serif;
-  --font-display: 'Oswald', sans-serif;
+
+  /* Semantic risk — the only place these hues may appear */
+  --risk-high: 0 72% 51%;           /* #DC2626 */
+  --risk-high-surface: 0 86% 97%;
+  --risk-high-border: 0 72% 88%;
+  --risk-medium: 32 95% 44%;        /* #D97706 */
+  --risk-medium-surface: 43 96% 95%;
+  --risk-medium-border: 38 80% 82%;
+  --risk-low: 160 94% 30%;          /* #059669 */
+  --risk-low-surface: 152 76% 96%;
+  --risk-low-border: 152 55% 83%;
+
+  /* Chart data hues — validated categorical order (never cycled) */
+  --chart-1: 224 76% 48%;           /* #1D4ED8 */
+  --chart-2: 175 84% 32%;           /* #0D9488 */
+  --chart-3: 293 69% 40%;           /* #A21CAF */
+  --chart-grid: 215 20% 65%;
+  --chart-axis: 215 16% 44%;
+
+  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', monospace;
 }
 
 .dark {
-  --background: 222 47% 11%;
-  --foreground: 210 40% 98%;
-  
-  --primary: 36 100% 50%;
-  --primary-foreground: 222 47% 11%;
-  
-  --muted: 217 33% 17%;
-  --muted-foreground: 215 20% 65%;
-  
-  --accent: 217 33% 17%;
-  --accent-foreground: 210 40% 98%;
-  
-  --border: 217 33% 17%;
-  --input: 217 33% 17%;
+  --background: 222 47% 6%;
+  --foreground: 214 32% 91%;
+
+  --card: 222 44% 9%;
+  --card-foreground: 214 32% 91%;
+  --popover: 222 44% 9%;
+  --popover-foreground: 214 32% 91%;
+
+  --muted: 220 35% 13%;
+  --muted-foreground: 215 18% 62%;
+
+  --accent: 220 35% 15%;
+  --accent-foreground: 214 32% 91%;
+
+  --primary: 217 91% 60%;
+  --primary-foreground: 222 47% 8%;
+
+  --secondary: 215 25% 65%;
+  --secondary-foreground: 222 47% 8%;
+
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 210 40% 98%;
+
+  --border: 220 30% 16%;
+  --input: 220 30% 20%;
+  --ring: 217 91% 60%;
+  --card-border: 220 30% 15%;
+  --popover-border: 220 30% 18%;
+
+  /* Dark-mode risk + chart steps — separately validated against dark surface */
+  --risk-high: 0 84% 60%;           /* #EF4444 */
+  --risk-high-surface: 0 60% 13%;
+  --risk-high-border: 0 55% 26%;
+  --risk-medium: 32 95% 44%;        /* #D97706 */
+  --risk-medium-surface: 33 70% 11%;
+  --risk-medium-border: 33 60% 24%;
+  --risk-low: 160 84% 39%;          /* #059669-adjacent, brighter */
+  --risk-low-surface: 160 60% 9%;
+  --risk-low-border: 160 45% 20%;
+
+  --chart-1: 217 91% 60%;           /* #3B82F6 */
+  --chart-2: 175 84% 32%;           /* #0D9488 */
+  --chart-3: 291 71% 48%;           /* #C026D3 */
+  --chart-grid: 215 20% 45%;
+  --chart-axis: 215 18% 62%;
 }
 
 @layer base {
+  * {
+    @apply border-border;
+  }
+
   body {
     @apply bg-background text-foreground antialiased;
     font-family: var(--font-sans);
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   }
 
   h1, h2, h3, h4, h5, h6 {
     font-family: var(--font-display);
-    @apply font-bold tracking-tight uppercase text-foreground;
+    @apply font-semibold tracking-tight text-foreground;
+  }
+
+  /* Numerals line up everywhere they're compared vertically */
+  .font-mono,
+  table,
+  [data-numeric] {
+    font-variant-numeric: tabular-nums;
+  }
+
+  ::selection {
+    @apply bg-primary/15;
   }
 }
 
-/* Custom Scrollbar for dashboard tables */
+@layer utilities {
+  /* Semantic risk utilities — use these, never raw red/amber/green */
+  .text-risk-high    { color: hsl(var(--risk-high)); }
+  .text-risk-medium  { color: hsl(var(--risk-medium)); }
+  .text-risk-low     { color: hsl(var(--risk-low)); }
+  .bg-risk-high-surface   { background-color: hsl(var(--risk-high-surface)); }
+  .bg-risk-medium-surface { background-color: hsl(var(--risk-medium-surface)); }
+  .bg-risk-low-surface    { background-color: hsl(var(--risk-low-surface)); }
+  .border-risk-high    { border-color: hsl(var(--risk-high-border)); }
+  .border-risk-medium  { border-color: hsl(var(--risk-medium-border)); }
+  .border-risk-low     { border-color: hsl(var(--risk-low-border)); }
+}
+
+/* Custom scrollbar for dashboard tables */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;

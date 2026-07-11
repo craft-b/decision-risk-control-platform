@@ -1,0 +1,83 @@
+{
+  "version": "v1.15",
+  "horizon_days": 30,
+  "algorithm": "Random Forest (calibrated, isotonic)",
+  "trained_at": "2026-07-07T22:15:13.143751",
+  "data_source": "simulated",
+  "metrics_framing": "pipeline verification on synthetic data \u2014 pending real fleet labels",
+  "label_definition": "REACTIVE_REPAIR event in (ts, ts+horizon]; day-0 excluded; intervention-censored rows excluded (label_status)",
+  "embargo_days": 30,
+  "embargoed_rows": 239,
+  "operator_metrics_temporal": {
+    "recall_failure_operating": 0.7722929936305732,
+    "precision_at_budget": 0.8996138996138998,
+    "lead_time_median_days": 26.0,
+    "lead_time_failures_flagged_pct": 0.960308710033076,
+    "lead_time_failures_evaluable": 907,
+    "operating_threshold": 0.6,
+    "budget_fraction": 0.1
+  },
+  "by_asset": {
+    "roc_auc": 0.9345581136063875,
+    "pr_auc": 0.9461456152068783,
+    "positive_rate": 0.5003694126339121,
+    "n_evaluated": 10828,
+    "n_folds": 5,
+    "recall_failure_operating": 0.7816537467700259,
+    "precision_at_budget": 0.9829345531315974,
+    "lead_time_median_days": 26.0,
+    "lead_time_failures_flagged_pct": 0.9448393232555812,
+    "lead_time_failures_evaluable": 9989,
+    "operating_threshold": 0.6,
+    "budget_fraction": 0.1
+  },
+  "accuracy": 0.9118,
+  "train_accuracy": 0.9105,
+  "roc_auc": 0.875,
+  "pr_auc": 0.8013,
+  "cv_roc_auc": "0.9204 \u00b1 0.0508",
+  "positive_rate": 0.5004,
+  "samples_train": 8423,
+  "samples_test": 2166,
+  "hyperparameters": {
+    "n_estimators": 200,
+    "max_depth": 12,
+    "min_samples_split": 5,
+    "min_samples_leaf": 3,
+    "max_features": "sqrt",
+    "class_weight": "balanced",
+    "calibration": "isotonic"
+  },
+  "confusion_matrix": {
+    "TN": 1490,
+    "FP": 48,
+    "FN": 143,
+    "TP": 485
+  },
+  "per_class": {
+    "no_failure": {
+      "precision": 0.9124,
+      "recall": 0.9688,
+      "f1": 0.9398,
+      "support": 1538
+    },
+    "failure": {
+      "precision": 0.9099,
+      "recall": 0.7723,
+      "f1": 0.8355,
+      "support": 628
+    }
+  },
+  "top_features": [
+    "maintenance_events_90d",
+    "log_maintenance_cost_180d",
+    "aging_factor",
+    "log_mean_time_between_failures",
+    "asset_age_years",
+    "vendor_reliability_score",
+    "mechanical_wear_score",
+    "wear_rate",
+    "log_total_hours_lifetime",
+    "neglect_score"
+  ]
+}

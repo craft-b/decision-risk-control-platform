@@ -1,4 +1,4 @@
-import { mysqlTable, varchar, serial, bigint, int, timestamp, decimal, date, text, mysqlEnum} from "drizzle-orm/mysql-core";
+import { mysqlTable, varchar, serial, bigint, int, smallint, tinyint, timestamp, decimal, date, text, mysqlEnum, index} from "drizzle-orm/mysql-core";
 import { relations } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -15,6 +15,33 @@ export const equipmentRiskScores = mysqlTable("equipment_risk_scores", {
   scoredAt: timestamp("scored_at").defaultNow().notNull(),
 });
 
+export const equipmentFailurePredictions = mysqlTable("equipment_failure_predictions", {
+  id: bigint("id", { mode: 'number', unsigned: true }).primaryKey().autoincrement(),
+  equipmentId: int("equipment_id").notNull(),
+  predictedAt: timestamp("predicted_at").defaultNow().notNull(),
+  modelVersion: varchar("model_version", { length: 50 }).notNull(),
+  riskTrend: mysqlEnum("risk_trend", ["INCREASING", "DECREASING", "STABLE"]).notNull().default("STABLE"),
+  prob10d: decimal("prob_10d", { precision: 5, scale: 4 }).notNull(),
+  riskLevel10d: mysqlEnum("risk_level_10d", ["LOW", "MEDIUM", "HIGH"]).notNull(),
+  prob30d: decimal("prob_30d", { precision: 5, scale: 4 }).notNull(),
+  riskLevel30d: mysqlEnum("risk_level_30d", ["LOW", "MEDIUM", "HIGH"]).notNull(),
+  prob60d: decimal("prob_60d", { precision: 5, scale: 4 }).notNull(),
+  riskLevel60d: mysqlEnum("risk_level_60d", ["LOW", "MEDIUM", "HIGH"]).notNull(),
+  topDrivers10d: text("top_drivers_10d"),
+  topDrivers30d: text("top_drivers_30d"),
+  topDrivers60d: text("top_drivers_60d"),
+  // Per-prediction SHAP attribution (JSON: feature → signed log-odds contribution,
+  // top 5 by |value|). Sign and rank are reliable; magnitudes are NOT probabilities.
+  // Empty/NULL for cold-start rule-scored rows — the UI must show its no-attribution state.
+  shapAttribution10d: text("shap_attribution_10d"),
+  shapAttribution30d: text("shap_attribution_30d"),
+  shapAttribution60d: text("shap_attribution_60d"),
+  recommendation: text("recommendation"),
+});
+
+export type EquipmentFailurePrediction = typeof equipmentFailurePredictions.$inferSelect;
+
+
 export const users = mysqlTable("users", {
   id: serial("id").primaryKey(),
   username: varchar("username", { length: 255 }).notNull().unique(),
@@ -30,6 +57,7 @@ export const jobSites = mysqlTable("job_sites", {
   address: text("address"),
   contactPerson: varchar("contact_person", { length: 255 }),
   contactPhone: varchar("contact_phone", { length: 50 }),
+  distanceMiles: decimal("distance_miles", { precision: 6, scale: 1 }).default("25.0"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -41,7 +69,6 @@ export const vendors = mysqlTable("vendors", {
   salesPerson: varchar("sales_person", { length: 255 }),
   contact: varchar("contact", { length: 255 }),
   createdAt: timestamp("created_at").defaultNow(),
-  
 });
 
 export const equipment = mysqlTable("equipment", {
@@ -57,6 +84,10 @@ export const equipment = mysqlTable("equipment", {
   weeklyRate: decimal("weekly_rate", { precision: 10, scale: 2 }),
   monthlyRate: decimal("monthly_rate", { precision: 10, scale: 2 }),
   location: varchar("location", { length: 255 }),
+  yearManufactured: int("year_manufactured"),
+  purchaseDate: date("purchase_date"),
+  currentMileage: decimal("current_mileage", { precision: 10, scale: 2 }),
+  initialMileage: decimal("initial_mileage", { precision: 10, scale: 2 }),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -75,8 +106,25 @@ export const rentals = mysqlTable("rentals", {
   buyRent: varchar("buy_rent", { length: 10, enum: ["BUY", "RENT"] }).default("RENT").notNull(),
   status: varchar("status", { length: 50, enum: ["ACTIVE", "COMPLETED", "CANCELLED"] }).default("ACTIVE").notNull(),
   notes: text("notes"),
+  operatorName: varchar("operator_name", { length: 255 }),
+  deliveryMethod: varchar("delivery_method", { length: 30, enum: ["CUSTOMER_PICKUP", "COMPANY_DELIVERY"] }).default("CUSTOMER_PICKUP").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
 });
+
+export const equipmentSwaps = mysqlTable("equipment_swaps", {
+  id: serial("id").primaryKey(),
+  rentalId: int("rental_id").notNull(),
+  originalEquipmentId: int("original_equipment_id").notNull(),
+  replacementEquipmentId: int("replacement_equipment_id").notNull(),
+  swapDate: date("swap_date").notNull(),
+  reason: text("reason"),
+  swappedBy: varchar("swapped_by", { length: 255 }),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export type EquipmentSwap = typeof equipmentSwaps.$inferSelect;
+export type InsertEquipmentSwap = typeof equipmentSwaps.$inferInsert;
 
 export const invoices = mysqlTable("invoices", {
   id: serial("id").primaryKey(),
@@ -89,14 +137,38 @@ export const invoices = mysqlTable("invoices", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+// ── Event source enum ─────────────────────────────────────────────────────────
+// Captures WHY maintenance was performed — separate from maintenanceType (WHAT was done).
+// This distinction is the feedback loop between predictive model outputs and actual actions:
+//   SCHEDULED_PM            → vendor interval, calendar driven (default for all historical records)
+//   PREDICTIVE_INTERVENTION → tech/dispatcher acted on a model HIGH/MEDIUM flag
+//   REACTIVE_REPAIR         → breakdown response, unit failed in the field
+//   PRE_DISPATCH_INSPECTION → triggered by rental dispatch risk guard
+//
+// A MAJOR_SERVICE from REACTIVE_REPAIR is a different signal than one from PREDICTIVE_INTERVENTION —
+// same maintenanceType, fundamentally different operational context.
+export const EVENT_SOURCE_VALUES = [
+  "SCHEDULED_PM",
+  "PREDICTIVE_INTERVENTION",
+  "REACTIVE_REPAIR",
+  "PRE_DISPATCH_INSPECTION",
+] as const;
+
+export type EventSource = typeof EVENT_SOURCE_VALUES[number];
+
 export const maintenanceEvents = mysqlTable("maintenance_events", {
   id: serial("id").primaryKey(),
   equipmentId: int("equipment_id").notNull(),
   maintenanceDate: date("maintenance_date").notNull(),
-  maintenanceType: varchar("maintenance_type", { 
-    length: 50, 
-    enum: ["INSPECTION", "MINOR_SERVICE", "MAJOR_SERVICE"] 
+  maintenanceType: varchar("maintenance_type", {
+    length: 50,
+    enum: ["INSPECTION", "MINOR_SERVICE", "MAJOR_SERVICE"],
   }).notNull(),
+  // WHY it was triggered — enriches the ML feedback loop going forward
+  // All historical records default to SCHEDULED_PM (safe assumption)
+  eventSource: mysqlEnum("event_source", EVENT_SOURCE_VALUES)
+    .notNull()
+    .default("SCHEDULED_PM"),
   description: text("description"),
   performedBy: varchar("performed_by", { length: 255 }),
   cost: decimal("cost", { precision: 10, scale: 2 }),
@@ -115,8 +187,7 @@ export const maintenanceConfig = mysqlTable("maintenance_config", {
 });
 
 
-
-// === RELATIONS === (DECLARE ONCE ONLY)
+// === RELATIONS ===
 
 export const equipmentRiskScoresRelations = relations(equipmentRiskScores, ({ one }) => ({
   equipment: one(equipment, { fields: [equipmentRiskScores.equipmentId], references: [equipment.id] }),
@@ -127,6 +198,7 @@ export const rentalsRelations = relations(rentals, ({ one, many }) => ({
   jobSite: one(jobSites, { fields: [rentals.jobSiteId], references: [jobSites.id] }),
   vendor: one(vendors, { fields: [rentals.vendorId], references: [vendors.id] }),
   invoices: many(invoices),
+  swaps: many(equipmentSwaps),
 }));
 
 export const equipmentRelations = relations(equipment, ({ many }) => ({
@@ -146,65 +218,83 @@ export const invoicesRelations = relations(invoices, ({ one }) => ({
   rental: one(rentals, { fields: [invoices.rentalId], references: [rentals.id] }),
 }));
 
+export const equipmentSwapsRelations = relations(equipmentSwaps, ({ one }) => ({
+  rental: one(rentals, { fields: [equipmentSwaps.rentalId], references: [rentals.id] }),
+  originalEquipment: one(equipment, { fields: [equipmentSwaps.originalEquipmentId], references: [equipment.id] }),
+  replacementEquipment: one(equipment, { fields: [equipmentSwaps.replacementEquipmentId], references: [equipment.id] }),
+}));
+
 export const maintenanceEventsRelations = relations(maintenanceEvents, ({ one }) => ({
-  equipment: one(equipment, { 
-    fields: [maintenanceEvents.equipmentId], 
-    references: [equipment.id] 
+  equipment: one(equipment, {
+    fields: [maintenanceEvents.equipmentId],
+    references: [equipment.id],
   }),
 }));
 
 // === PREDICTIVE MAINTENANCE TABLES ===
 
-// Feature snapshot table - time-aware feature store
 export const assetFeatureSnapshots = mysqlTable("asset_feature_snapshots", {
   id: bigint("id", { mode: 'number', unsigned: true }).primaryKey().autoincrement(),
   equipmentId: bigint("equipment_id", { mode: 'number', unsigned: true }).notNull(),
   snapshotTs: timestamp("snapshot_ts").notNull(),
-  
-  // Asset metadata
   assetAgeYears: decimal("asset_age_years", { precision: 10, scale: 2 }),
   category: varchar("category", { length: 100 }),
-  
-  // Usage features
   totalHoursLifetime: decimal("total_hours_lifetime", { precision: 10, scale: 2 }),
   hoursUsed30d: decimal("hours_used_30d", { precision: 10, scale: 2 }),
   hoursUsed90d: decimal("hours_used_90d", { precision: 10, scale: 2 }),
-  
-  // Rental intensity
   rentalDays30d: int("rental_days_30d"),
   rentalDays90d: int("rental_days_90d"),
   avgRentalDuration: decimal("avg_rental_duration", { precision: 10, scale: 2 }),
-  
-  // Maintenance features
   maintenanceEvents90d: int("maintenance_events_90d"),
   maintenanceCost180d: decimal("maintenance_cost_180d", { precision: 10, scale: 2 }),
   avgDowntimePerEvent: decimal("avg_downtime_per_event", { precision: 10, scale: 2 }),
   daysSinceLastMaintenance: int("days_since_last_maintenance"),
-  
-  // Reliability features
   meanTimeBetweenFailures: int("mean_time_between_failures"),
-  
-  // Context features
   vendorReliabilityScore: decimal("vendor_reliability_score", { precision: 3, scale: 2 }),
   jobSiteRiskScore: decimal("jobsite_risk_score", { precision: 3, scale: 2 }),
-  
-  // Label (computed post-hoc for training)
-  willFail30d: int("will_fail_30d"), // 0, 1, or NULL (unknown)
-  
+  // Derived / composite features
+  usageIntensity:        decimal("usage_intensity", { precision: 8, scale: 4 }),
+  usageTrend:            decimal("usage_trend", { precision: 8, scale: 4 }),
+  utilizationVsExpected: decimal("utilization_vs_expected", { precision: 8, scale: 4 }),
+  wearRate:              decimal("wear_rate", { precision: 8, scale: 4 }),
+  agingFactor:           decimal("aging_factor", { precision: 8, scale: 4 }),
+  maintOverdue:          decimal("maint_overdue", { precision: 8, scale: 4 }),
+  costPerEvent:          decimal("cost_per_event", { precision: 10, scale: 2 }),
+  maintBurden:           decimal("maint_burden", { precision: 8, scale: 4 }),
+  mechanicalWearScore:   decimal("mechanical_wear_score", { precision: 5, scale: 2 }),
+  abuseScore:            decimal("abuse_score", { precision: 5, scale: 2 }),
+  neglectScore:          decimal("neglect_score", { precision: 5, scale: 2 }),
+  // Trend velocity features
+  wearRateVelocity:      decimal("wear_rate_velocity", { precision: 8, scale: 4 }),
+  maintFrequencyTrend:   decimal("maint_frequency_trend", { precision: 8, scale: 4 }),
+  costTrend:             decimal("cost_trend", { precision: 8, scale: 4 }),
+  hoursVelocity:         decimal("hours_velocity", { precision: 8, scale: 4 }),
+  neglectAcceleration:   decimal("neglect_acceleration", { precision: 8, scale: 4 }),
+  sensorDegradationRate: decimal("sensor_degradation_rate", { precision: 8, scale: 4 }),
+  willFail10d: int("will_fail_10d"),
+  willFail30d: int("will_fail_30d"),
+  willFail60d: int("will_fail_60d"),
+  // ML-11: label integrity. NULL = not yet evaluated by the labeler.
+  //   observed              → outcome window fully elapsed, labels are ground truth
+  //   censored_intervention → a PREDICTIVE_INTERVENTION landed in the window before
+  //                           any failure; the counterfactual is unknowable, so the
+  //                           row is excluded from training and prevalence accounting
+  //   censored_horizon      → 60d outcome window hasn't elapsed yet (re-evaluated
+  //                           as the simulation cursor advances)
+  labelStatus: mysqlEnum("label_status", [
+    "observed",
+    "censored_intervention",
+    "censored_horizon",
+  ]),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-// Risk predictions table - inference results
 export const assetRiskPredictions = mysqlTable("asset_risk_predictions", {
   id: bigint("id", { mode: 'number', unsigned: true }).primaryKey().autoincrement(),
   equipmentId: bigint("equipment_id", { mode: 'number', unsigned: true }).notNull(),
   snapshotTs: timestamp("snapshot_ts").notNull(),
-  
-  // Model outputs
   failureProbability: decimal("failure_probability", { precision: 5, scale: 4 }).notNull(),
   riskBand: mysqlEnum("risk_band", ["LOW", "MEDIUM", "HIGH"]).notNull(),
-  
-  // Explainability
   topDriver1: varchar("top_driver_1", { length: 100 }),
   topDriver1Impact: decimal("top_driver_1_impact", { precision: 5, scale: 4 }),
   topDriver2: varchar("top_driver_2", { length: 100 }),
@@ -212,58 +302,41 @@ export const assetRiskPredictions = mysqlTable("asset_risk_predictions", {
   topDriver3: varchar("top_driver_3", { length: 100 }),
   topDriver3Impact: decimal("top_driver_3_impact", { precision: 5, scale: 4 }),
   recommendation: text("recommendation"),
-  
-  // Metadata
   modelVersion: varchar("model_version", { length: 50 }).notNull(),
   predictedAt: timestamp("predicted_at").defaultNow().notNull(),
 });
 
-// Model metadata & versioning
 export const mlModels = mysqlTable("ml_models", {
   id: bigint("id", { mode: 'number', unsigned: true }).primaryKey().autoincrement(),
   modelVersion: varchar("model_version", { length: 50 }).notNull().unique(),
   modelType: varchar("model_type", { length: 50 }).notNull(),
-  
-  // Training metadata
   trainedAt: timestamp("trained_at").notNull(),
   trainingDataStart: date("training_data_start").notNull(),
   trainingDataEnd: date("training_data_end").notNull(),
   trainingRecords: int("training_records").notNull(),
-  
-  // Performance metrics
   rocAuc: decimal("roc_auc", { precision: 5, scale: 4 }),
   precision: decimal("precision", { precision: 5, scale: 4 }),
   recall: decimal("recall", { precision: 5, scale: 4 }),
-  
-  // Feature metadata
   featureSchema: text("feature_schema"),
-  
-  // Status
   status: mysqlEnum("status", ["ACTIVE", "ARCHIVED", "TESTING"]).default("ACTIVE").notNull(),
-  
   createdAt: timestamp("created_at").defaultNow(),
 });
 
 export const modelTrainingMetrics = mysqlTable("model_training_metrics", {
-  id: int("id").primaryKey().autoincrement(), // Changed from serial to int
+  id: int("id").primaryKey().autoincrement(),
   modelVersion: varchar("model_version", { length: 50 }).notNull(),
   trainedAt: timestamp("trained_at").notNull(),
   datasetSize: int("dataset_size").notNull(),
-  
   accuracy: decimal("accuracy", { precision: 5, scale: 4 }).notNull(),
-  
   precisionHigh: decimal("precision_high", { precision: 5, scale: 4 }).notNull(),
   recallHigh: decimal("recall_high", { precision: 5, scale: 4 }).notNull(),
   f1High: decimal("f1_high", { precision: 5, scale: 4 }).notNull(),
-  
   precisionMedium: decimal("precision_medium", { precision: 5, scale: 4 }).notNull(),
   recallMedium: decimal("recall_medium", { precision: 5, scale: 4 }).notNull(),
   f1Medium: decimal("f1_medium", { precision: 5, scale: 4 }).notNull(),
-  
   precisionLow: decimal("precision_low", { precision: 5, scale: 4 }).notNull(),
   recallLow: decimal("recall_low", { precision: 5, scale: 4 }).notNull(),
   f1Low: decimal("f1_low", { precision: 5, scale: 4 }).notNull(),
-  
   highPredictedHigh: int("high_predicted_high").notNull(),
   highPredictedMedium: int("high_predicted_medium").notNull(),
   highPredictedLow: int("high_predicted_low").notNull(),
@@ -273,45 +346,150 @@ export const modelTrainingMetrics = mysqlTable("model_training_metrics", {
   lowPredictedHigh: int("low_predicted_high").notNull(),
   lowPredictedMedium: int("low_predicted_medium").notNull(),
   lowPredictedLow: int("low_predicted_low").notNull(),
-  
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-// Admin overrides & feedback loop
+// Long-format model metrics — one row per (version, horizon, split, metric).
+// Replaces the mis-shaped model_training_metrics table, whose 3-class
+// precision/recall columns were being (ab)used to store per-horizon ROC-AUCs.
+// `split`: 'temporal' (time-based holdout) | 'by_asset' (grouped by equipment).
+export const modelMetrics = mysqlTable("model_metrics", {
+  id: bigint("id", { mode: 'number', unsigned: true }).primaryKey().autoincrement(),
+  modelVersion: varchar("model_version", { length: 50 }).notNull(),
+  horizonDays: int("horizon_days").notNull(),
+  split: varchar("split", { length: 20 }).notNull().default("temporal"),
+  metric: varchar("metric", { length: 60 }).notNull(),
+  value: decimal("value", { precision: 14, scale: 6 }).notNull(),
+  trainedAt: timestamp("trained_at").notNull(),
+  datasetSize: int("dataset_size"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export type ModelMetricRow = typeof modelMetrics.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ARCH-1: tables previously created by runtime DDL (Node db-initializer and the
+// Python drift detector / training script) now live here — Drizzle is the single
+// DDL owner. Column definitions mirror the live schema exactly. The Python and
+// Node services only read/write these; they no longer CREATE them.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// High-volume sensor telemetry (simulator today; ingestion adapters in Phase B).
+export const sensorDataLogs = mysqlTable("sensor_data_logs", {
+  id: bigint("id", { mode: 'number', unsigned: true }).primaryKey().autoincrement(),
+  equipmentId: int("equipment_id").notNull(),
+  timestamp: timestamp("timestamp").notNull(),
+  engineRpm: int("engine_rpm"),
+  engineTemp: int("engine_temp"),
+  oilPressure: int("oil_pressure"),
+  coolantTemp: int("coolant_temp"),
+  fuelConsumption: decimal("fuel_consumption", { precision: 10, scale: 2 }),
+  hydraulicPressure: int("hydraulic_pressure"),
+  hydraulicTemp: int("hydraulic_temp"),
+  hydraulicFlowRate: int("hydraulic_flow_rate"),
+  vibrationX: decimal("vibration_x", { precision: 6, scale: 3 }),
+  vibrationY: decimal("vibration_y", { precision: 6, scale: 3 }),
+  vibrationZ: decimal("vibration_z", { precision: 6, scale: 3 }),
+  operatingHours: decimal("operating_hours", { precision: 10, scale: 2 }),
+  loadPercentage: int("load_percentage"),
+  idleTime: decimal("idle_time", { precision: 10, scale: 2 }),
+  ambientTemp: int("ambient_temp"),
+  errorCodes: text("error_codes"),
+  warningCount: int("warning_count"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (t) => ({
+  idxEquipmentTs: index("idx_equipment_ts").on(t.equipmentId, t.timestamp),
+  idxTimestamp: index("idx_timestamp").on(t.timestamp),
+}));
+
+// Feature drift — PSI per monitored feature vs. training distribution.
+export const driftMetrics = mysqlTable("drift_metrics", {
+  id: bigint("id", { mode: 'number', unsigned: true }).primaryKey().autoincrement(),
+  checkedAt: timestamp("checked_at").notNull().defaultNow(),
+  modelVersion: varchar("model_version", { length: 50 }),
+  batchSize: int("batch_size").notNull(),
+  feature: varchar("feature", { length: 100 }).notNull(),
+  psi: decimal("psi", { precision: 10, scale: 6 }).notNull(),
+  status: mysqlEnum("status", ["STABLE", "WARNING", "ALERT"]).notNull(),
+  refMean: decimal("ref_mean", { precision: 14, scale: 4 }),
+  curMean: decimal("cur_mean", { precision: 14, scale: 4 }),
+  refStd: decimal("ref_std", { precision: 14, scale: 4 }),
+  curStd: decimal("cur_std", { precision: 14, scale: 4 }),
+}, (t) => ({
+  idxCheckedAt: index("idx_checked_at").on(t.checkedAt),
+  idxFeature: index("idx_feature").on(t.feature),
+}));
+
+// Prediction drift — PSI on output score distribution, per horizon.
+export const predictionDriftMetrics = mysqlTable("prediction_drift_metrics", {
+  id: bigint("id", { mode: 'number', unsigned: true }).primaryKey().autoincrement(),
+  checkedAt: timestamp("checked_at").notNull().defaultNow(),
+  modelVersion: varchar("model_version", { length: 50 }),
+  batchSize: int("batch_size").notNull(),
+  horizon: smallint("horizon").notNull(),
+  scorePsi: decimal("score_psi", { precision: 10, scale: 6 }).notNull(),
+  scoreStatus: mysqlEnum("score_status", ["STABLE", "WARNING", "ALERT"]).notNull(),
+  highPct: decimal("high_pct", { precision: 5, scale: 4 }),
+  mediumPct: decimal("medium_pct", { precision: 5, scale: 4 }),
+  lowPct: decimal("low_pct", { precision: 5, scale: 4 }),
+  refHighPct: decimal("ref_high_pct", { precision: 5, scale: 4 }),
+  refMediumPct: decimal("ref_medium_pct", { precision: 5, scale: 4 }),
+  refLowPct: decimal("ref_low_pct", { precision: 5, scale: 4 }),
+}, (t) => ({
+  idxCheckedAt: index("idx_checked_at").on(t.checkedAt),
+  idxHorizon: index("idx_horizon").on(t.horizon),
+}));
+
+// Bias drift — per-category HIGH-rate deviation vs. baseline.
+export const biasDriftMetrics = mysqlTable("bias_drift_metrics", {
+  id: bigint("id", { mode: 'number', unsigned: true }).primaryKey().autoincrement(),
+  checkedAt: timestamp("checked_at").notNull().defaultNow(),
+  modelVersion: varchar("model_version", { length: 50 }),
+  batchSize: int("batch_size").notNull(),
+  category: varchar("category", { length: 100 }).notNull(),
+  horizon: smallint("horizon").notNull(),
+  meanScore: decimal("mean_score", { precision: 8, scale: 6 }),
+  highPct: decimal("high_pct", { precision: 5, scale: 4 }),
+  refHighPct: decimal("ref_high_pct", { precision: 5, scale: 4 }),
+  deviation: decimal("deviation", { precision: 5, scale: 4 }),
+  alert: tinyint("alert").default(0),
+}, (t) => ({
+  idxCheckedAt: index("idx_checked_at").on(t.checkedAt),
+  idxCategory: index("idx_category").on(t.category),
+}));
+
 export const maintenanceOverrides = mysqlTable("maintenance_overrides", {
   id: bigint("id", { mode: 'number', unsigned: true }).primaryKey().autoincrement(),
   equipmentId: bigint("equipment_id", { mode: 'number', unsigned: true }).notNull(),
   predictionId: bigint("prediction_id", { mode: 'number', unsigned: true }),
-  
-  overriddenBy: bigint("overridden_by", { mode: 'number', unsigned: true }).notNull(), // Changed from int
+  overriddenBy: bigint("overridden_by", { mode: 'number', unsigned: true }).notNull(),
   originalRiskBand: varchar("original_risk_band", { length: 20 }),
   overrideRiskBand: varchar("override_risk_band", { length: 20 }).notNull(),
   reason: text("reason"),
   actionTaken: text("action_taken"),
-  
   createdAt: timestamp("created_at").defaultNow(),
 });
 
 // === RELATIONS ===
 
 export const assetFeatureSnapshotsRelations = relations(assetFeatureSnapshots, ({ one }) => ({
-  equipment: one(equipment, { 
-    fields: [assetFeatureSnapshots.equipmentId], 
-    references: [equipment.id] 
+  equipment: one(equipment, {
+    fields: [assetFeatureSnapshots.equipmentId],
+    references: [equipment.id],
   }),
 }));
 
 export const assetRiskPredictionsRelations = relations(assetRiskPredictions, ({ one }) => ({
-  equipment: one(equipment, { 
-    fields: [assetRiskPredictions.equipmentId], 
-    references: [equipment.id] 
+  equipment: one(equipment, {
+    fields: [assetRiskPredictions.equipmentId],
+    references: [equipment.id],
   }),
 }));
 
 export const maintenanceOverridesRelations = relations(maintenanceOverrides, ({ one }) => ({
-  equipment: one(equipment, { 
-    fields: [maintenanceOverrides.equipmentId], 
-    references: [equipment.id] 
+  equipment: one(equipment, {
+    fields: [maintenanceOverrides.equipmentId],
+    references: [equipment.id],
   }),
   prediction: one(assetRiskPredictions, {
     fields: [maintenanceOverrides.predictionId],
@@ -332,13 +510,8 @@ export const insertUserSchema = createInsertSchema(users).omit({ id: true, creat
 });
 
 export const insertJobSiteSchema = createInsertSchema(jobSites)
-  .omit({ 
-    id: true, 
-    createdAt: true, 
-    jobId: true  // Auto-generated by backend
-  })
+  .omit({ id: true, createdAt: true, jobId: true })
   .extend({
-    // All fields optional except name
     name: z.string().min(1, "Name is required"),
     address: z.string().optional().nullable(),
     contactPerson: z.string().optional().nullable(),
@@ -346,26 +519,34 @@ export const insertJobSiteSchema = createInsertSchema(jobSites)
   });
 
 export const insertVendorSchema = createInsertSchema(vendors)
-  .omit({ 
-    id: true, 
-    createdAt: true, 
-    vendorId: true  // Auto-generated by backend
-  })
+  .omit({ id: true, createdAt: true, vendorId: true })
   .extend({
-    // All fields optional except name
     name: z.string().min(1, "Name is required"),
     address: z.string().optional().nullable(),
     salesPerson: z.string().optional().nullable(),
     contact: z.string().optional().nullable(),
   });
-  
-export const insertEquipmentSchema = createInsertSchema(equipment).omit({ id: true, createdAt: true });
+
+export const insertEquipmentSchema = createInsertSchema(equipment, {
+  purchaseDate: z.string().nullable().optional(),
+})
+  .omit({ id: true, createdAt: true })
+  .extend({
+    equipmentId: z.string().optional(),
+    yearManufactured: z.number().nullable().optional(),
+    purchaseDate: z.string().nullable().optional(),
+    currentMileage: z.string().nullable().optional(),
+    initialMileage: z.string().nullable().optional(),
+    location: z.string().nullable().optional(),
+  });
 
 export const insertRentalSchema = createInsertSchema(rentals)
   .omit({ id: true, createdAt: true })
   .extend({
     receiveDate: z.string(),
-    returnDate: z.string().nullable().optional(),
+    returnDate: z.string(),
+    operatorName: z.string().nullable().optional(),
+    deliveryMethod: z.enum(["CUSTOMER_PICKUP", "COMPANY_DELIVERY"]).default("CUSTOMER_PICKUP"),
   });
 
 export const insertInvoiceSchema = createInsertSchema(invoices).omit({ id: true, createdAt: true });
@@ -375,6 +556,7 @@ export const insertMaintenanceEventSchema = createInsertSchema(maintenanceEvents
   .extend({
     maintenanceDate: z.string(),
     nextDueDate: z.string().nullable().optional(),
+    eventSource: z.enum(EVENT_SOURCE_VALUES).optional().default("SCHEDULED_PM"),
   });
 
 export const insertMaintenanceConfigSchema = createInsertSchema(maintenanceConfig)
@@ -393,10 +575,10 @@ export const insertMaintenanceOverrideSchema = createInsertSchema(maintenanceOve
   .omit({ id: true, createdAt: true });
 
 export const simulationState = mysqlTable("simulation_state", {
-  id:            int("id").primaryKey().autoincrement(),
-  cursorDate:    varchar("cursor_date", { length: 10 }).notNull(), // YYYY-MM-DD
-  totalDaysRun:  int("total_days_run").notNull().default(0),
-  updatedAt:     timestamp("updated_at").defaultNow(),
+  id:           int("id").primaryKey().autoincrement(),
+  cursorDate:   varchar("cursor_date", { length: 10 }).notNull(),
+  totalDaysRun: int("total_days_run").notNull().default(0),
+  updatedAt:    timestamp("updated_at").defaultNow(),
 });
 
 export const insertModelTrainingMetricsSchema = createInsertSchema(modelTrainingMetrics)

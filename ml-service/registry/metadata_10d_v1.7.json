@@ -1,0 +1,55 @@
+{
+  "version": "v1.7",
+  "horizon_days": 10,
+  "algorithm": "Random Forest (calibrated, isotonic)",
+  "trained_at": "2026-03-09T22:10:51.571808",
+  "accuracy": 0.8284,
+  "train_accuracy": 0.9466,
+  "roc_auc": 0.7069,
+  "pr_auc": 0.8122,
+  "cv_roc_auc": "0.7090 \u00b1 0.0180",
+  "positive_rate": 0.3504,
+  "samples_train": 10096,
+  "samples_test": 2524,
+  "hyperparameters": {
+    "n_estimators": 200,
+    "max_depth": 12,
+    "min_samples_split": 5,
+    "min_samples_leaf": 3,
+    "max_features": "sqrt",
+    "class_weight": "balanced",
+    "calibration": "isotonic"
+  },
+  "confusion_matrix": {
+    "TN": 338,
+    "FP": 433,
+    "FN": 0,
+    "TP": 1753
+  },
+  "per_class": {
+    "no_failure": {
+      "precision": 1.0,
+      "recall": 0.4384,
+      "f1": 0.6096,
+      "support": 771
+    },
+    "failure": {
+      "precision": 0.8019,
+      "recall": 1.0,
+      "f1": 0.8901,
+      "support": 1753
+    }
+  },
+  "top_features": [
+    "vendor_reliability_score",
+    "asset_age_years",
+    "log_maintenance_cost_180d",
+    "jobsite_risk_score",
+    "mechanical_wear_score",
+    "aging_factor",
+    "maintenance_cost_180d",
+    "usage_trend",
+    "neglect_score",
+    "days_since_last_maintenance"
+  ]
+}

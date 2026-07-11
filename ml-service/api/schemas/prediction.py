@@ -67,6 +67,14 @@ class SnapshotInput(BaseModel):
     avg_hydraulic_pressure: Optional[float] = None
     error_code_count: Optional[int] = None
     warning_count: Optional[int] = None
+    
+    # Velocity features — rate-of-change signals (v1.6+)
+    wear_rate_velocity: float = Field(default=0.0)
+    maint_frequency_trend: float = Field(default=1.0)
+    cost_trend: float = Field(default=1.0)
+    hours_velocity: float = Field(default=1.0)
+    neglect_acceleration: float = Field(default=1.0)
+    sensor_degradation_rate: float = Field(default=0.0)
 
     class Config:
         json_schema_extra = {
