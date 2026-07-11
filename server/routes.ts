@@ -1656,6 +1656,74 @@ export async function registerRoutes(
     }
   });
 
+  // ── FEATURE BASELINE — raw feature values vs. fleet average ───────────────
+  // Backs the expandable SHAP bars: "your unit's wear score 7.9 vs fleet 4.1".
+  // Values come from the latest persisted snapshot per unit — labeled as such,
+  // not claimed to be the exact prediction-time payload.
+  const BASELINE_FEATURES = [
+    "asset_age_years", "total_hours_lifetime", "hours_used_30d", "hours_used_90d",
+    "rental_days_30d", "rental_days_90d", "avg_rental_duration",
+    "maintenance_events_90d", "maintenance_cost_180d", "avg_downtime_per_event",
+    "days_since_last_maintenance", "mean_time_between_failures",
+    "vendor_reliability_score", "jobsite_risk_score",
+    "usage_intensity", "usage_trend", "utilization_vs_expected",
+    "wear_rate", "aging_factor", "maint_overdue", "cost_per_event", "maint_burden",
+    "mechanical_wear_score", "abuse_score", "neglect_score",
+    "wear_rate_velocity", "maint_frequency_trend", "cost_trend",
+    "hours_velocity", "neglect_acceleration", "sensor_degradation_rate",
+  ] as const;
+
+  app.get("/api/equipment/:id/feature-baseline", requireAuth, async (req, res) => {
+    try {
+      const equipmentId = parseInt(req.params.id);
+      if (isNaN(equipmentId)) return res.status(400).json({ message: "Invalid equipment ID" });
+
+      // Column list is a hardcoded whitelist above — safe to interpolate raw.
+      const cols = BASELINE_FEATURES.join(", ");
+      const avgCols = BASELINE_FEATURES.map((c) => `AVG(${c}) AS ${c}`).join(", ");
+
+      const [unitRows] = await db.execute(sql.raw(`
+        SELECT snapshot_ts, ${cols}
+        FROM asset_feature_snapshots
+        WHERE equipment_id = ${equipmentId}
+        ORDER BY id DESC
+        LIMIT 1
+      `)) as any;
+
+      if (!unitRows?.length) {
+        res.json({ equipmentId, asOf: null, unit: {}, fleet: {} });
+        return;
+      }
+
+      const [fleetRows] = await db.execute(sql.raw(`
+        SELECT ${avgCols}
+        FROM asset_feature_snapshots s
+        JOIN (
+          SELECT equipment_id, MAX(id) AS mid
+          FROM asset_feature_snapshots
+          GROUP BY equipment_id
+        ) latest ON s.id = latest.mid
+      `)) as any;
+
+      const toNums = (row: any) =>
+        Object.fromEntries(
+          BASELINE_FEATURES
+            .filter((c) => row[c] !== null && row[c] !== undefined)
+            .map((c) => [c, Number(row[c])]),
+        );
+
+      res.json({
+        equipmentId,
+        asOf: unitRows[0].snapshot_ts,
+        unit: toNums(unitRows[0]),
+        fleet: toNums(fleetRows?.[0] ?? {}),
+      });
+    } catch (err: any) {
+      console.error("[FEATURE-BASELINE] Error:", err);
+      res.status(500).json({ message: err.message || "Feature baseline failed" });
+    }
+  });
+
   // ── FINANCIAL ─────────────────────────────────────────────────────────────
   app.get('/api/dashboard/revenue-summary', requireAuth, async (req, res) => {
     try {
