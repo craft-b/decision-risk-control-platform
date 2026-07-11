@@ -1,166 +1,92 @@
+import { useState } from "react";
 import { useEquipment } from "@/hooks/use-equipment";
 import { useRentals } from "@/hooks/use-rentals";
+import { useMaintenanceDueSoon } from "@/hooks/use-maintenance";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { 
-  BarChart, 
-  Bar, 
-  XAxis, 
-  YAxis, 
-  CartesianGrid, 
-  Tooltip, 
+import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { MaintenanceForm } from "@/components/maintenance-form";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
   ResponsiveContainer,
   LineChart,
   Line,
-  Legend,
-  Cell
 } from "recharts";
-import { DollarSign, TrendingUp, Percent, AlertCircle, Calendar } from "lucide-react";
+import { DollarSign, TrendingUp, Percent, AlertCircle, Calendar, AlertTriangle, Truck, Wrench, BarChart3, ChevronRight } from "lucide-react";
+import { useAuth } from "@/hooks/use-auth";
 import { format, startOfWeek, addDays, isSameDay, startOfMonth, subMonths, differenceInDays } from "date-fns";
+import { useQuery } from "@tanstack/react-query";
+import { useSimulationState } from "@/hooks/use-predictive-maintenance";
+import { Link } from "wouter";
+import { cn } from "@/lib/utils";
+import { CHART, fmtMoney, fmtMoneyCompact } from "@/lib/chart-theme";
 
 export default function Dashboard() {
   const { data: equipment } = useEquipment();
   const { data: rentals } = useRentals();
+  const { data: dueSoonList } = useMaintenanceDueSoon();
+  const overdueItems  = dueSoonList?.filter(d => Number(d.daysUntilDue) < 0)  ?? [];
+  const dueSoonItems  = dueSoonList?.filter(d => Number(d.daysUntilDue) >= 0) ?? [];
+  const overdueCount  = overdueItems.length;
+  const dueSoonCount  = dueSoonItems.length;
 
-  const today = new Date();
+  const [schedulingEquip, setSchedulingEquip] = useState<{ id: number; name: string } | null>(null);
+
+  const simState = useSimulationState();
+  const today = simState.data?.cursor_date
+    ? new Date(String(simState.data.cursor_date).substring(0, 10))
+    : new Date();
   const weekStart = startOfWeek(today, { weekStartsOn: 0 });
   
-  // Calculate Week-to-Date Revenue (actual days with active rentals)
-  const weekToDateRevenue = rentals
-    ?.filter(r => r.status === 'ACTIVE')
-    .reduce((total, rental) => {
-      const receiveDate = rental.receiveDate ? new Date(rental.receiveDate) : null;
-      if (!receiveDate) return total;
-      
-      // Calculate days this rental has been active this week
-      const rentalStart = receiveDate > weekStart ? receiveDate : weekStart;
-      const daysActive = differenceInDays(today, rentalStart) + 1;
-      const dailyRate = Number(rental.equipment?.dailyRate || 0);
-      
-      return total + (dailyRate * Math.max(0, daysActive));
-    }, 0) || 0;
-
-  // Calculate Monthly Revenue (last 30 days of completed rentals)
-  const thirtyDaysAgo = new Date(today);
-  thirtyDaysAgo.setDate(today.getDate() - 30);
-  
-  const monthlyRevenue = rentals
-    ?.filter(r => {
-      if (r.status === 'ACTIVE') {
-        const receiveDate = r.receiveDate ? new Date(r.receiveDate) : null;
-        if (!receiveDate) return false;
-        const daysActive = differenceInDays(today, receiveDate);
-        return daysActive > 0;
-      }
-      if (r.status === 'COMPLETED' && r.returnDate) {
-        const returnDate = new Date(r.returnDate);
-        return returnDate >= thirtyDaysAgo;
-      }
-      return false;
-    })
-    .reduce((total, rental) => {
-      const dailyRate = Number(rental.equipment?.dailyRate || 0);
-      if (rental.status === 'COMPLETED' && rental.receiveDate && rental.returnDate) {
-        const days = differenceInDays(new Date(rental.returnDate), new Date(rental.receiveDate)) + 1;
-        return total + (dailyRate * days);
-      } else if (rental.status === 'ACTIVE' && rental.receiveDate) {
-        const days = differenceInDays(today, new Date(rental.receiveDate)) + 1;
-        return total + (dailyRate * days);
-      }
-      return total;
-    }, 0) || 0;
-
-  // Utilization Rate
-  const totalEquipment = equipment?.length || 0;
-  const rentedEquipment = equipment?.filter(e => e.status === 'RENTED').length || 0;
-  const utilizationRate = totalEquipment > 0 ? (rentedEquipment / totalEquipment) * 100 : 0;
-
-  // Outstanding AR (completed rentals assumed unpaid - would need payment tracking)
-  const outstandingAR = rentals
-    ?.filter(r => r.status === 'COMPLETED')
-    .reduce((total, rental) => {
-      if (!rental.receiveDate || !rental.returnDate) return total;
-      const days = differenceInDays(new Date(rental.returnDate), new Date(rental.receiveDate)) + 1;
-      const dailyRate = Number(rental.equipment?.dailyRate || 0);
-      return total + (dailyRate * days);
-    }, 0) || 0;
-
-  // Generate daily revenue breakdown by job site for this week
-  const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
-  
-  const dailyRevenueByJobSite = weekDays.map(date => {
-    const dayName = format(date, 'EEE');
-    const isPast = date < today && !isSameDay(date, today);
-    const isToday = isSameDay(date, today);
-    
-    // Only calculate for past days and today
-    if (!isPast && !isToday) {
-      return { name: dayName, date: format(date, 'MMM d'), total: 0 };
-    }
-
-    // Group by job site
-    const siteRevenue: Record<string, number> = {};
-    rentals?.filter(r => r.status === 'ACTIVE').forEach(rental => {
-      const receiveDate = rental.receiveDate ? new Date(rental.receiveDate) : null;
-      if (!receiveDate || receiveDate > date) return;
-      
-      const siteName = rental.jobSite?.name || rental.jobSite?.jobId || 'Unknown';
-      const dailyRate = Number(rental.equipment?.dailyRate || 0);
-      
-      if (!siteRevenue[siteName]) {
-        siteRevenue[siteName] = 0;
-      }
-      siteRevenue[siteName] += dailyRate;
-    });
-
-    return {
-      name: dayName,
-      date: format(date, 'MMM d'),
-      ...siteRevenue,
-      total: Object.values(siteRevenue).reduce((sum: number, val: number) => sum + val, 0)
-    };
+  const { data: revenueSummary } = useQuery({
+    queryKey: ['/api/dashboard/revenue-summary'],
+    queryFn: async () => {
+      const res = await fetch('/api/dashboard/revenue-summary', { credentials: 'include' });
+      if (!res.ok) throw new Error('Failed');
+      return res.json();
+    },
   });
 
-  // Get unique job sites for chart legend
-  const jobSites = Array.from(new Set(
-    rentals
-      ?.filter(r => r.status === 'ACTIVE')
-      .map(r => r.jobSite?.name || r.jobSite?.jobId || 'Unknown') || []
-  ));
-
-  // Colors for different job sites
-  const siteColors = [
-    '#3b82f6', '#ef4444', '#22c55e', '#f59e0b', '#8b5cf6', 
-    '#ec4899', '#14b8a6', '#f97316', '#06b6d4', '#84cc16'
-  ];
-
-  // Month-over-month trend (last 6 months)
-  const monthlyTrend = Array.from({ length: 6 }, (_, i) => {
-    const monthDate = subMonths(startOfMonth(today), 5 - i);
-    const monthName = format(monthDate, 'MMM');
-    
-    // Calculate revenue for this month (simplified - would need actual historical data)
-    const monthRevenue = rentals
-      ?.filter(r => {
-        if (r.returnDate) {
-          const returnDate = new Date(r.returnDate);
-          return returnDate.getMonth() === monthDate.getMonth() && 
-                 returnDate.getFullYear() === monthDate.getFullYear();
-        }
-        return false;
-      })
-      .reduce((total, rental) => {
-        if (!rental.receiveDate || !rental.returnDate) return total;
-        const days = differenceInDays(new Date(rental.returnDate), new Date(rental.receiveDate)) + 1;
-        const dailyRate = Number(rental.equipment?.dailyRate || 0);
-        return total + (dailyRate * days);
-      }, 0) || 0;
-
-    return {
-      month: monthName,
-      revenue: monthRevenue,
-      target: 50000 // Mock target line
-    };
+  const { data: monthlyTrendData } = useQuery({
+    queryKey: ['/api/dashboard/monthly-trend'],
+    queryFn: async () => {
+      const res = await fetch('/api/dashboard/monthly-trend', { credentials: 'include' });
+      if (!res.ok) throw new Error('Failed');
+      return res.json();
+    },
   });
+
+  const { data: dailyRevenueData } = useQuery({
+    queryKey: ['/api/dashboard/daily-revenue'],
+    queryFn: async () => {
+      const res = await fetch('/api/dashboard/daily-revenue', { credentials: 'include' });
+      if (!res.ok) throw new Error('Failed');
+      return res.json() as Promise<Array<{ day: string; revenue: number }>>;
+    },
+  });
+
+  const weekToDateRevenue    = revenueSummary?.revenueWtd       ?? 0;
+  const monthlyRevenue       = revenueSummary?.revenue30d       ?? 0;
+  const utilizationRate      = revenueSummary?.utilizationRate  ?? 0;
+  const avgUtilization30d    = revenueSummary?.avgUtilization30d ?? 0;
+  const outstandingAR        = revenueSummary?.outstandingAr    ?? 0;
+  const uninvoicedCount      = revenueSummary?.uninvoicedCount  ?? 0;
+  const totalEquipment       = revenueSummary?.totalEquipment   ?? 0;
+  const rentedEquipment      = revenueSummary?.rentedEquipment  ?? 0;
+  const monthlyTrend         = (monthlyTrendData ?? []) as Array<{ month: string; revenue: number }>;
+  const dailyRevenue         = (dailyRevenueData ?? []) as Array<{ day: string; revenue: number }>;
+  const hasAnyDailyRevenue   = dailyRevenue.some(d => d.revenue > 0);
 
   // Top 5 Revenue-Generating Job Sites
   const siteRevenueMap: Record<string, { name: string; revenue: number; equipmentCount: number }> = {};
@@ -184,6 +110,17 @@ export default function Dashboard() {
     .sort((a, b) => b.revenue - a.revenue)
     .slice(0, 5);
 
+  // Equipment count by job site (active rentals only)
+  const siteCounts: Record<string, number> = {};
+  rentals?.filter(r => r.status === 'ACTIVE').forEach(r => {
+    const site = r.jobSite?.name || r.jobSite?.jobId || 'Unknown';
+    siteCounts[site] = (siteCounts[site] || 0) + 1;
+  });
+  const equipmentBySite = Object.entries(siteCounts)
+    .map(([site, count]) => ({ site, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 12);
+
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       <div className="flex items-center justify-between">
@@ -197,176 +134,206 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Key Financial Metrics */}
+      {/* Empty-state banner — shown when no equipment has been added yet */}
+      {equipment !== undefined && equipment.length === 0 && (
+        <div className="rounded-xl border-2 border-dashed border-muted-foreground/25 bg-muted/30 p-8 text-center space-y-4">
+          <div className="flex justify-center gap-4 text-muted-foreground/40">
+            <Truck className="h-12 w-12" />
+            <BarChart3 className="h-12 w-12" />
+            <Wrench className="h-12 w-12" />
+          </div>
+          <div>
+            <h3 className="text-xl font-semibold">No equipment yet</h3>
+            <p className="text-muted-foreground mt-1">
+              Add your first piece of equipment to start tracking revenue, utilization, and maintenance.
+            </p>
+          </div>
+          <div className="flex flex-wrap justify-center gap-3 pt-2">
+            <Link href="/equipment/new">
+              <a className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors">
+                <Truck className="h-4 w-4" />
+                Add Equipment
+                <ChevronRight className="h-4 w-4" />
+              </a>
+            </Link>
+            <Link href="/ml-dashboard">
+              <a className="inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium hover:bg-muted transition-colors">
+                <BarChart3 className="h-4 w-4" />
+                Explore ML Features
+                <ChevronRight className="h-4 w-4" />
+              </a>
+            </Link>
+            <Link href="/maintenance">
+              <a className="inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium hover:bg-muted transition-colors">
+                <Wrench className="h-4 w-4" />
+                Maintenance Planner
+                <ChevronRight className="h-4 w-4" />
+              </a>
+            </Link>
+          </div>
+        </div>
+      )}
+
+      {/* Key Financial Metrics — neutral stat tiles; color is reserved for semantics */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <Card className="shadow-sm hover:shadow-md transition-shadow border-l-4 border-l-blue-500">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Week-to-Date Revenue</CardTitle>
-            <DollarSign className="h-4 w-4 text-blue-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-blue-600">
-              ${weekToDateRevenue.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+        <Card>
+          <CardContent className="pt-5">
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Week-to-Date Revenue</p>
+              <DollarSign className="h-4 w-4 text-muted-foreground/60" />
             </div>
-            <p className="text-xs text-muted-foreground">
+            <div className="mt-2 font-mono text-[26px] font-semibold leading-none tracking-tight">
+              {fmtMoney(weekToDateRevenue)}
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
               {differenceInDays(today, weekStart) + 1} days elapsed
             </p>
           </CardContent>
         </Card>
-        
-        <Card className="shadow-sm hover:shadow-md transition-shadow border-l-4 border-l-green-500">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">30-Day Revenue</CardTitle>
-            <TrendingUp className="h-4 w-4 text-green-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-green-600">
-              ${monthlyRevenue.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+
+        <Card>
+          <CardContent className="pt-5">
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">30-Day Revenue</p>
+              <TrendingUp className="h-4 w-4 text-muted-foreground/60" />
             </div>
-            <p className="text-xs text-muted-foreground">Rolling 30-day total</p>
+            <div className="mt-2 font-mono text-[26px] font-semibold leading-none tracking-tight">
+              {fmtMoney(monthlyRevenue)}
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">Accrued revenue, rolling 30 days</p>
           </CardContent>
         </Card>
 
-        <Card className="shadow-sm hover:shadow-md transition-shadow border-l-4 border-l-purple-500">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Fleet Utilization</CardTitle>
-            <Percent className="h-4 w-4 text-purple-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-purple-600">
+        <Card>
+          <CardContent className="pt-5">
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Fleet Utilization</p>
+              <Percent className="h-4 w-4 text-muted-foreground/60" />
+            </div>
+            <div className="mt-2 font-mono text-[26px] font-semibold leading-none tracking-tight">
               {utilizationRate.toFixed(1)}%
             </div>
-            <p className="text-xs text-muted-foreground">
-              {rentedEquipment} of {totalEquipment} assets rented
+            <p className="mt-2 text-xs text-muted-foreground">
+              {rentedEquipment} of {totalEquipment} assets rented · {avgUtilization30d.toFixed(1)}% 30-day avg
             </p>
           </CardContent>
         </Card>
 
-        <Card className="shadow-sm hover:shadow-md transition-shadow border-l-4 border-l-orange-500">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Outstanding A/R</CardTitle>
-            <AlertCircle className="h-4 w-4 text-orange-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-orange-600">
-              ${outstandingAR.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+        <Card>
+          <CardContent className="pt-5">
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Outstanding A/R</p>
+              <AlertCircle className="h-4 w-4 text-muted-foreground/60" />
             </div>
-            <p className="text-xs text-muted-foreground">Unpaid completed rentals</p>
+            <div className="mt-2 font-mono text-[26px] font-semibold leading-none tracking-tight">
+              {fmtMoney(outstandingAR)}
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Unpaid completed rentals
+              {uninvoicedCount > 0 && ` · ${uninvoicedCount} awaiting invoice`}
+            </p>
           </CardContent>
         </Card>
       </div>
 
       {/* Charts Row */}
-      <div className="grid gap-4 lg:grid-cols-7">
-        <Card className="col-span-4 shadow-sm">
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card className="shadow-sm">
           <CardHeader>
-            <CardTitle>Daily Revenue by Job Site (This Week)</CardTitle>
-            <p className="text-sm text-muted-foreground">Stacked view of revenue sources per day</p>
+            <CardTitle>Daily Revenue (Last 30 Days)</CardTitle>
+            <p className="text-sm text-muted-foreground">Accrued daily rate for all active &amp; completed rentals</p>
           </CardHeader>
           <CardContent className="pl-2">
             <div className="h-[350px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={dailyRevenueByJobSite}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
-                  <XAxis 
-                    dataKey="name" 
-                    stroke="#888888" 
-                    fontSize={12} 
-                    tickLine={false} 
-                    axisLine={false}
-                  />
-                  <YAxis
-                    stroke="#888888"
-                    fontSize={12}
-                    tickLine={false}
-                    axisLine={false}
-                    tickFormatter={(value) => `$${value}`}
-                  />
-                  <Tooltip 
-                    cursor={{fill: 'rgba(59, 130, 246, 0.1)'}}
-                    contentStyle={{ 
-                      borderRadius: '8px', 
-                      border: 'none', 
-                      boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
-                      backgroundColor: 'white'
-                    }}
-                    formatter={(value) => `$${value.toLocaleString()}`}
-                    labelFormatter={(label, payload) => {
-                      if (payload && payload[0]) {
-                        return payload[0].payload.date;
-                      }
-                      return label;
-                    }}
-                  />
-                  <Legend 
-                    verticalAlign="top" 
-                    height={36}
-                    iconType="circle"
-                    wrapperStyle={{ fontSize: '12px' }}
-                  />
-                  {jobSites.map((site, index) => (
-                    <Bar 
-                      key={site}
-                      dataKey={site} 
-                      stackId="a"
-                      fill={siteColors[index % siteColors.length]}
-                      radius={index === jobSites.length - 1 ? [4, 4, 0, 0] : [0, 0, 0, 0]}
+              {!hasAnyDailyRevenue ? (
+                <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
+                  No rental revenue in the last 30 days
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={dailyRevenue} margin={{ top: 4, right: 4, bottom: 4, left: 0 }}>
+                    <CartesianGrid {...CHART.grid} vertical={false} />
+                    <XAxis
+                      dataKey="day"
+                      stroke={CHART.axis.stroke}
+                      tick={CHART.axis.tick}
+                      tickLine={false}
+                      axisLine={false}
+                      interval={4}
+                      tickFormatter={(v) => {
+                        try { return format(new Date(v + 'T00:00:00'), 'MMM d'); } catch { return v; }
+                      }}
                     />
-                  ))}
-                </BarChart>
-              </ResponsiveContainer>
+                    <YAxis
+                      stroke={CHART.axis.stroke}
+                      tick={CHART.axis.tick}
+                      tickLine={false}
+                      axisLine={false}
+                      tickFormatter={fmtMoneyCompact}
+                    />
+                    <Tooltip
+                      formatter={(value: number) => [fmtMoney(value), 'Revenue']}
+                      labelFormatter={(label) => {
+                        try { return format(new Date(label + 'T00:00:00'), 'MMM d, yyyy'); } catch { return label; }
+                      }}
+                      {...CHART.tooltip}
+                    />
+                    <Bar dataKey="revenue" fill={CHART.data} radius={CHART.barRadius} name="Revenue" maxBarSize={20} />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
             </div>
           </CardContent>
         </Card>
 
-        <Card className="col-span-3 shadow-sm">
+        <Card className="shadow-sm">
           <CardHeader>
-            <CardTitle>Revenue Trend (6 Months)</CardTitle>
-            <p className="text-sm text-muted-foreground">Monthly performance vs target</p>
+            <CardTitle>Revenue Trend (12 Months)</CardTitle>
+            <p className="text-sm text-muted-foreground">Monthly completed rental revenue</p>
           </CardHeader>
           <CardContent>
             <div className="h-[350px] w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={monthlyTrend}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                  <XAxis 
-                    dataKey="month" 
-                    stroke="#888888" 
-                    fontSize={12} 
+                  <CartesianGrid {...CHART.grid} vertical={false} />
+                  <XAxis
+                    dataKey="month"
+                    stroke={CHART.axis.stroke}
+                    tick={CHART.axis.tick}
                     tickLine={false}
+                    axisLine={false}
+                    tickFormatter={(v: string) => {
+                      try {
+                        const [y, m] = v.split('-').map(Number);
+                        return format(new Date(y, m - 1, 1), "MMM ''yy");
+                      } catch { return v; }
+                    }}
                   />
                   <YAxis
-                    stroke="#888888"
-                    fontSize={12}
+                    stroke={CHART.axis.stroke}
+                    tick={CHART.axis.tick}
                     tickLine={false}
-                    tickFormatter={(value) => `$${value / 1000}k`}
+                    axisLine={false}
+                    tickFormatter={fmtMoneyCompact}
                   />
-                  <Tooltip 
-                    contentStyle={{ 
-                      borderRadius: '8px', 
-                      border: 'none', 
-                      boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' 
+                  <Tooltip
+                    {...CHART.tooltip}
+                    formatter={(value) => [fmtMoney(Number(value)), 'Revenue']}
+                    labelFormatter={(label: string) => {
+                      try {
+                        const [y, m] = label.split('-').map(Number);
+                        return format(new Date(y, m - 1, 1), 'MMMM yyyy');
+                      } catch { return label; }
                     }}
-                    formatter={(value) => `$${value.toLocaleString()}`}
                   />
-                  <Legend />
-                  <Line 
-                    type="monotone" 
-                    dataKey="revenue" 
-                    stroke="#3b82f6" 
-                    strokeWidth={3}
-                    dot={{ r: 4 }}
-                    activeDot={{ r: 6 }}
-                    name="Actual Revenue"
-                  />
-                  <Line 
-                    type="monotone" 
-                    dataKey="target" 
-                    stroke="#94a3b8" 
-                    strokeWidth={2}
-                    strokeDasharray="5 5"
-                    dot={false}
-                    name="Target"
+                  <Line
+                    type="monotone"
+                    dataKey="revenue"
+                    stroke={CHART.data}
+                    strokeWidth={CHART.line.strokeWidth}
+                    dot={CHART.line.dot}
+                    activeDot={CHART.line.activeDot}
+                    name="Revenue"
                   />
                 </LineChart>
               </ResponsiveContainer>
@@ -374,6 +341,141 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Equipment by Job Site */}
+      <Card className="shadow-sm">
+        <CardHeader>
+          <CardTitle>Active Equipment by Job Site</CardTitle>
+          <p className="text-sm text-muted-foreground">Units currently deployed per site</p>
+        </CardHeader>
+        <CardContent>
+          {equipmentBySite.length === 0 ? (
+            <div className="flex items-center justify-center h-48 text-muted-foreground text-sm">
+              No active rentals
+            </div>
+          ) : (
+            <div className="h-[280px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={equipmentBySite}
+                  layout="vertical"
+                  margin={{ top: 4, right: 24, bottom: 4, left: 8 }}
+                >
+                  <CartesianGrid {...CHART.grid} horizontal={false} />
+                  <XAxis
+                    type="number"
+                    allowDecimals={false}
+                    stroke={CHART.axis.stroke}
+                    tick={CHART.axis.tick}
+                    tickLine={false}
+                    axisLine={false}
+                  />
+                  <YAxis
+                    type="category"
+                    dataKey="site"
+                    stroke={CHART.axis.stroke}
+                    tick={CHART.axis.tick}
+                    tickLine={false}
+                    axisLine={false}
+                    width={140}
+                  />
+                  <Tooltip
+                    formatter={(value: number) => [value, 'Units deployed']}
+                    {...CHART.tooltip}
+                  />
+                  {/* One measure, one hue — identity lives in the y-axis labels */}
+                  <Bar dataKey="count" fill={CHART.data} radius={CHART.barRadiusHorizontal} maxBarSize={16} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Maintenance Alerts */}
+      {(overdueCount > 0 || dueSoonCount > 0) && (
+        <Card className="shadow-sm">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+            <CardTitle className="text-base font-semibold flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-risk-medium" />
+              Maintenance Alerts
+            </CardTitle>
+            <Link href="/equipment">
+              <span className="text-xs text-muted-foreground hover:text-foreground cursor-pointer transition-colors">
+                View equipment →
+              </span>
+            </Link>
+          </CardHeader>
+          <CardContent className="space-y-5">
+
+            {/* Overdue section — semantic HIGH */}
+            {overdueCount > 0 && (
+              <div>
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-risk-high">
+                    <span className="inline-block w-2 h-2 rounded-full bg-risk-high" />
+                    Overdue
+                    <span className="ml-1 tabular-nums">({overdueCount})</span>
+                  </span>
+                  <div className="flex-1 h-px bg-border" />
+                </div>
+                <div className="space-y-0.5">
+                  {overdueItems.map((item) => (
+                    <button
+                      key={item.id}
+                      onClick={() => setSchedulingEquip({ id: item.id, name: item.name })}
+                      className="w-full flex items-center justify-between px-3 py-2 rounded-md text-left hover:bg-muted transition-colors group"
+                    >
+                      <div className="min-w-0 mr-3">
+                        <p className="text-sm font-medium text-foreground truncate">{item.name}</p>
+                        <p className="text-xs text-muted-foreground font-mono">{item.equipmentId}</p>
+                      </div>
+                      <Badge variant="outline" className="shrink-0 bg-risk-high-surface text-risk-high border-risk-high text-xs font-medium tabular-nums">
+                        {Math.abs(Number(item.daysUntilDue))}d overdue
+                      </Badge>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Due Soon section — semantic MEDIUM */}
+            {dueSoonCount > 0 && (
+              <div>
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-risk-medium">
+                    <span className="inline-block w-2 h-2 rounded-full bg-risk-medium" />
+                    Due Soon
+                    <span className="ml-1 tabular-nums">({dueSoonCount})</span>
+                  </span>
+                  <div className="flex-1 h-px bg-border" />
+                </div>
+                <div className="space-y-0.5">
+                  {dueSoonItems.map((item) => {
+                    const days = Number(item.daysUntilDue);
+                    return (
+                      <button
+                        key={item.id}
+                        onClick={() => setSchedulingEquip({ id: item.id, name: item.name })}
+                        className="w-full flex items-center justify-between px-3 py-2 rounded-md text-left hover:bg-muted transition-colors group"
+                      >
+                        <div className="min-w-0 mr-3">
+                          <p className="text-sm font-medium text-foreground truncate">{item.name}</p>
+                          <p className="text-xs text-muted-foreground font-mono">{item.equipmentId}</p>
+                        </div>
+                        <Badge variant="outline" className="shrink-0 bg-risk-medium-surface text-risk-medium border-risk-medium text-xs font-medium tabular-nums">
+                          {days === 0 ? 'Today' : `${days}d`}
+                        </Badge>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+          </CardContent>
+        </Card>
+      )}
 
       {/* Top Job Sites & Equipment ROI */}
       <div className="grid gap-4 lg:grid-cols-2">
@@ -387,8 +489,8 @@ export default function Dashboard() {
               {topJobSites.map((site, index) => (
                 <div key={site.name} className="flex items-center justify-between border-b pb-3 last:border-0">
                   <div className="flex items-center gap-4">
-                    <div className="flex items-center justify-center w-8 h-8 rounded-full bg-blue-100 text-blue-700 font-bold text-sm">
-                      #{index + 1}
+                    <div className="flex items-center justify-center w-7 h-7 rounded-md bg-muted font-mono font-semibold text-xs text-muted-foreground">
+                      {index + 1}
                     </div>
                     <div>
                       <p className="font-medium">{site.name}</p>
@@ -398,10 +500,10 @@ export default function Dashboard() {
                     </div>
                   </div>
                   <div className="text-right">
-                    <p className="font-bold text-green-600">
-                      ${site.revenue.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                    <p className="font-mono font-semibold tabular-nums">
+                      {fmtMoney(site.revenue)}
                     </p>
-                    <p className="text-xs text-muted-foreground">
+                    <p className="text-xs text-muted-foreground font-mono tabular-nums">
                       ${(site.revenue / site.equipmentCount).toFixed(0)}/rental
                     </p>
                   </div>
@@ -455,8 +557,8 @@ export default function Dashboard() {
                   return (
                     <div key={equip.id} className="flex items-center justify-between border-b pb-3 last:border-0">
                       <div className="flex items-center gap-4">
-                        <div className="flex items-center justify-center w-8 h-8 rounded-full bg-green-100 text-green-700 font-bold text-sm">
-                          #{index + 1}
+                        <div className="flex items-center justify-center w-7 h-7 rounded-md bg-muted font-mono font-semibold text-xs text-muted-foreground">
+                          {index + 1}
                         </div>
                         <div>
                           <p className="font-medium">{equip.name}</p>
@@ -466,8 +568,8 @@ export default function Dashboard() {
                         </div>
                       </div>
                       <div className="text-right">
-                        <p className="font-bold text-blue-600">
-                          ${totalRevenue.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                        <p className="font-mono font-semibold tabular-nums">
+                          {fmtMoney(totalRevenue)}
                         </p>
                         <p className="text-xs text-muted-foreground">
                           {equipmentRentals.length} rental{equipmentRentals.length !== 1 ? 's' : ''}
@@ -480,6 +582,25 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       </div>
+      {/* Schedule Maintenance Dialog (triggered from Maintenance Alerts card) */}
+      <Dialog open={!!schedulingEquip} onOpenChange={(open) => !open && setSchedulingEquip(null)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Log Maintenance Event</DialogTitle>
+            <DialogDescription>
+              {schedulingEquip ? `Schedule maintenance for ${schedulingEquip.name}` : 'Schedule maintenance'}
+            </DialogDescription>
+          </DialogHeader>
+          {schedulingEquip && (
+            <MaintenanceForm
+              equipmentId={schedulingEquip.id}
+              equipmentName={schedulingEquip.name}
+              defaultEventSource="SCHEDULED_PM"
+              onSuccess={() => setSchedulingEquip(null)}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

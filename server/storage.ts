@@ -1,4 +1,4 @@
-import { users, equipment, rentals, jobSites, vendors, invoices, type User, type InsertUser, type Equipment, type InsertEquipment, type Rental, type InsertRental, type JobSite, type InsertJobSite, type Vendor, type InsertVendor, type Invoice, type InsertInvoice, EquipmentRiskScore, equipmentRiskScores, InsertRiskScore, InsertMaintenanceEvent, MaintenanceConfig, MaintenanceEvent, InsertModelTrainingMetrics, ModelTrainingMetrics } from "@shared/schema";
+import { users, equipment, rentals, jobSites, vendors, invoices, type User, type InsertUser, type Equipment, type InsertEquipment, type Rental, type InsertRental, type JobSite, type InsertJobSite, type Vendor, type InsertVendor, type Invoice, type InsertInvoice, EquipmentRiskScore, equipmentRiskScores, InsertRiskScore, InsertMaintenanceEvent, MaintenanceConfig, MaintenanceEvent, InsertModelTrainingMetrics, ModelTrainingMetrics, equipmentSwaps } from "@shared/schema";
 import { db } from "./db";
 import { eq, ilike, and, or, SQL, sql, desc } from "drizzle-orm";
 import { maintenanceEvents, maintenanceConfig, modelTrainingMetrics } from "@shared/schema";
@@ -45,12 +45,14 @@ export interface IStorage {
   listEquipment(search?: string, status?: string): Promise<Equipment[]>;
   createEquipment(equip: InsertEquipment): Promise<Equipment>;
   updateEquipment(id: number, equip: Partial<InsertEquipment>): Promise<Equipment>;
+  deleteEquipment(id: number): Promise<void>;
 
   // Rentals
   getRental(id: number): Promise<(Rental & { equipment: Equipment, jobSite: JobSite, vendor: Vendor | null, invoices: Invoice[] }) | undefined>;
-  listRentals(): Promise<(Rental & { equipment: Equipment, jobSite: JobSite, vendor: Vendor | null })[]>;
+  listRentals(): Promise<(Rental & { equipment: Equipment, jobSite: JobSite, vendor: Vendor | null, invoices: Invoice[] })[]>;
   createRental(rental: InsertRental): Promise<Rental>;
   updateRental(id: number, rental: Partial<InsertRental>): Promise<Rental>;
+  deleteRental(id: number): Promise<void>;
 
   // Invoices
   createInvoice(invoice: InsertInvoice): Promise<Invoice>;
@@ -61,6 +63,8 @@ export interface IStorage {
   getLatestRiskScore(equipmentId: number): Promise<EquipmentRiskScore | undefined>;
 
   createMaintenanceEvent(event: InsertMaintenanceEvent): Promise<MaintenanceEvent>;
+  updateMaintenanceEvent(id: number, data: Partial<InsertMaintenanceEvent>): Promise<MaintenanceEvent>;
+  deleteMaintenanceEvent(id: number): Promise<void>;
   getMaintenanceHistory(equipmentId: number): Promise<MaintenanceEvent[]>;
   getMaintenanceConfig(category: string): Promise<MaintenanceConfig | undefined>;
 
@@ -68,7 +72,10 @@ export interface IStorage {
   saveModelMetrics(metrics: any): Promise<ModelTrainingMetrics>;
   getLatestModelMetrics(): Promise<any | undefined>;
   getModelMetricsHistory(): Promise<any[]>;
-  
+
+  // Swaps
+  createSwap(swap: { rentalId: number; originalEquipmentId: number; replacementEquipmentId: number; swapDate: string; reason?: string | null; swappedBy?: string | null; notes?: string | null }): Promise<any>;
+  listSwapsByRental(rentalId: number): Promise<any[]>;
 
 }
 
@@ -210,7 +217,27 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createEquipment(equip: InsertEquipment): Promise<Equipment> {
-    const result = await db.insert(equipment).values(equip);
+    const insertData: any = { ...equip };
+
+    // Convert purchaseDate string → Date (same as updateEquipment)
+    if (insertData.purchaseDate && typeof insertData.purchaseDate === 'string') {
+      insertData.purchaseDate = new Date(insertData.purchaseDate);
+    }
+
+    // Auto-generate equipmentId if not provided — use numeric-only max to
+    // avoid collision with replacement IDs like EQ-R5-2032
+    if (!insertData.equipmentId) {
+      const [last] = await db
+        .select({ equipmentId: equipment.equipmentId })
+        .from(equipment)
+        .where(sql`equipment_id REGEXP '^EQ-[0-9]+$'`)
+        .orderBy(sql`CAST(SUBSTRING(equipment_id, 4) AS UNSIGNED) DESC`)
+        .limit(1);
+      const lastNum = last ? parseInt(last.equipmentId.replace('EQ-', ''), 10) : 0;
+      insertData.equipmentId = `EQ-${String((isNaN(lastNum) ? 0 : lastNum) + 1).padStart(3, '0')}`;
+    }
+
+    const result = await db.insert(equipment).values(insertData);
     const [newEquip] = await db.select().from(equipment).where(eq(equipment.id, result[0].insertId));
     return newEquip!;
   }
@@ -223,6 +250,10 @@ export class DatabaseStorage implements IStorage {
     await db.update(equipment).set(updateData).where(eq(equipment.id, id));
     const [updated] = await db.select().from(equipment).where(eq(equipment.id, id));
     return updated!;
+  }
+
+  async deleteEquipment(id: number): Promise<void> {
+    await db.delete(equipment).where(eq(equipment.id, id));
   }
 
   async getRental(id: number): Promise<(Rental & { equipment: Equipment, jobSite: JobSite, vendor: Vendor | null, invoices: Invoice[] }) | undefined> {
@@ -238,13 +269,15 @@ export class DatabaseStorage implements IStorage {
     return rental as any;
   }
 
-  async listRentals(): Promise<(Rental & { equipment: Equipment, jobSite: JobSite, vendor: Vendor | null })[]> {
+  async listRentals(): Promise<(Rental & { equipment: Equipment, jobSite: JobSite, vendor: Vendor | null, invoices: Invoice[] })[]> {
     const results = await db.query.rentals.findMany({
       with: {
         equipment: true,
         jobSite: true,
         vendor: true,
-      }
+        invoices: true,
+      },
+      orderBy: (rentals, { desc }) => [desc(rentals.receiveDate)],
     });
     return results as any;
   }
@@ -252,36 +285,45 @@ export class DatabaseStorage implements IStorage {
   async createRental(rental: InsertRental): Promise<Rental> {
     // Convert date strings to Date objects for MySQL
     const insertData: any = { ...rental };
-    
+
     if (insertData.receiveDate && typeof insertData.receiveDate === 'string') {
-      insertData.receiveDate = new Date(insertData.receiveDate);
+      insertData.receiveDate = insertData.receiveDate.substring(0, 10);
     }
-    
     if (insertData.returnDate && typeof insertData.returnDate === 'string') {
-      insertData.returnDate = new Date(insertData.returnDate);
+      insertData.returnDate = insertData.returnDate.substring(0, 10);
     }
-    
+
+    // Auto-populate receiveHours from equipment's current mileage if not provided
+    if (!insertData.receiveHours && insertData.equipmentId) {
+      const [equip] = await db
+        .select({ currentMileage: equipment.currentMileage })
+        .from(equipment)
+        .where(eq(equipment.id, insertData.equipmentId))
+        .limit(1);
+      if (equip?.currentMileage) insertData.receiveHours = equip.currentMileage;
+    }
+
     const result = await db.insert(rentals).values(insertData);
     const [newRental] = await db.select().from(rentals).where(eq(rentals.id, result[0].insertId));
     return newRental!;
   }
 
   async updateRental(id: number, rental: Partial<InsertRental>): Promise<Rental> {
-  // Convert date strings to Date objects for MySQL
-  const updateData: any = { ...rental };
-  
-  if (updateData.receiveDate && typeof updateData.receiveDate === 'string') {
-    updateData.receiveDate = new Date(updateData.receiveDate);
+    const updateData: any = { ...rental };
+    if (updateData.receiveDate && typeof updateData.receiveDate === 'string') {
+      updateData.receiveDate = new Date(updateData.receiveDate);
+    }
+    if (updateData.returnDate && typeof updateData.returnDate === 'string') {
+      updateData.returnDate = new Date(updateData.returnDate);
+    }
+    await db.update(rentals).set(updateData).where(eq(rentals.id, id));
+    const [updated] = await db.select().from(rentals).where(eq(rentals.id, id));
+    return updated!;
   }
-  
-  if (updateData.returnDate && typeof updateData.returnDate === 'string') {
-    updateData.returnDate = new Date(updateData.returnDate);
+
+  async deleteRental(id: number): Promise<void> {
+    await db.delete(rentals).where(eq(rentals.id, id));
   }
-  
-  await db.update(rentals).set(updateData).where(eq(rentals.id, id));
-  const [updated] = await db.select().from(rentals).where(eq(rentals.id, id));
-  return updated!;
-}
 
   async createInvoice(invoice: InsertInvoice): Promise<Invoice> {
     const result = await db.insert(invoices).values(invoice);
@@ -318,16 +360,30 @@ export class DatabaseStorage implements IStorage {
     console.log('Storage: Creating maintenance event', eventData); // Debug log
 
     
+    // Keep DATE fields as 'YYYY-MM-DD' strings — converting to Date objects
+    // causes timezone-offset shifts (e.g. UTC-5 turns 2032-04-08 → 2032-04-07).
     if (eventData.maintenanceDate && typeof eventData.maintenanceDate === 'string') {
-      eventData.maintenanceDate = new Date(eventData.maintenanceDate);
+      eventData.maintenanceDate = eventData.maintenanceDate.substring(0, 10);
     }
     if (eventData.nextDueDate && typeof eventData.nextDueDate === 'string') {
-      eventData.nextDueDate = new Date(eventData.nextDueDate);
+      eventData.nextDueDate = eventData.nextDueDate.substring(0, 10);
     }
     
     const result = await db.insert(maintenanceEvents).values(eventData);
     const [newEvent] = await db.select().from(maintenanceEvents).where(eq(maintenanceEvents.id, result[0].insertId));
     return newEvent!;
+  }
+
+  async updateMaintenanceEvent(id: number, data: Partial<InsertMaintenanceEvent>): Promise<MaintenanceEvent> {
+    // maintenanceDate is deliberately kept as a 'YYYY-MM-DD' string (see createMaintenanceEvent
+    // above) to avoid timezone-offset shifts — Drizzle's inferred update type expects Date|SQL.
+    await db.update(maintenanceEvents).set(data as any).where(eq(maintenanceEvents.id, id));
+    const [updated] = await db.select().from(maintenanceEvents).where(eq(maintenanceEvents.id, id));
+    return updated!;
+  }
+
+  async deleteMaintenanceEvent(id: number): Promise<void> {
+    await db.delete(maintenanceEvents).where(eq(maintenanceEvents.id, id));
   }
 
   async getMaintenanceHistory(equipmentId: number): Promise<MaintenanceEvent[]> {
@@ -368,6 +424,27 @@ export class DatabaseStorage implements IStorage {
       .from(modelTrainingMetrics)
       .orderBy(desc(modelTrainingMetrics.trainedAt))
       .limit(limit);
+  }
+
+  async createSwap(data: any): Promise<any> {
+    const insertData: any = { ...data };
+    if (insertData.swapDate && typeof insertData.swapDate === 'string') {
+      insertData.swapDate = insertData.swapDate.substring(0, 10);
+    }
+    const result = await db.insert(equipmentSwaps).values(insertData);
+    const [newSwap] = await db.select().from(equipmentSwaps).where(eq(equipmentSwaps.id, result[0].insertId));
+    return newSwap!;
+  }
+
+  async listSwapsByRental(rentalId: number): Promise<any[]> {
+    return await db.query.equipmentSwaps.findMany({
+      where: eq(equipmentSwaps.rentalId, rentalId),
+      with: {
+        originalEquipment: true,
+        replacementEquipment: true,
+      },
+      orderBy: [desc(equipmentSwaps.createdAt)],
+    });
   }
 }
 

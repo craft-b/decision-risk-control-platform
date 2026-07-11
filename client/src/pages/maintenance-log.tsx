@@ -1,10 +1,13 @@
 import { useState } from "react";
-import { useMaintenance } from "@/hooks/use-maintenance";
+import { useMaintenance, useUpdateMaintenance, useDeleteMaintenance } from "@/hooks/use-maintenance";
+import { useSimulationState } from "@/hooks/use-predictive-maintenance";
 import { useEquipment } from "@/hooks/use-equipment";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
   DialogContent,
@@ -12,7 +15,18 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
+  DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   Table,
   TableBody,
@@ -29,18 +43,117 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { MaintenanceForm } from "@/components/maintenance-form";
-import { Plus, Wrench, Calendar, DollarSign, User } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { Plus, Wrench, Calendar, DollarSign, User, ChevronUp, ChevronDown, ChevronsUpDown, Pencil, Trash2, Loader2, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 
+const PAGE_SIZE = 10;
+
+type SortKey = "maintenanceDate" | "maintenanceType" | "cost" | "nextDueDate" | "eventSource" | "performedBy";
+
+function MaintSortHead({ col, active, dir, onSort, children, align }: {
+  col: SortKey; active: SortKey; dir: "asc" | "desc";
+  onSort: (k: SortKey) => void; children: React.ReactNode; align?: "right";
+}) {
+  const isActive = active === col;
+  return (
+    <TableHead
+      className={cn("cursor-pointer select-none whitespace-nowrap", align === "right" && "text-right")}
+      onClick={() => onSort(col)}
+    >
+      <div className={cn("flex items-center gap-1", align === "right" && "justify-end")}>
+        <span>{children}</span>
+        {isActive
+          ? (dir === "asc" ? <ChevronUp className="h-3.5 w-3.5 text-foreground/70 shrink-0" /> : <ChevronDown className="h-3.5 w-3.5 text-foreground/70 shrink-0" />)
+          : <ChevronsUpDown className="h-3.5 w-3.5 text-muted-foreground/40 shrink-0" />}
+      </div>
+    </TableHead>
+  );
+}
+
 export default function MaintenanceLog() {
   const { user } = useAuth();
+  const simState = useSimulationState();
   const [selectedEquipmentId, setSelectedEquipmentId] = useState<number | undefined>();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [equipmentForMaintenance, setEquipmentForMaintenance] = useState<any>(null);
 
-  const { data: maintenanceEvents, isLoading } = useMaintenance(selectedEquipmentId);
+  // Server-side pagination + sort
+  const [page, setPage] = useState(0);
+  const [sortBy, setSortBy] = useState<SortKey>("maintenanceDate");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+
+  const onSort = (key: SortKey) => {
+    if (sortBy === key) {
+      setSortDir(d => d === "asc" ? "desc" : "asc");
+    } else {
+      setSortBy(key);
+      setSortDir("asc");
+    }
+    setPage(0);
+  };
+
+  // Edit state
+  const [editingEvent, setEditingEvent] = useState<any>(null);
+  const [editForm, setEditForm] = useState<any>({});
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const updateMutation = useUpdateMaintenance();
+  const deleteMutation = useDeleteMaintenance();
+
+  const openEdit = (event: any) => {
+    setEditingEvent(event);
+    setEditForm({
+      maintenanceDate: event.maintenanceDate?.substring(0, 10) ?? '',
+      maintenanceType: event.maintenanceType ?? 'INSPECTION',
+      eventSource: event.eventSource ?? 'SCHEDULED_PM',
+      description: event.description ?? '',
+      performedBy: event.performedBy ?? '',
+      cost: event.cost ?? '',
+      nextDueDate: event.nextDueDate?.substring(0, 10) ?? '',
+    });
+  };
+
+  const handleEditSave = () => {
+    if (!editingEvent) return;
+    const payload = {
+      ...editForm,
+      cost: editForm.cost || null,
+      nextDueDate: editForm.nextDueDate || null,
+    };
+    updateMutation.mutate({ id: editingEvent.id, data: payload }, {
+      onSuccess: () => setEditingEvent(null),
+    });
+  };
+
+  const handleDelete = () => {
+    if (deletingId === null) return;
+    deleteMutation.mutate(deletingId, {
+      onSuccess: () => setDeletingId(null),
+    });
+  };
+
+  const { data, isLoading, isFetching } = useMaintenance({
+    equipmentId: selectedEquipmentId,
+    limit: PAGE_SIZE,
+    offset: page * PAGE_SIZE,
+    sortBy,
+    sortDir,
+  });
   const { data: equipment } = useEquipment();
+
+  // Events are read directly from the query — no separate derived state needed.
+  const displayedEvents = data?.events ?? [];
+
+  const handleEquipmentFilter = (val: string) => {
+    setSelectedEquipmentId(val === "all" ? undefined : parseInt(val));
+    setPage(0);
+  };
 
   const isAdmin = user?.role === 'ADMINISTRATOR';
 
@@ -69,24 +182,32 @@ export default function MaintenanceLog() {
       .join(' ');
   };
 
-  // Calculate stats
-  const totalEvents = maintenanceEvents?.length || 0;
-  const totalCost = maintenanceEvents?.reduce((sum: number, event: any) => {
-    return sum + (parseFloat(event.cost || '0'));
-  }, 0) || 0;
-
-  const lastMonth = new Date();
+  // Stats — total from server, cost/recent from loaded events
+  const totalEvents = data?.total ?? 0;
+  const totalCost = displayedEvents.reduce((sum: number, event: any) => {
+    return sum + parseFloat(event.cost || '0');
+  }, 0);
+  const cursorDate = simState.data?.cursor_date
+    ? new Date(String(simState.data.cursor_date).substring(0, 10))
+    : new Date();
+  const lastMonth = new Date(cursorDate);
   lastMonth.setMonth(lastMonth.getMonth() - 1);
-  const recentEvents = maintenanceEvents?.filter((event: any) => 
+  const recentEvents = displayedEvents.filter((event: any) =>
     new Date(event.maintenanceDate) >= lastMonth
-  ).length || 0;
+  ).length;
+
+  const totalPages = Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE));
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
           <h2 className="text-3xl font-bold tracking-tight">Maintenance Log</h2>
-          <p className="text-muted-foreground">Track maintenance events and service history</p>
+          <p className="text-muted-foreground">
+            {totalEvents > 0
+              ? `${totalEvents.toLocaleString()} total events`
+              : 'Track maintenance events and service history'}
+          </p>
         </div>
 
         {isAdmin && (
@@ -155,7 +276,7 @@ export default function MaintenanceLog() {
             <Wrench className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{totalEvents}</div>
+            <div className="text-2xl font-bold">{totalEvents.toLocaleString()}</div>
             <p className="text-xs text-muted-foreground">
               All maintenance records
             </p>
@@ -196,9 +317,9 @@ export default function MaintenanceLog() {
           <CardDescription>Filter by equipment</CardDescription>
         </CardHeader>
         <CardContent>
-          <Select 
-            value={selectedEquipmentId?.toString() || "all"} 
-            onValueChange={(val) => setSelectedEquipmentId(val === "all" ? undefined : parseInt(val))}
+          <Select
+            value={selectedEquipmentId?.toString() || "all"}
+            onValueChange={handleEquipmentFilter}
           >
             <SelectTrigger className="w-[300px]">
               <SelectValue placeholder="All Equipment" />
@@ -227,30 +348,32 @@ export default function MaintenanceLog() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Date</TableHead>
+                <MaintSortHead col="maintenanceDate" active={sortBy} dir={sortDir} onSort={onSort}>Date</MaintSortHead>
                 <TableHead>Equipment</TableHead>
-                <TableHead>Type</TableHead>
+                <MaintSortHead col="maintenanceType" active={sortBy} dir={sortDir} onSort={onSort}>Type</MaintSortHead>
+                <MaintSortHead col="eventSource" active={sortBy} dir={sortDir} onSort={onSort}>Source</MaintSortHead>
                 <TableHead>Description</TableHead>
-                <TableHead>Performed By</TableHead>
-                <TableHead className="text-right">Cost</TableHead>
-                <TableHead>Next Due</TableHead>
+                <MaintSortHead col="performedBy" active={sortBy} dir={sortDir} onSort={onSort}>Performed By</MaintSortHead>
+                <MaintSortHead col="cost" active={sortBy} dir={sortDir} onSort={onSort} align="right">Cost</MaintSortHead>
+                <MaintSortHead col="nextDueDate" active={sortBy} dir={sortDir} onSort={onSort}>Next Due</MaintSortHead>
+                {isAdmin && <TableHead className="w-24" />}
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center py-12 text-muted-foreground">
+                  <TableCell colSpan={isAdmin ? 9 : 8} className="text-center py-12 text-muted-foreground">
                     Loading maintenance events...
                   </TableCell>
                 </TableRow>
-              ) : maintenanceEvents?.length === 0 ? (
+              ) : displayedEvents.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center py-12 text-muted-foreground">
+                  <TableCell colSpan={isAdmin ? 9 : 8} className="text-center py-12 text-muted-foreground">
                     No maintenance events found
                   </TableCell>
                 </TableRow>
               ) : (
-                maintenanceEvents?.map((event: any) => {
+                displayedEvents.map((event: any) => {
                   const equip = equipment?.find(e => e.id === event.equipmentId);
                   return (
                     <TableRow key={event.id}>
@@ -269,9 +392,32 @@ export default function MaintenanceLog() {
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        <div className="max-w-xs truncate text-sm text-muted-foreground">
-                          {event.description || '-'}
-                        </div>
+                        <span className="text-xs text-muted-foreground">
+                          {event.eventSource
+                            ? event.eventSource.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c: string) => c.toUpperCase())
+                            : '-'}
+                        </span>
+                      </TableCell>
+                      <TableCell className="max-w-[200px]">
+                        {event.description ? (
+                          <TooltipProvider delayDuration={200}>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className="block truncate text-sm text-muted-foreground cursor-default">
+                                  {event.description}
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent
+                                side="top"
+                                className="max-w-sm whitespace-normal text-xs leading-relaxed"
+                              >
+                                {event.description}
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        ) : (
+                          <span className="text-sm text-muted-foreground">-</span>
+                        )}
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-1 text-sm">
@@ -301,14 +447,167 @@ export default function MaintenanceLog() {
                           <span className="text-muted-foreground text-sm">-</span>
                         )}
                       </TableCell>
+                      {isAdmin && (
+                        <TableCell className="whitespace-nowrap">
+                          <div className="flex items-center justify-end gap-0.5">
+                            <TooltipProvider delayDuration={300}>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-accent"
+                                    onClick={() => openEdit(event)}
+                                  >
+                                    <Pencil className="h-4 w-4" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent side="top" className="text-xs">Edit</TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                            <TooltipProvider delayDuration={300}>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                                    onClick={() => setDeletingId(event.id)}
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent side="top" className="text-xs">Delete</TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          </div>
+                        </TableCell>
+                      )}
                     </TableRow>
                   );
                 })
               )}
             </TableBody>
           </Table>
+          {/* Pagination */}
+          <div className="flex items-center justify-between px-2 py-3 border-t text-sm">
+            <span className="text-muted-foreground text-xs">
+              {totalEvents === 0
+                ? "No results"
+                : `${page * PAGE_SIZE + 1}–${Math.min((page + 1) * PAGE_SIZE, totalEvents)} of ${totalEvents.toLocaleString()}`}
+              {isFetching && <span className="ml-2 text-muted-foreground/60">Updating…</span>}
+            </span>
+            {totalPages > 1 && (
+              <div className="flex items-center gap-0.5">
+                <Button variant="ghost" size="icon" className="h-7 w-7" disabled={page === 0} onClick={() => setPage(0)}>
+                  <ChevronsLeft className="h-3.5 w-3.5" />
+                </Button>
+                <Button variant="ghost" size="icon" className="h-7 w-7" disabled={page === 0} onClick={() => setPage(p => p - 1)}>
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                </Button>
+                <span className="px-2 text-xs text-muted-foreground tabular-nums">{page + 1} / {totalPages}</span>
+                <Button variant="ghost" size="icon" className="h-7 w-7" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}>
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </Button>
+                <Button variant="ghost" size="icon" className="h-7 w-7" disabled={page >= totalPages - 1} onClick={() => setPage(totalPages - 1)}>
+                  <ChevronsRight className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            )}
+          </div>
         </CardContent>
       </Card>
+      {/* Edit Dialog */}
+      <Dialog open={!!editingEvent} onOpenChange={(open) => !open && setEditingEvent(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Edit Maintenance Event</DialogTitle>
+            <DialogDescription>Update the details for this maintenance record.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Date</label>
+                <Input type="date" value={editForm.maintenanceDate} onChange={e => setEditForm((f: any) => ({ ...f, maintenanceDate: e.target.value }))} />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Type</label>
+                <Select value={editForm.maintenanceType} onValueChange={v => setEditForm((f: any) => ({ ...f, maintenanceType: v }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="INSPECTION">Inspection</SelectItem>
+                    <SelectItem value="MINOR_SERVICE">Minor Service</SelectItem>
+                    <SelectItem value="MAJOR_SERVICE">Major Service</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Event Source</label>
+                <Select value={editForm.eventSource} onValueChange={v => setEditForm((f: any) => ({ ...f, eventSource: v }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="SCHEDULED_PM">Scheduled PM</SelectItem>
+                    <SelectItem value="PREDICTIVE_INTERVENTION">Predictive Intervention</SelectItem>
+                    <SelectItem value="REACTIVE_REPAIR">Reactive Repair</SelectItem>
+                    <SelectItem value="PRE_DISPATCH_INSPECTION">Pre-Dispatch Inspection</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Performed By</label>
+                <Input placeholder="Technician name" value={editForm.performedBy} onChange={e => setEditForm((f: any) => ({ ...f, performedBy: e.target.value }))} />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Description</label>
+              <Textarea rows={2} value={editForm.description} onChange={e => setEditForm((f: any) => ({ ...f, description: e.target.value }))} />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Cost</label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">$</span>
+                  <Input className="pl-6" type="number" step="0.01" placeholder="0.00" value={editForm.cost} onChange={e => setEditForm((f: any) => ({ ...f, cost: e.target.value }))} />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Next Due Date</label>
+                <Input type="date" value={editForm.nextDueDate} onChange={e => setEditForm((f: any) => ({ ...f, nextDueDate: e.target.value }))} />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditingEvent(null)}>Cancel</Button>
+            <Button onClick={handleEditSave} disabled={updateMutation.isPending}>
+              {updateMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Save Changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirm */}
+      <AlertDialog open={deletingId !== null} onOpenChange={(open) => !open && setDeletingId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete maintenance event?</AlertDialogTitle>
+            <AlertDialogDescription>This cannot be undone. The record will be permanently removed.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={handleDelete}
+              disabled={deleteMutation.isPending}
+            >
+              {deleteMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

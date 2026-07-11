@@ -1,0 +1,32 @@
+# Dependencies — never copy these; let Dockerfile install them
+node_modules/
+venv/
+
+# Build output — rebuilt inside Docker
+dist/
+
+# Secrets — never copy
+.env
+
+# Git & IDE
+.git/
+.gitignore
+.claude/
+
+# Python cache
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+.pytest_cache/
+*.egg-info/
+
+# Local dev state
+.local/
+
+# Docs & assets not needed at runtime
+attached_assets/
+*.md
+
+# OS
+.DS_Store
+Thumbs.db

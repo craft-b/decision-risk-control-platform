@@ -1,16 +1,36 @@
 # Enterprise Asset Intelligence
 
-Predictive maintenance and risk scoring platform for heavy equipment rental fleets. Combines a Node.js/React web app with a Python ML service to forecast equipment failures before they happen.
+**Live demo:** not yet deployed — see [Deployment Status](#deployment-status). Runs locally in a few minutes via [Quickstart](#quickstart).
+
+Predictive maintenance platform for heavy construction equipment rental fleets — encoding the same failure-prediction and risk-scoring logic used in industrial and manufacturing equipment reliability programs. Asset degradation curves, hazard functions, and maintenance-interval optimization transfer directly from a production line's rotating equipment to a rental fleet's excavators and skid steers, which is the direct link to 26 years of CPG/manufacturing process engineering behind this project. It's a full-stack system that simulates fleet operations, engineers features from operational data, trains calibrated Random Forest models, and serves multi-horizon failure probability predictions across 10, 30, and 60-day windows — with cost-optimized intervention recommendations and a rental dispatch risk guard.
+
+## Why This Project
+
+This is the second of two portfolio repositories, deliberately built to be complementary rather than redundant:
+
+- **FormulaForge** demonstrates LLM/RAG application engineering — retrieval pipelines, prompt design, grounding a model in a CPG formulation knowledge base.
+- **Enterprise Asset Intelligence** (this repo) demonstrates classical ML + MLOps engineering — feature engineering from raw operational data, calibrated multi-horizon classifiers, temporal validation, drift monitoring, and model governance. This is the "practical ML floor": the skills that transfer directly from process-engineering discipline (SPC, reliability curves, maintenance scheduling) into applied ML roles, independent of any particular LLM.
 
 ---
 
 ## What It Does
 
-- **Risk prediction** — A trained Random Forest model scores every asset (LOW / MEDIUM / HIGH) based on age, usage hours, maintenance history, and rental frequency
-- **GenAI recommendations** — Groq LLM turns raw risk scores into plain-English maintenance actions per asset
-- **Fleet dashboard** — Real-time overview of fleet health, upcoming maintenance, and high-risk equipment
-- **ML pipeline** — Feature engineering → snapshot labeling → model training → inference, fully automated
-- **Admin controls** — Override predictions, log maintenance events, manage equipment/rentals/vendors/job sites
+- **Multi-horizon failure prediction** — Three separate calibrated Random Forest models score every asset across 10d, 30d, and 60d windows (LOW / MEDIUM / HIGH) based on 31 engineered features
+- **60-day trajectory projection** — Forward-projects failure probability curves by analytically aging features at 7-day steps, with HIGH-threshold crossing detection
+- **Cost model** — Identifies the optimal PM intervention day by comparing expected failure cost against scheduled maintenance cost, surfaced per-asset in the UI
+- **Rental dispatch guard** — Blocks or warns dispatchers when HIGH/MEDIUM risk equipment is selected for a new rental, with mandatory risk acknowledgement for HIGH-risk dispatches
+- **Fleet simulation engine** — Discrete-event simulator advances a cursor date, generates sensor readings, fires maintenance events via a Weibull-inspired hazard function, and handles fleet renewal (retirement + replacement) automatically
+- **ML pipeline** — Full automated pipeline: feature snapshot generation → failure labeling → model training → inference, all triggerable from the admin UI
+- **MLflow experiment tracking** — Every training run logs hyperparameters, per-horizon metrics (ROC-AUC, PR-AUC, recall, F1), per-fold CV scores, model artifacts, and feature importance JSONs under the `equipment-failure-multihorizon` experiment
+- **SHAP explainability** — `TreeExplainer` runs at inference time; top 5 features by |SHAP value| are returned with every prediction for per-asset attribution
+- **Three-layer drift detection** — Data drift (PSI on monitored features), prediction drift (distribution shift in 30d output scores), and bias drift (disparity in HIGH-rate across equipment categories); all persisted to `drift_metrics` table; dashboard surfaces per-feature PSI with STABLE / WARNING / ALERT status
+- **Champion-challenger model governance** — Newly trained models enter registry as challengers; shadow-score every batch alongside champion without persisting results; admin promotes challenger to champion via `POST /api/ml/models/promote` with zero downtime (in-memory hot-swap); full audit history in `model_registry.json`
+- **Pre-training data quality gate** — 8-check validator (row count, label completeness, class balance, null rates, physical bounds, non-zero required features, temporal spread, duplicate snapshots) blocks training on FAIL, warns on marginal data, PASS/WARN/FAIL summary in training log
+- **Prevalence-honest calibration** — Random Forests calibrated (`CalibratedClassifierCV`) on the untouched, real-prevalence dev set with `class_weight='balanced'` (no SMOTE), so the emitted failure probability isn't inflated by resampling; Brier score + expected calibration error published per horizon
+- **Agent API** — Bearer-token authenticated endpoints (`GET /api/agent/model-health`, `POST /api/agent/actions`) for programmatic and LLM agent access; returns consolidated health snapshot with machine-readable `recommended_action`
+- **Automated monitoring** — `monitor.py` cron script polls model health, logs three-layer drift per feature, auto-triggers retraining or reference recomputation based on drift state, and fires Slack webhook alerts when action is needed or any drift layer reaches WARNING/ALERT; supports `--loop` mode for continuous polling
+- **GenAI recommendations (opt-in)** — with `GENAI_RECOMMENDATIONS=on` and a provider key, the Groq LLM turns a single asset's structured risk facts (worst horizon, drivers) into plain-English maintenance prose, validated and falling back to a deterministic template on any failure; **off by default**, and batch scoring always uses the template
+- **ML metrics dashboard** — Live feature importance, confusion matrix, per-class precision/recall/F1, prediction distribution over time, hyperparameter display, drift monitor card, champion-challenger comparison table, and data quality report card
 
 ---
 
@@ -20,34 +40,294 @@ Predictive maintenance and risk scoring platform for heavy equipment rental flee
 Browser
   │
   ▼
-Nginx (port 80)
-  ├── /          → React SPA (static files)
-  └── /api/*     → proxy → Node.js (port 5000)
-                              │
-                              ├── MySQL (external)
-                              └── /predict → FastAPI ML (port 8000)
-                                              │
-                                              ├── MySQL (read)
-                                              └── Groq API
+React SPA (Vite, port 5173)
+  │
+  └── /api/*  →  Node.js / Express (port 5000)
+                    │
+                    ├── MySQL 8
+                    │
+                    └── http://localhost:8000  →  FastAPI ML Service (port 8000)
+                                                    │
+                                                    ├── MySQL 8 (read, training)
+                                                    ├── Groq API (recommendations)
+                                                    └── ml-service/registry/ (model artifacts)
 ```
 
 **Stack:**
 
 | Layer | Technology |
 |---|---|
-| Frontend | React 18, TypeScript, Tailwind CSS, Recharts |
-| API Gateway | Node.js, Express, Drizzle ORM |
-| ML Service | Python 3.11, FastAPI, scikit-learn, Groq |
+| Frontend | React 18, TypeScript, Tailwind CSS, shadcn/ui, Recharts, TanStack Query |
+| API | Node.js, Express, Drizzle ORM |
+| ML Service | Python 3.12, FastAPI, scikit-learn, pandas, SQLAlchemy |
 | Database | MySQL 8 |
-| Infrastructure | Docker, docker-compose |
+| Experiment Tracking | MLflow 2.16 |
+| Explainability | SHAP 0.51 (TreeExplainer) |
+| Drift Detection | PSI (data), output distribution (prediction), category disparity (bias) |
+| Model Governance | Champion-challenger registry, shadow scoring, zero-downtime promotion |
+| Data Quality | 8-check pre-training gate (row count, balance, nulls, bounds, temporal spread) |
+| CI | GitHub Actions — lint (ruff), ML smoke-test, TypeScript typecheck (tsc), Node unit tests (vitest) |
+| LLM | Groq (llama-3.1-8b-instant) |
 
 ---
 
-## Prerequisites
+## ML Models — v1.17
 
-- Docker Desktop 4.x+ (16 GB RAM recommended)
-- A MySQL 8 database (local or hosted — PlanetScale, RDS, etc.)
-- A [Groq API key](https://console.groq.com) (free tier is sufficient)
+> **⚠️ Data source: simulated.** Every number below is **pipeline verification on synthetic data**,
+> not field predictive performance. All operational data comes from a fleet simulator whose failure
+> events were generated by age/wear hazard rules over (a subset of) the features the model consumes —
+> so high AUC here demonstrates that the snapshot → label → train → serve plumbing is correct, and
+> nothing more. See [docs/REAL_DATA_VALIDATION.md](docs/REAL_DATA_VALIDATION.md) for what has to
+> happen before any metric can be quoted as predictive performance.
+
+Three separate binary classifiers, one per prediction horizon. Each is a Random Forest calibrated on
+the **real class prevalence** (no resampling — see calibration note below), trained on an embargoed
+temporal holdout split with TimeSeriesSplit cross-validation, plus a by-asset grouped evaluation
+(GroupKFold over equipment). One shared feature transform runs at train and serve time, and each
+model serves its own version-pinned preprocessing artifacts.
+
+**Training data:** 10,828 observed-outcome snapshots · 31 features · 2024–2032 simulation timeline
+(45 rows censored for in-window predictive interventions, 630 horizon-censored). Labels derive only
+from `REACTIVE_REPAIR` breakdown events in `(ts, ts+h]` — scheduled PM and model-driven
+interventions are never counted as failures.
+
+**v1.17 performance (simulated data):**
+
+| Horizon | Split | ROC-AUC | PR-AUC | Recall @ HIGH | Brier | ECE |
+|---|---|---|---|---|---|---|
+| 10d | temporal | 0.9272 | 0.8111 | 89.2% | 0.072 | 0.074 |
+| 10d | by-asset | 0.9602 | — | — | — | — |
+| 30d | temporal | 0.8823 | 0.8079 | 77.2% | 0.080 | **0.032** ✓ |
+| 30d | by-asset | 0.9335 | — | — | — | — |
+| 60d | temporal | 0.8024 | 0.7847 | 64.1% | 0.122 | 0.054 |
+| 60d | by-asset | 0.9030 | — | — | — | — |
+
+*(v1.17 = v1.16 + the ML-12 config fix — `maintenance_config.recommended_interval_days` now
+actually drives `maint_overdue`/`neglect_score`. Both are low-importance features, so metrics are
+within noise of v1.16; the point is that train and serve now compute them identically.)*
+
+Recall @ HIGH = failure-class recall at the 0.60 HIGH-band operating threshold. ECE = expected
+calibration error (gate: < 0.05). The **temporal split** answers "same fleet, next quarter"; the
+**by-asset split** (every asset scored by a model that never saw it) answers "a new customer's fleet,
+day one". Precision@budget and lead-time (operator metrics) are on the ML dashboard per horizon.
+
+**Calibration (ML-5) — before/after dropping SMOTE.** SMOTE was applied before the calibrator, so it
+fit on a ~50% synthetic prevalence and the emitted probability was systematically inflated. Measured
+on the holdout (mean predicted probability − actual failure rate):
+
+| Horizon | Inflation before (SMOTE) | Inflation after (no SMOTE) | ECE before → after |
+|---|---|---|---|
+| 10d | +0.025 | +0.073 | 0.027 → 0.074 |
+| 30d | +0.085 | **+0.005** | 0.085 → **0.034** |
+| 60d | +0.066 | **−0.001** | 0.066 → 0.053 |
+
+Dropping SMOTE eliminates the resampling-driven inflation at 30d/60d (the 30d probability goes from
++8.5 points over-confident to essentially honest, and clears the ECE gate). The 10d row moves the
+other way: its calibrator is fit on the 41%-positive dev set but the 10d holdout is only 22% positive
+(the aging fleet shifts prevalence across the temporal boundary), so residual over-prediction there is
+distribution shift, not resampling — the by-asset and CV numbers are the fairer read for 10d.
+
+**Honest observations these numbers surface:**
+
+- The 10d model's median lead time (~6 days) sits *below* the ~7-day PM scheduling latency — the
+  30d model (26-day median lead) is the operationally actionable horizon.
+- These metrics are substantially lower than the originally published v1.14 numbers
+  (e.g. 30d holdout ROC-AUC 0.9297 → 0.8728, CV 0.9853 → 0.9232). The v1.14 numbers were inflated by
+  three defects, all fixed from v1.15 on: feature windows unbounded by snapshot date (features could
+  see the label event — ML-1), no embargo at the holdout boundary (ML-3), and a training set where
+  52% of rows were snapshots of assets before they existed — trivially predictable filler (11,713 of
+  22,585 rows, removed in regeneration).
+- Positive rates (41–58%) are far above real fleet failure rates. That is the simulator's hazard
+  process, and one more reason none of this is quotable as field performance.
+
+**Evaluation methodology:** each horizon's holdout is a single **temporal** split (most recent ~20%
+of snapshots) with a per-horizon **embargo** — dev rows whose label window `[ts, ts+h]` crosses the
+holdout boundary are dropped (80/239/451 rows for 10/30/60d). 5-fold `TimeSeriesSplit` CV
+(gap = horizon days) runs on the dev portion for a variance estimate. The **by-asset** numbers are
+pooled out-of-fold predictions from `GroupKFold(5)` over `equipment_id`. Rows whose outcome window
+contains a `PREDICTIVE_INTERVENTION` before any failure are **censored** (`label_status`), not
+labeled negative — otherwise the model's own successes would poison its future labels.
+**Retrain triggers:** `monitor.py` polls `/api/agent/model-health` and auto-triggers retraining when
+any monitored feature's PSI reaches the ALERT threshold (≥ 0.20) or when prediction/bias drift
+crosses the same threshold; an admin can also trigger retraining manually via `POST /api/ml/train`.
+
+---
+
+## Feature Engineering
+
+31 features computed per asset per snapshot date from raw operational tables:
+
+```
+asset_age_years, rental_days_30d, rental_days_90d, avg_rental_duration,
+maintenance_events_90d, days_since_last_maintenance, vendor_reliability_score,
+jobsite_risk_score, usage_intensity, usage_trend, utilization_vs_expected,
+wear_rate, aging_factor, maint_overdue, mechanical_wear_score, abuse_score,
+neglect_score, wear_rate_velocity, maint_frequency_trend, cost_trend,
+hours_velocity, neglect_acceleration, sensor_degradation_rate, category_encoded,
+log_total_hours_lifetime, log_hours_used_30d, log_hours_used_90d,
+log_maintenance_cost_180d, log_cost_per_event, log_maint_burden,
+log_mean_time_between_failures
+```
+
+Seven skewed features are log-transformed at training and inference time. Derived columns (aging_factor, wear_rate, mechanical_wear_score, etc.) are recomputed fresh at inference rather than stored — avoids staleness from schema drift.
+
+---
+
+## ML Pipeline
+
+All four stages are triggerable from the admin panel in the UI (ADMINISTRATOR role required):
+
+```
+1. Generate Snapshots   →  Backfills feature vectors across full simulation timeline (7-day intervals)
+2. Label Snapshots      →  Marks 10d/30d/60d failure outcomes on each snapshot
+3. Retrain Models       →  Trains v1.17+ models, hot-swaps on completion (~3 min)
+4. Run Predictions      →  Scores all active fleet units with latest models
+```
+
+Training uses TimeSeriesSplit CV (5 folds, gap = horizon days) to prevent label leakage. Version is auto-incremented from the last DB record. Artifacts written to `ml-service/registry/`.
+
+---
+
+## Simulation Engine
+
+A discrete-event simulator advances a cursor date day by day:
+
+- **Sensor data** generated per equipment per day (engine temp, RPM, vibration, hydraulic pressure, etc.)
+- **Maintenance events** fired probabilistically via a Weibull-inspired hazard function combining age hazard + hours hazard + neglect hazard
+- **Fleet renewal** — equipment retired at age >10y OR (age >8y AND hours >8,000), replaced with `EQ-R{id}-{year}` pattern
+- **Simulation cursor** — currently at 2032-04-08, 60 days run
+
+---
+
+## Project Structure
+
+```
+.
+├── client/                        # React frontend (Vite)
+│   └── src/
+│       ├── components/            # Shared UI components
+│       ├── hooks/
+│       │   └── use-predictive-maintenance.ts  # TanStack Query hooks (predictions, drift, training)
+│       ├── lib/
+│       │   └── cost-model.ts      # Optimal PM intervention calculator
+│       └── pages/
+│           ├── predictive-maintenance-dashboard.tsx  # Fleet prediction UI + SHAP modal
+│           └── ml-dashboard.tsx                      # Model metrics, drift monitor, MLflow stats
+│
+├── server/                        # Node.js API gateway
+│   ├── routes.ts                  # All Express routes incl. agent API + drift proxy
+│   └── services/
+│       ├── feature-engineering-enhanced.ts       # Full 31-feature computation + velocity features
+│       ├── feature-engineering-enhanced.test.ts  # Unit tests — pure derived-feature formulas
+│       ├── feature-engineering.ts                # Base snapshot persistence
+│       ├── risk-scoring.ts                       # Legacy heuristic risk score (pre-ML)
+│       └── risk-scoring.test.ts                  # Unit tests — scoring/classification/explanation
+│
+├── ml-service/                    # Python FastAPI ML service
+│   ├── api/
+│   │   └── main.py                # FastAPI app — inference, drift, training endpoints
+│   ├── engine/
+│   │   ├── predictor_multihorizon.py  # Multi-horizon inference + SHAP attribution
+│   │   ├── model_registry.py          # Champion-challenger registry — JSON-backed, numeric sort
+│   │   ├── data_quality.py            # 8-check pre-training data quality gate
+│   │   ├── drift_detector.py          # Three-layer drift detection (data/prediction/bias)
+│   │   ├── projector.py               # 60-day forward projection engine
+│   │   └── genai_advisor.py           # Groq recommendation generation
+│   ├── training/
+│   │   └── train_model_multihorizon.py  # Training pipeline — TimeSeriesSplit CV + MLflow logging + DQ gate
+│   ├── tests/                     # 115 tests total (pytest)
+│   │   ├── test_ml_engine.py          # inference, monotonicity, risk ordering, batch, schema
+│   │   ├── test_train_smoke.py        # full training pipeline on synthetic data
+│   │   ├── test_data_quality.py       # all 8 DQ checks + report structure
+│   │   └── test_model_registry.py     # champion/challenger/promote/metrics (in-memory)
+│   └── registry/                  # Versioned model artifacts
+│       ├── rf_{h}d_v1.17.pkl
+│       ├── clip_thresholds_v1.17.json
+│       ├── feature_cols_v1.17.json
+│       ├── metadata_{h}d_v1.17.json
+│       └── feature_importance_{h}d_v1.17.json
+│
+├── monitor.py                     # Local cron script — polls agent API, auto-triggers retrain; --loop mode
+├── .github/workflows/ml-ci.yml   # CI: lint (ruff), ML smoke-test, typecheck (tsc), Node unit tests (vitest)
+└── shared/
+    ├── schema.ts                  # Drizzle table definitions (source of truth)
+    └── routes.ts                  # Shared API route/type definitions
+```
+
+---
+
+## API Reference
+
+Full interactive docs at **http://localhost:8000/docs** when running.
+
+### Inference
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/risk-score/multi-horizon/batch` | Score fleet with 10d/30d/60d models |
+| `GET` | `/api/risk-score/multi-horizon/latest` | Latest stored multi-horizon predictions |
+| `GET` | `/api/equipment/:id/projection` | 60-day failure trajectory curve |
+
+### Pipeline
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/predictive-maintenance/generate-snapshots` | Backfill feature snapshots |
+| `POST` | `/api/predictive-maintenance/label-snapshots` | Label failure outcomes |
+| `POST` | `/api/ml/train` | Trigger model retrain (admin only) |
+| `GET` | `/api/ml/train/status` | Poll training progress + log |
+| `GET` | `/api/ml/pipeline-status` | Snapshot counts, model version, readiness |
+| `GET` | `/api/ml/model-metrics` | Accuracy, confusion matrix, feature importance |
+
+### Drift Monitoring
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/ml/drift/latest` | Most recent PSI per monitored feature |
+| `POST` | `/api/ml/drift/compute-reference` | Recompute reference baseline from training data |
+
+### Model Governance
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/ml/models/registry` | Champion, challenger, retired versions + audit history |
+| `GET` | `/api/ml/models/compare` | Per-horizon metric comparison (champion vs challenger) |
+| `POST` | `/api/ml/models/promote` | Promote challenger to champion (admin only) |
+| `GET` | `/api/ml/data-quality/report` | Latest pre-training data quality report (8 checks) |
+
+### Agent API
+
+Authenticated with `Authorization: Bearer <AGENT_API_KEY>`. Designed for programmatic access by scripts or LLM agents.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/agent/model-health` | Consolidated model + drift + pipeline health with `recommended_action` |
+| `POST` | `/api/agent/actions` | Trigger `retrain` or `compute_drift_reference` |
+
+### Simulation
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/simulate/state` | Current cursor date + days run |
+| `POST` | `/api/simulate/day` | Advance simulation N days (max 30) |
+
+---
+
+## Testing
+
+```bash
+# Python — ml-service (115 tests: inference, training smoke test, data quality gate, model registry)
+cd ml-service
+pytest tests/ -v
+
+# Node/TypeScript — server (unit tests for feature-engineering and risk-scoring core logic)
+npm test
+
+# TypeScript type-check
+npx tsc --noEmit
+```
+
+All three run in CI (`.github/workflows/ml-ci.yml`) on every push/PR touching `ml-service/`, `server/`, `client/`, or `shared/`.
 
 ---
 
@@ -61,164 +341,60 @@ cd enterprise-asset-intelligence
 cp .env.example .env
 ```
 
-Open `.env` and fill in:
+Fill in `.env`:
 
 ```env
-DATABASE_URL=mysql://user:password@host:3306/enterprise_assets
-DB_HOST=your-db-host
-DB_USER=your-db-user
-DB_PASSWORD=your-db-password
-DB_NAME=enterprise_assets
+DATABASE_URL=mysql://root:yourpassword@localhost:3306/asset_inventory
+DB_HOST=localhost
+DB_PORT=3306
+DB_USER=root
+DB_PASSWORD=yourpassword
+DB_NAME=asset_inventory
 SESSION_SECRET=<openssl rand -hex 32>
-JWT_SECRET=<openssl rand -hex 32>
 GROQ_API_KEY=gsk_...
+AGENT_API_KEY=<python -c "import secrets; print(secrets.token_hex(32))">
 ```
 
-### 2. Run database migrations
+> `DATABASE_URL` and the individual `DB_*` vars must point at the same database — the Node/Drizzle server reads `DATABASE_URL` (and will refuse to start without it), while the Python ML service reads the individual `DB_*` vars via SQLAlchemy.
+
+### 2. Install and migrate
 
 ```bash
 npm install
-npx drizzle-kit migrate
+npm run db:migrate     # applies migrations/ — creates the full schema on a clean DB
 ```
 
-### 3. Train the ML model (first time only)
+Drizzle migrations (`shared/schema.ts` → `migrations/`) are the **single DDL owner**:
+one `drizzle-kit migrate` builds every table (equipment, rentals, feature
+snapshots, sensor logs, drift + model-metrics tables). The Node and Python
+services only read and write — neither creates tables at runtime.
 
-The model artifacts must exist before the ML service starts. Training takes ~2 minutes.
+### 3. Start services
 
 ```bash
+# Terminal 1 — Node API + Vite dev server
+npm run dev
+
+# Terminal 2 — ML service
 cd ml-service
-pip install -r ../requirements.txt
-python train_model.py
-cd ..
+pip install -r requirements.txt
+uvicorn api.main:app --reload --port 8000
 ```
 
-Artifacts are written to `ml-service/registry/`. They persist across container rebuilds via a Docker volume mount — you do not need to retrain on every `docker-compose up`.
+### 4. First-time setup (onboarding screen)
 
-### 4. Start all services
+On first login, the app automatically redirects to `/setup`. Choose one of two paths:
 
-```bash
-docker-compose up --build
-```
+**Load Demo Data** — recommended for evaluation and interviews. Runs the full seed pipeline in the background (~60–90 seconds) and streams live progress. Seeds:
+- 10 heavy equipment units across four categories
+- 90 days of sensor readings per asset
+- Maintenance history with realistic failure events
+- Trained multi-horizon ML model (10d / 30d / 60d)
+- SHAP attribution, MLflow run, drift reference baseline
 
-| Service | URL |
-|---|---|
-| Web app | http://localhost |
-| API | http://localhost:5000 |
-| ML service | http://localhost:8000 |
-| ML docs | http://localhost:8000/docs |
+**Start Fresh** — skip demo data and build the dataset manually with real equipment and operational records. The dashboard surfaces guided empty states that walk you through adding equipment, logging maintenance, running the ML pipeline, and generating predictions in the right order.
 
-### 5. Seed initial data (optional)
-
-```bash
-npm run db:seed
-```
-
----
-
-## Project Structure
-
-```
-.
-├── client/                   # React frontend
-│   └── src/
-│       ├── components/       # Shared UI components
-│       ├── pages/            # Route-level pages
-│       └── lib/              # API client, hooks, utils
-│
-├── server/                   # Node.js API gateway
-│   ├── routes.ts             # All Express route handlers
-│   ├── storage.ts            # Database access layer
-│   ├── db.ts                 # Drizzle client
-│   └── services/
-│       ├── predictive-maintenance.ts
-│       ├── feature-engineering.ts
-│       └── risk-scoring.ts
-│
-├── ml-service/               # Python FastAPI ML service
-│   ├── api/
-│   │   ├── main.py           # FastAPI app + lifespan
-│   │   └── schemas/
-│   │       └── prediction.py # Pydantic request/response models
-│   ├── engine/
-│   │   ├── predictor.py      # Model loading + inference
-│   │   └── genai_advisor.py  # Groq recommendation generation
-│   ├── run.py                # Uvicorn entrypoint
-│   ├── train_model.py        # Offline training script
-│   └── registry/             # Trained model artifacts (git-ignored)
-│       ├── model.pkl
-│       └── metadata.json
-│
-├── shared/
-│   ├── schema.ts             # Drizzle table definitions (source of truth)
-│   └── routes.ts             # Shared API route/type definitions
-│
-├── infrastructure/
-│   └── docker/
-│       ├── Dockerfile.client
-│       ├── Dockerfile.server
-│       └── Dockerfile.ml-service
-│
-├── migrations/               # Drizzle-generated SQL migrations
-├── docker-compose.yml
-├── drizzle.config.ts
-├── .env.example
-└── requirements.txt          # Python dependencies
-```
-
----
-
-## ML Pipeline
-
-The ML pipeline runs in four stages:
-
-```
-1. Snapshots    npm run ml:snapshots      Capture feature vectors for all assets
-2. Label        npm run ml:label          Mark 30-day failure outcomes on snapshots
-3. Train        python train_model.py     Fit Random Forest, write registry/
-4. Predict      npm run ml:predict-all    Score all assets, write to DB
-```
-
-Stages 1–2 build up labeled training data over time. Run stages 3–4 periodically (e.g. monthly via cron) to keep the model fresh.
-
-**Features used by the model:**
-
-| Feature | Source |
-|---|---|
-| Equipment age (years) | `manufacture_year` |
-| Total usage hours | `usage_hours` |
-| Days since last service | `maintenance_events` |
-| Maintenance events per year | `maintenance_events` |
-| Rental count (12 months) | `rentals` |
-| Category risk factor | Equipment category |
-
-**Model performance (v1.2.0, n=2,847):**
-
-| Class | Precision | Recall | F1 |
-|---|---|---|---|
-| HIGH | 0.82 | 0.88 | 0.85 |
-| MEDIUM | 0.79 | 0.74 | 0.76 |
-| LOW | 0.91 | 0.89 | 0.90 |
-| **Overall accuracy** | | | **0.847** |
-
----
-
-## API Reference
-
-Full interactive docs available at **http://localhost:8000/docs** (FastAPI) when running.
-
-### Key endpoints
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/api/equipment` | List all equipment |
-| `GET` | `/api/equipment/:id/risk` | Get latest risk prediction for asset |
-| `GET` | `/api/predictive-maintenance/fleet-risk` | Fleet-wide risk distribution |
-| `GET` | `/api/predictive-maintenance/equipment-with-risk` | Equipment list with risk attached |
-| `POST` | `/api/predictive-maintenance/predict-all` | Re-score entire fleet |
-| `GET` | `/api/ml/model-metrics` | Model accuracy, confusion matrix, feature importance |
-| `GET` | `/api/ml/pipeline-status` | Snapshot and prediction counts |
-| `POST` | `/api/predictive-maintenance/generate-snapshots` | Capture today's feature snapshots |
-| `POST` | `/api/predictive-maintenance/label-snapshots` | Label historical snapshots |
+> The onboarding screen re-appears any time the system is reset via `POST /api/admin/reset` (ADMINISTRATOR role only).
 
 ---
 
@@ -226,43 +402,38 @@ Full interactive docs available at **http://localhost:8000/docs** (FastAPI) when
 
 | Variable | Required | Description |
 |---|---|---|
-| `DATABASE_URL` | ✅ | MySQL DSN for Node.js / Drizzle |
-| `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASSWORD` / `DB_NAME` | ✅ | Individual DB vars for Python ML service |
+| `DATABASE_URL` | ✅ | Full MySQL DSN — read by the Node/Drizzle server. Must point at the same database as the `DB_*` vars below. |
+| `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASSWORD` / `DB_NAME` | ✅ | Individual MySQL connection vars — read by the Python ML service (SQLAlchemy) |
 | `SESSION_SECRET` | ✅ | Express session signing key |
-| `JWT_SECRET` | ✅ | JWT signing key |
 | `GROQ_API_KEY` | ✅ | Groq API key for LLM recommendations |
-| `GROQ_MODEL` | — | Groq model ID (default: `llama3-8b-8192`) |
-| `MODEL_VERSION` | — | Model version tag (default: `v1`) |
-| `LLM_PROVIDER` | — | LLM provider (default: `groq`) |
+| `AGENT_API_KEY` | ✅ | Bearer token for agent API (`/api/agent/*`). Generate: `python -c "import secrets; print(secrets.token_hex(32))"` |
+| `GROQ_MODEL` | — | Groq model ID (default: `llama-3.1-8b-instant`) |
+| `LLM_PROVIDER` | — | `groq` or `ollama` (default: `groq`) |
+| `MLFLOW_TRACKING_URI` | — | MLflow server URI. If unset, MLflow logging is skipped (safe no-op). |
+| `SLACK_WEBHOOK_URL` | — | Incoming webhook URL for `monitor.py` alerts. If unset, Slack notifications are silently skipped. |
+| `PYTHONIOENCODING` | — | Set to `utf-8` on Windows to avoid codec errors |
 
 ---
 
-## Development (without Docker)
+## Deployment Status
 
-```bash
-# Terminal 1 — Node API
-npm install
-npm run dev
-
-# Terminal 2 — ML service
-cd ml-service
-pip install -r ../requirements.txt
-python run.py
-
-# Terminal 3 — Vite dev server
-npm run client
-```
-
-The Vite dev server proxies `/api` to `localhost:5000` automatically via `vite.config.ts`.
+There is no hosted instance yet — Docker Compose (`docker-compose.yml`, three services: client, server, ml-service) is currently the only way to run the full stack, and `railway.toml` configs exist for the server and ML service but haven't been used for a live deployment. Getting a clickable demo online (frontend + Node API + FastAPI ML service + a free-tier MySQL host) is the next infrastructure step, tracked separately from this pass. Until then, use [Quickstart](#quickstart) to run everything locally — the "Load Demo Data" onboarding path seeds a full fleet with a trained model in under two minutes.
 
 ---
 
-## Deployment Notes
+## Key Design Decisions
 
-- **Model artifacts** (`ml-service/registry/`) are excluded from git. Train locally, then either copy the registry to your server or add a startup script that trains if no artifacts are found.
-- **Database migrations** must be run before the first server start: `npx drizzle-kit migrate`.
-- **Memory**: The ML service loads the model into RAM on startup. Allow at least 512 MB; 1 GB is recommended under load.
-- The `docker-compose.yml` start order is enforced via healthchecks: MySQL must accept connections before Node starts, and the ML service must be healthy before Node starts.
+**Why three separate models instead of one multi-output model?**
+Each horizon has a different positive rate (10d: 19.8%, 30d: 24.0%, 60d: 27.6%) and different optimal calibration (sigmoid for 10d, isotonic for 30d/60d). Separate models allow horizon-specific tuning and independent deployment.
+
+**Why TimeSeriesSplit instead of random CV?**
+Random CV leaks future data into training folds on temporal datasets. TimeSeriesSplit ensures each fold trains on past data only, which correctly simulates the deployment scenario.
+
+**Why recompute derived features at inference instead of storing them?**
+Storing derived columns (aging_factor, wear_rate, mechanical_wear_score) creates staleness risk — if the computation logic changes, stored values become inconsistent with what the model was trained on. Recomputing from raw inputs at inference keeps the feature pipeline as the single source of truth.
+
+**Why a forward projection engine?**
+Point-in-time predictions answer "what is the risk today?" The projection engine answers "when will this asset cross the HIGH threshold?" — which is the operationally useful question for scheduling maintenance windows.
 
 ---
 

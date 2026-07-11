@@ -4,6 +4,19 @@ import { InsertRental } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
 import { z } from "zod";
 
+export function useNextPoNumber() {
+  return useQuery({
+    queryKey: ['/api/rentals/next-po'],
+    queryFn: async () => {
+      const res = await fetch('/api/rentals/next-po', { credentials: 'include' });
+      if (!res.ok) throw new Error('Failed to fetch next PO number');
+      const data = await res.json();
+      return data.poNumber as string;
+    },
+    staleTime: 0, // Always fresh so concurrent tabs don't collide
+  });
+}
+
 export function useRentals() {
   return useQuery({
     queryKey: [api.rentals.list.path],
@@ -86,6 +99,34 @@ export function useUpdateRental() {
   });
 }
 
+export function useDeleteRental() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: async (id: number) => {
+      const url = buildUrl(api.rentals.delete.path, { id });
+      const res = await fetch(url, {
+        method: api.rentals.delete.method,
+        credentials: "include",
+      });
+      if (res.status === 409) {
+        const err = await res.json();
+        throw new Error(err.message);
+      }
+      if (!res.ok) throw new Error("Failed to delete rental");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [api.rentals.list.path] });
+      queryClient.invalidateQueries({ queryKey: [api.equipment.list.path] });
+      toast({ title: "Rental deleted" });
+    },
+    onError: (err) => {
+      toast({ title: "Cannot delete rental", description: err.message, variant: "destructive" });
+    },
+  });
+}
+
 export function useCompleteRental() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -108,11 +149,94 @@ export function useCompleteRental() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [api.rentals.list.path] });
       queryClient.invalidateQueries({ queryKey: [api.equipment.list.path] }); // Equipment freed up
+      queryClient.invalidateQueries({ queryKey: ['/api/dashboard/daily-revenue'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/dashboard/revenue-summary'] });
       toast({ title: "Rental completed successfully" });
     },
     onError: (err) => {
       toast({ title: "Error completing rental", description: err.message, variant: "destructive" });
     },
+  });
+}
+
+export function useGenerateInvoice() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: async (payload: {
+      rentalId: number;
+      invoiceDate: string;
+      periodFrom: string;
+      periodTo: string;
+      amount: number;
+      invoiceNumber: string;
+    }) => {
+      const res = await fetch('/api/invoices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        credentials: 'include',
+      });
+      if (res.status === 409) throw new Error('Invoice already exists for this rental');
+      if (!res.ok) throw new Error('Failed to generate invoice');
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [api.rentals.list.path] });
+      queryClient.invalidateQueries({ queryKey: ['/api/dashboard/revenue-summary'] });
+      toast({ title: 'Invoice generated', description: 'The rental has been invoiced and A/R updated.' });
+    },
+    onError: (err: Error) => {
+      toast({ title: 'Invoice failed', description: err.message, variant: 'destructive' });
+    },
+  });
+}
+
+export function useSwapEquipment() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: async ({ rentalId, replacementEquipmentId, reason, swappedBy, notes }: {
+      rentalId: number;
+      replacementEquipmentId: number;
+      reason?: string;
+      swappedBy?: string;
+      notes?: string;
+    }) => {
+      const res = await fetch(`/api/rentals/${rentalId}/swap`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ replacementEquipmentId, reason, swappedBy, notes }),
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.message);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [api.rentals.list.path] });
+      queryClient.invalidateQueries({ queryKey: [api.equipment.list.path] });
+      toast({ title: 'Equipment swapped successfully' });
+    },
+    onError: (err) => {
+      toast({ title: 'Swap failed', description: err.message, variant: 'destructive' });
+    },
+  });
+}
+
+export function useSwapHistory(rentalId: number) {
+  return useQuery({
+    queryKey: ['/api/rentals/:id/swaps', rentalId],
+    queryFn: async () => {
+      const res = await fetch(`/api/rentals/${rentalId}/swaps`, { credentials: 'include' });
+      if (!res.ok) throw new Error('Failed to fetch swap history');
+      return res.json();
+    },
+    enabled: !!rentalId,
   });
 }
 

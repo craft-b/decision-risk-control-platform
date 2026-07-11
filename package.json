@@ -1,13 +1,16 @@
 {
-  "name": "rest-express",
+  "name": "enterprise-asset-intelligence",
   "version": "1.0.0",
   "type": "module",
   "license": "MIT",
   "scripts": {
-    "dev": "tsx server/index.ts",
+    "dev": "tsx --max-old-space-size=4096 server/index.ts",
     "build": "tsx script/build.ts",
     "start": "node dist/index.cjs",
     "check": "tsc",
+    "test": "vitest run",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push"
   },
   "dependencies": {
@@ -101,7 +104,8 @@
     "tailwindcss": "^3.4.17",
     "tsx": "^4.20.5",
     "typescript": "5.6.3",
-    "vite": "^7.3.0"
+    "vite": "^7.3.0",
+    "vitest": "^4.1.9"
   },
   "overrides": {
     "drizzle-kit": {

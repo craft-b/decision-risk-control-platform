@@ -37,7 +37,8 @@ tzdata==2025.3
 typing_extensions==4.15.0
 greenlet==3.3.1
 
-# ── Experiment Tracking (optional) ────────────────────────────────────────────
-# Only active when MLFLOW_TRACKING_URI is set in .env
-# Install separately when ready: pip install mlflow
-# mlflow==2.16.2
+# ── Experiment Tracking & Explainability ──────────────────────────────────────
+# MLflow: active when MLFLOW_TRACKING_URI is set in .env (opt-in)
+mlflow==2.16.2
+# SHAP: per-prediction feature attribution (TreeExplainer on base RF)
+shap==0.51.0
