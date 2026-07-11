@@ -41,7 +41,7 @@ import {
 import { cn } from "@/lib/utils";
 import { CHART } from "@/lib/chart-theme";
 import { useAuth } from "@/hooks/use-auth";
-import { useEquipmentItem, useSensorTrends, type SensorTrendPoint } from "@/hooks/use-equipment";
+import { useEquipmentItem, useSensorTrends, useFeatureBaseline, type SensorTrendPoint } from "@/hooks/use-equipment";
 import { useMaintenanceHistory } from "@/hooks/use-maintenance";
 import { useRentals } from "@/hooks/use-rentals";
 import { useJobSites } from "@/hooks/use-jobsites";
@@ -154,6 +154,7 @@ export default function AssetDetail() {
   const { data: rentals } = useRentals();
   const { data: jobSites } = useJobSites();
   const { data: sensors } = useSensorTrends(id);
+  const { data: baseline } = useFeatureBaseline(id);
 
   const pred: any = (predictions ?? []).find(
     (p: any) => (p.equipmentId ?? p.equipment_id) === id,
@@ -339,7 +340,7 @@ export default function AssetDetail() {
                 <div key={h}>
                   <div className="text-sm font-medium text-muted-foreground mb-2">{HORIZON_LABELS[h]}</div>
                   {hasShap ? (
-                    <ShapDriverBars attribution={hp.shap} />
+                    <ShapDriverBars attribution={hp.shap} baseline={baseline} />
                   ) : (
                     <div className="space-y-1">
                       {hp.drivers.slice(0, 3).map((d, i) => (

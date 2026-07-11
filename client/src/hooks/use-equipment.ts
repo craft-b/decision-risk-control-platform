@@ -67,6 +67,27 @@ export function useSensorTrends(id: number, days = 90) {
   });
 }
 
+export interface FeatureBaseline {
+  equipmentId: number;
+  asOf: string | null;
+  unit: Record<string, number>;
+  fleet: Record<string, number>;
+}
+
+/** Latest-snapshot feature values for one unit vs. fleet averages — backs the
+ *  expandable SHAP bars ("wear score 7.9 vs fleet avg 4.1"). */
+export function useFeatureBaseline(id: number) {
+  return useQuery<FeatureBaseline>({
+    queryKey: ["/api/equipment/:id/feature-baseline", id],
+    queryFn: async () => {
+      const res = await fetch(`/api/equipment/${id}/feature-baseline`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch feature baseline");
+      return res.json();
+    },
+    enabled: !!id,
+  });
+}
+
 export function useCreateEquipment() {
   const queryClient = useQueryClient();
   const { toast } = useToast();

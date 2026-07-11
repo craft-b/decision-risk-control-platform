@@ -4,7 +4,8 @@
 // detail page (DESIGN_SPEC §5 items 2–3).
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { Loader2 } from "lucide-react";
+import { useState } from "react";
+import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
 import {
   LineChart,
   Line,
@@ -19,11 +20,51 @@ import { CHART } from "@/lib/chart-theme";
 import { humanizeDriver } from "@/lib/risk-format";
 import { useEquipmentProjection } from "@/hooks/use-predictive-maintenance";
 
+// Display formatting for raw feature values in the expanded bar panel.
+const FEATURE_UNITS: Record<string, string> = {
+  asset_age_years: "yrs",
+  total_hours_lifetime: "hrs",
+  hours_used_30d: "hrs",
+  hours_used_90d: "hrs",
+  rental_days_30d: "days",
+  rental_days_90d: "days",
+  avg_rental_duration: "days",
+  avg_downtime_per_event: "days",
+  days_since_last_maintenance: "days",
+  mean_time_between_failures: "days",
+  maintenance_events_90d: "events",
+  mechanical_wear_score: "/10",
+  abuse_score: "/10",
+  neglect_score: "/10",
+};
+const MONEY_FEATURES = new Set(["maintenance_cost_180d", "cost_per_event"]);
+
+function fmtFeatureValue(feature: string, v: number): string {
+  if (MONEY_FEATURES.has(feature)) return `$${Math.round(v).toLocaleString()}`;
+  const unit = FEATURE_UNITS[feature];
+  const num = Math.abs(v) >= 100 ? Math.round(v).toLocaleString() : v.toFixed(2).replace(/\.?0+$/, "");
+  return unit ? (unit.startsWith("/") ? `${num}${unit}` : `${num} ${unit}`) : num;
+}
+
+export interface FeatureBaselineData {
+  unit: Record<string, number>;
+  fleet: Record<string, number>;
+}
+
 // ─── SHAP attribution bars (DESIGN_SPEC §5 item 3) ───────────────────────────
 // One attribution source: per-prediction SHAP from the ML service. Values are
 // signed log-odds contributions — sign and rank are trustworthy, magnitudes are
 // not probabilities, so bars show each feature's SHARE of total |attribution|.
-export function ShapDriverBars({ attribution }: { attribution: Record<string, number> }) {
+// With `baseline`, each bar expands to the unit's raw feature value vs. the
+// fleet average (latest persisted snapshots).
+export function ShapDriverBars({
+  attribution,
+  baseline,
+}: {
+  attribution: Record<string, number>;
+  baseline?: FeatureBaselineData;
+}) {
+  const [expanded, setExpanded] = useState<string | null>(null);
   const entries = Object.entries(attribution)
     .filter(([, v]) => Number.isFinite(v) && v !== 0)
     .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
@@ -36,9 +77,21 @@ export function ShapDriverBars({ attribution }: { attribution: Record<string, nu
         const share = Math.round((Math.abs(val) / totalAbs) * 100);
         const width = Math.max(4, Math.round((Math.abs(val) / maxAbs) * 100));
         const pushesTowardFailure = val > 0;
-        return (
-          <div key={feat} className="flex items-center gap-2 text-sm">
-            <span className="w-[46%] min-w-0 truncate" title={humanizeDriver(feat)}>
+        // SHAP keys carry the pipeline's transform prefix; raw values are keyed
+        // by the underlying feature.
+        const rawKey = feat.replace(/^log_/, "");
+        const unitVal = baseline?.unit[rawKey];
+        const fleetVal = baseline?.fleet[rawKey];
+        const expandable = baseline !== undefined;
+        const isOpen = expanded === feat;
+        const row = (
+          <>
+            {expandable && (
+              isOpen
+                ? <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+                : <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground/60" />
+            )}
+            <span className="w-[46%] min-w-0 truncate text-left" title={humanizeDriver(feat)}>
               {humanizeDriver(feat)}
             </span>
             <span
@@ -55,6 +108,44 @@ export function ShapDriverBars({ attribution }: { attribution: Record<string, nu
                 style={{ width: `${width}%` }}
               />
             </div>
+          </>
+        );
+        return (
+          <div key={feat}>
+            {expandable ? (
+              <button
+                type="button"
+                onClick={() => setExpanded(isOpen ? null : feat)}
+                className="flex w-full items-center gap-2 text-sm rounded px-1 -mx-1 py-0.5 hover:bg-muted/60 transition-colors"
+              >
+                {row}
+              </button>
+            ) : (
+              <div className="flex items-center gap-2 text-sm">{row}</div>
+            )}
+            {isOpen && (
+              <div className="ml-5 mt-1 mb-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                {unitVal !== undefined ? (
+                  <span>
+                    This unit:{" "}
+                    <span className="font-mono font-medium text-foreground tabular-nums">
+                      {fmtFeatureValue(rawKey, unitVal)}
+                    </span>
+                    {fleetVal !== undefined && (
+                      <>
+                        {" "}· Fleet average:{" "}
+                        <span className="font-mono font-medium tabular-nums">
+                          {fmtFeatureValue(rawKey, fleetVal)}
+                        </span>
+                      </>
+                    )}
+                    <span className="ml-1 opacity-70">(latest snapshot)</span>
+                  </span>
+                ) : (
+                  <span className="italic">Raw value not available for this feature.</span>
+                )}
+              </div>
+            )}
           </div>
         );
       })}
