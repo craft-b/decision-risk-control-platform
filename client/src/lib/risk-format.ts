@@ -87,6 +87,30 @@ export function humanizeDriver(key: string): string {
   return base.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+/** Tolerant JSON-array parse for driver-name columns persisted as text. */
+export function parseJsonArray(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw as string[];
+  if (typeof raw !== "string") return [];
+  try {
+    const d = JSON.parse(raw || "[]");
+    return Array.isArray(d) ? d : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Tolerant JSON-object parse for SHAP-attribution columns persisted as text. */
+export function parseJsonObject(raw: unknown): Record<string, number> {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw as Record<string, number>;
+  if (typeof raw !== "string") return {};
+  try {
+    const d = JSON.parse(raw || "{}");
+    return d && typeof d === "object" && !Array.isArray(d) ? d : {};
+  } catch {
+    return {};
+  }
+}
+
 type DriverCarrier = { top_risk_drivers?: Record<string, number> | string[] } | undefined | null;
 
 /** The single most important driver for a prediction, as a plain phrase. */

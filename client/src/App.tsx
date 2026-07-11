@@ -9,6 +9,7 @@ import { useSystemStatus } from "@/hooks/use-system-status";
 
 import Login from "@/pages/login";
 import CommandCenter from "@/pages/command-center";
+import AssetDetail from "@/pages/asset-detail";
 import Dashboard from "@/pages/dashboard";
 import EquipmentList from "@/pages/equipment-list";
 import RentalsList from "@/pages/rentals-list";
@@ -63,6 +64,9 @@ function Router() {
       </Route>
       <Route path="/financial">
         <ProtectedRoute component={Dashboard} />
+      </Route>
+      <Route path="/assets/:id">
+        <ProtectedRoute component={AssetDetail} />
       </Route>
       <Route path="/equipment">
         <ProtectedRoute component={EquipmentList} />

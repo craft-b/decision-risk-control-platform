@@ -401,7 +401,7 @@ export default function CommandCenter() {
                   return (
                     <Link
                       key={r.id}
-                      href="/predictive-maintenance"
+                      href={`/assets/${r.id}`}
                       className={cn(
                         "flex items-center gap-4 px-3 rounded-md cursor-pointer transition-colors group border border-transparent",
                         density === "compact" ? "py-1" : "py-2.5",
