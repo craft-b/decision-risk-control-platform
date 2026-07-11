@@ -1608,6 +1608,54 @@ export async function registerRoutes(
     }
   });
 
+  // ── SENSOR TRENDS — daily aggregates for the asset detail page ────────────
+  // Anchored to the simulation cursor like every other time-aware read.
+  app.get("/api/equipment/:id/sensor-trends", requireAuth, async (req, res) => {
+    try {
+      const equipmentId = parseInt(req.params.id);
+      if (isNaN(equipmentId)) return res.status(400).json({ message: "Invalid equipment ID" });
+      const days = Math.min(Math.max(parseInt(String(req.query.days ?? "90")), 7), 365);
+
+      const cursor = await getSimulationDate();
+      const cursorStr = cursor.toISOString().split("T")[0];
+
+      const [rows] = await db.execute(sql`
+        SELECT
+          DATE(timestamp)                                   AS day,
+          ROUND(AVG(engine_temp), 1)                        AS engine_temp,
+          ROUND(AVG(oil_pressure), 1)                       AS oil_pressure,
+          ROUND(AVG(hydraulic_pressure), 1)                 AS hydraulic_pressure,
+          ROUND(AVG(SQRT(
+            COALESCE(vibration_x, 0) * COALESCE(vibration_x, 0) +
+            COALESCE(vibration_y, 0) * COALESCE(vibration_y, 0) +
+            COALESCE(vibration_z, 0) * COALESCE(vibration_z, 0)
+          )), 3)                                            AS vibration,
+          SUM(COALESCE(warning_count, 0))                   AS warnings
+        FROM sensor_data_logs
+        WHERE equipment_id = ${equipmentId}
+          AND timestamp >= DATE_SUB(${cursorStr}, INTERVAL ${days} DAY)
+          AND timestamp <= ${cursorStr}
+        GROUP BY DATE(timestamp)
+        ORDER BY day ASC
+      `) as any;
+
+      // MySQL returns DECIMAL/ROUND as strings — coerce so the client plots numbers.
+      const points = (rows ?? []).map((r: any) => ({
+        day: String(r.day instanceof Date ? r.day.toISOString().split("T")[0] : r.day),
+        engine_temp: r.engine_temp === null ? null : Number(r.engine_temp),
+        oil_pressure: r.oil_pressure === null ? null : Number(r.oil_pressure),
+        hydraulic_pressure: r.hydraulic_pressure === null ? null : Number(r.hydraulic_pressure),
+        vibration: r.vibration === null ? null : Number(r.vibration),
+        warnings: r.warnings === null ? 0 : Number(r.warnings),
+      }));
+
+      res.json({ equipmentId, days, asOf: cursorStr, points });
+    } catch (err: any) {
+      console.error("[SENSOR-TRENDS] Error:", err);
+      res.status(500).json({ message: err.message || "Sensor trends failed" });
+    }
+  });
+
   // ── FINANCIAL ─────────────────────────────────────────────────────────────
   app.get('/api/dashboard/revenue-summary', requireAuth, async (req, res) => {
     try {

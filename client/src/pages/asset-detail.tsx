@@ -30,9 +30,18 @@ import {
   CalendarRange,
   Truck,
 } from "lucide-react";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  Tooltip as RechartsTooltip,
+  ResponsiveContainer,
+} from "recharts";
 import { cn } from "@/lib/utils";
+import { CHART } from "@/lib/chart-theme";
 import { useAuth } from "@/hooks/use-auth";
-import { useEquipmentItem } from "@/hooks/use-equipment";
+import { useEquipmentItem, useSensorTrends, type SensorTrendPoint } from "@/hooks/use-equipment";
 import { useMaintenanceHistory } from "@/hooks/use-maintenance";
 import { useRentals } from "@/hooks/use-rentals";
 import { useJobSites } from "@/hooks/use-jobsites";
@@ -86,6 +95,50 @@ interface TimelineEntry {
 
 const fmtDate = (d: Date) => format(d, "MMM d, yyyy");
 
+// ─── Sensor trend small-multiples ─────────────────────────────────────────────
+// Neutral categorical strokes only — semantic risk color stays reserved for
+// risk surfaces (DESIGN_SPEC §5 design language).
+function SensorMini({
+  label,
+  unit,
+  data,
+  dataKey,
+  color,
+}: {
+  label: string;
+  unit: string;
+  data: SensorTrendPoint[];
+  dataKey: keyof SensorTrendPoint;
+  color: string;
+}) {
+  return (
+    <div>
+      <div className="flex items-baseline justify-between mb-1">
+        <span className="text-xs font-medium text-muted-foreground">{label}</span>
+        <span className="text-[10px] text-muted-foreground/60">{unit}</span>
+      </div>
+      <ResponsiveContainer width="100%" height={90}>
+        <LineChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: -14 }}>
+          <XAxis dataKey="day" hide />
+          <YAxis
+            domain={["auto", "auto"]}
+            tickLine={false}
+            axisLine={false}
+            tick={CHART.axis.tick}
+            width={44}
+          />
+          <RechartsTooltip
+            formatter={(value: number) => [`${value} ${unit}`, label]}
+            labelFormatter={(label_: string) => format(new Date(label_), "MMM d, yyyy")}
+            {...CHART.tooltip}
+          />
+          <Line type="monotone" dataKey={dataKey} stroke={color} strokeWidth={1.5} dot={false} connectNulls />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
 export default function AssetDetail() {
   const [, params] = useRoute("/assets/:id");
   const id = Number(params?.id ?? 0);
@@ -100,6 +153,7 @@ export default function AssetDetail() {
   const { data: maintenance } = useMaintenanceHistory(id);
   const { data: rentals } = useRentals();
   const { data: jobSites } = useJobSites();
+  const { data: sensors } = useSensorTrends(id);
 
   const pred: any = (predictions ?? []).find(
     (p: any) => (p.equipmentId ?? p.equipment_id) === id,
@@ -333,6 +387,31 @@ export default function AssetDetail() {
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Sensor trends — daily telemetry aggregates */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Sensor Trends</CardTitle>
+          <CardDescription>
+            Daily averages, last {sensors?.days ?? 90} days
+            {sensors?.asOf ? ` · as of ${format(new Date(sensors.asOf), "MMM d, yyyy")}` : ""}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {!sensors || sensors.points.length === 0 ? (
+            <div className="py-8 text-center text-muted-foreground">
+              No telemetry recorded for this unit in the selected window.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+              <SensorMini label="Engine temperature" unit="°F" data={sensors.points} dataKey="engine_temp" color={CHART.categorical[0]} />
+              <SensorMini label="Oil pressure" unit="psi" data={sensors.points} dataKey="oil_pressure" color={CHART.categorical[1]} />
+              <SensorMini label="Hydraulic pressure" unit="psi" data={sensors.points} dataKey="hydraulic_pressure" color={CHART.categorical[2]} />
+              <SensorMini label="Vibration (RMS)" unit="g" data={sensors.points} dataKey="vibration" color={CHART.categorical[3] ?? CHART.categorical[0]} />
             </div>
           )}
         </CardContent>

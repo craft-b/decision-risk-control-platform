@@ -38,6 +38,35 @@ export function useEquipmentItem(id: number) {
   });
 }
 
+export interface SensorTrendPoint {
+  day: string;
+  engine_temp: number | null;
+  oil_pressure: number | null;
+  hydraulic_pressure: number | null;
+  vibration: number | null;
+  warnings: number | null;
+}
+
+export interface SensorTrends {
+  equipmentId: number;
+  days: number;
+  asOf: string;
+  points: SensorTrendPoint[];
+}
+
+/** Daily sensor aggregates for the asset detail page, anchored to the sim cursor. */
+export function useSensorTrends(id: number, days = 90) {
+  return useQuery<SensorTrends>({
+    queryKey: ["/api/equipment/:id/sensor-trends", id, days],
+    queryFn: async () => {
+      const res = await fetch(`/api/equipment/${id}/sensor-trends?days=${days}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch sensor trends");
+      return res.json();
+    },
+    enabled: !!id,
+  });
+}
+
 export function useCreateEquipment() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
