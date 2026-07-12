@@ -41,7 +41,7 @@ const EVENT_SOURCE_OPTIONS = [
     value: "PREDICTIVE_INTERVENTION",
     label: "Predictive Intervention",
     description: "Triggered by model HIGH/MEDIUM risk flag",
-    color: "text-purple-700 bg-purple-50 border-purple-200",
+    color: "text-chart-3 bg-chart-3/10 border-chart-3/30",
   },
   {
     value: "REACTIVE_REPAIR",

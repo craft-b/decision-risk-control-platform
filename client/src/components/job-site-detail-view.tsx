@@ -180,7 +180,7 @@ export function VendorDetailView({ vendor }: { vendor: any }) {
         <CardContent>
           <div className="flex items-center justify-between">
             <span className="text-sm text-muted-foreground">Total Rentals</span>
-            <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-200">
+            <Badge variant="outline" className="bg-chart-3/10 text-chart-3 border-chart-3/30">
               {vendor._count?.rentals || 0} rentals
             </Badge>
           </div>

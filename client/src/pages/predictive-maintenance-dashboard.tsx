@@ -779,7 +779,7 @@ export default function PredictiveMaintenanceDashboard() {
             </div>
 
             <div className="flex items-start gap-4 p-4 border rounded-lg">
-              <Tag className="h-5 w-5 text-purple-600 mt-0.5" />
+              <Tag className="h-5 w-5 text-chart-3 mt-0.5" />
               <div className="flex-1">
                 <div className="font-medium">Label Historical Data</div>
                 <div className="text-sm text-muted-foreground">
@@ -793,7 +793,7 @@ export default function PredictiveMaintenanceDashboard() {
             </div>
 
             <div className="flex items-start gap-4 p-4 border rounded-lg">
-              <BrainCircuit className="h-5 w-5 text-indigo-600 mt-0.5" />
+              <BrainCircuit className="h-5 w-5 text-primary mt-0.5" />
               <div className="flex-1">
                 <div className="font-medium">Retrain Models</div>
                 <div className="text-sm text-muted-foreground mb-2">
@@ -801,7 +801,7 @@ export default function PredictiveMaintenanceDashboard() {
                 </div>
 
                 {trainStatus?.running && (
-                  <div className="mb-2 p-2 bg-indigo-50 border border-indigo-200 rounded text-xs font-mono text-indigo-800 max-h-32 overflow-y-auto space-y-0.5">
+                  <div className="mb-2 p-2 bg-primary/10 border border-primary/30 rounded text-xs font-mono text-primary max-h-32 overflow-y-auto space-y-0.5">
                     {trainStatus.log.slice(-12).map((line, i) => (
                       <div key={i}>{line}</div>
                     ))}
@@ -827,7 +827,7 @@ export default function PredictiveMaintenanceDashboard() {
                   <button
                     type="button"
                     onClick={() => setShowTrainLog(v => !v)}
-                    className="text-xs text-indigo-600 underline mb-2"
+                    className="text-xs text-primary underline mb-2"
                   >
                     <ScrollText className="h-3 w-3 inline mr-1" />
                     {showTrainLog ? "Hide" : "Show"} full log
@@ -841,7 +841,7 @@ export default function PredictiveMaintenanceDashboard() {
                         line.includes("SUCCESS") && "text-risk-low font-semibold",
                         (line.includes("FATAL") || line.includes("FAILED")) && "text-risk-high font-semibold",
                         line.includes("[CV]") && "text-primary",
-                        line.includes("[HOLDOUT]") && "text-purple-700",
+                        line.includes("[HOLDOUT]") && "text-chart-3",
                       )}>{line}</div>
                     ))}
                   </div>
@@ -851,7 +851,7 @@ export default function PredictiveMaintenanceDashboard() {
                 variant="outline"
                 onClick={() => { setShowTrainLog(true); trainModel.mutate(); }}
                 disabled={trainModel.isPending || trainStatus?.running}
-                className="border-indigo-300 text-indigo-700 hover:bg-indigo-50"
+                className="border-primary/40 text-primary hover:bg-primary/10"
               >
                 {trainModel.isPending || trainStatus?.running
                   ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Training...</>
@@ -1037,7 +1037,7 @@ export default function PredictiveMaintenanceDashboard() {
                       className={cn(
                         "w-full gap-2",
                         selectedRiskLevel === "HIGH" && "bg-destructive hover:bg-destructive/90 text-destructive-foreground",
-                        selectedRiskLevel === "MEDIUM" && "bg-risk-medium hover:bg-risk-medium/90 text-white",
+                        
                         selectedRiskLevel === "LOW" && "variant-outline",
                       )}
                       variant={selectedRiskLevel === "LOW" ? "outline" : "default"}

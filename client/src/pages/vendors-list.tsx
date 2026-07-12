@@ -158,7 +158,7 @@ export default function VendorsList() {
                     </div>
                   </TableCell>
                   <TableCell>
-                    <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-200">
+                    <Badge variant="outline" className="bg-chart-3/10 text-chart-3 border-chart-3/30">
                       {vendor._count?.rentals || 0} rentals
                     </Badge>
                   </TableCell>

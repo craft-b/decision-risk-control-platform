@@ -235,7 +235,7 @@ export default function SetupPage() {
         {/* Header */}
         <div className="text-center space-y-2">
           <div className="mx-auto mb-4 h-14 w-14 rounded-full bg-primary flex items-center justify-center shadow-lg">
-            <Truck className="h-7 w-7 text-white" />
+            <Truck className="h-7 w-7 text-primary-foreground" />
           </div>
           <h1 className="text-2xl font-bold text-foreground">Welcome to Enterprise Asset Intelligence</h1>
           <p className="text-muted-foreground text-sm max-w-md mx-auto">

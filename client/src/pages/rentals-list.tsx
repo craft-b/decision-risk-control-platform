@@ -218,7 +218,7 @@ export default function RentalsList() {
                   <TableCell>
                     <Badge variant="outline" className={cn(
                       rental.buyRent === 'BUY' ? "bg-primary/10 text-primary border-primary/30" :
-                      "bg-purple-50 text-purple-700 border-purple-200"
+                      "bg-chart-3/10 text-chart-3 border-chart-3/30"
                     )}>
                       {rental.buyRent}
                     </Badge>
@@ -270,7 +270,7 @@ export default function RentalsList() {
                               <Button
                                 size="sm"
                                 variant="outline"
-                                className="h-8 gap-1 hover:bg-purple-50 hover:text-purple-700 hover:border-purple-200"
+                                className="h-8 gap-1 hover:bg-chart-3/10 hover:text-chart-3 hover:border-chart-3/30"
                                 onClick={(e) => { e.stopPropagation(); setSwappingRental(rental); }}
                               >
                                 <ArrowRightLeft className="h-4 w-4" />

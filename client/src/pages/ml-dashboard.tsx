@@ -567,7 +567,7 @@ function ChampionChallengerCard() {
             <button
               onClick={() => promote.mutate()}
               disabled={promote.isPending}
-              className="inline-flex items-center gap-2 rounded-lg bg-purple-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-purple-700 disabled:opacity-50 transition-colors"
+              className="inline-flex items-center gap-2 rounded-lg bg-chart-3 px-3 py-1.5 text-sm font-medium text-white hover:bg-chart-3/90 disabled:opacity-50 transition-colors"
             >
               {promote.isPending ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -592,7 +592,7 @@ function ChampionChallengerCard() {
             <Swords className="h-4 w-4 text-muted-foreground" />
             <span className="font-semibold text-sm">{compare.challenger?.version ?? "—"}</span>
             {compare.challenger ? (
-              <Badge className="bg-purple-100 text-purple-800 border-purple-300 text-xs">challenger</Badge>
+              <Badge className="bg-chart-3/15 text-chart-3 border-chart-3/40 text-xs">challenger</Badge>
             ) : (
               <span className="text-xs text-muted-foreground italic">no challenger</span>
             )}

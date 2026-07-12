@@ -42,7 +42,7 @@ export function RentalDetailView({ rental }: RentalDetailViewProps) {
           <Badge variant="outline" className={cn(
             "text-base px-3 py-1",
             rental.buyRent === 'BUY' ? "bg-primary/10 text-primary border-primary/30" :
-            "bg-purple-50 text-purple-700 border-purple-200"
+            "bg-chart-3/10 text-chart-3 border-chart-3/30"
           )}>
             {rental.buyRent}
           </Badge>
@@ -292,7 +292,7 @@ export function RentalDetailView({ rental }: RentalDetailViewProps) {
                     <div className="text-sm font-medium">
                       <span className="text-muted-foreground">{swap.originalEquipment?.name ?? `#${swap.originalEquipmentId}`}</span>
                       <span className="mx-2 text-muted-foreground">→</span>
-                      <span className="text-purple-700">{swap.replacementEquipment?.name ?? `#${swap.replacementEquipmentId}`}</span>
+                      <span className="text-chart-3">{swap.replacementEquipment?.name ?? `#${swap.replacementEquipmentId}`}</span>
                     </div>
                     <div className="text-xs text-muted-foreground">
                       {swap.swapDate ? format(new Date(swap.swapDate), 'MMM d, yyyy') : ''}
