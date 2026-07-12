@@ -76,7 +76,7 @@ export function JobSiteDetailView({ jobSite }: JobSiteDetailViewProps) {
         <CardContent>
           <div className="flex items-center justify-between">
             <span className="text-sm text-muted-foreground">Total Rentals</span>
-            <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
+            <Badge variant="outline" className="bg-primary/10 text-primary border-primary/30">
               {jobSite._count?.rentals || 0} rentals
             </Badge>
           </div>

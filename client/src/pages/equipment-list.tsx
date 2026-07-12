@@ -43,7 +43,7 @@ import { cn } from "@/lib/utils";
 // Risk Badge Component — receives pre-fetched prediction row, no per-unit fetch
 function RiskBadge({ prediction }: { prediction: any }) {
   if (!prediction) {
-    return <Badge variant="outline" className="bg-slate-100 text-slate-400">No Data</Badge>;
+    return <Badge variant="outline" className="bg-muted text-muted-foreground/70">No Data</Badge>;
   }
 
   const level = prediction.risk_level_30d as "LOW" | "MEDIUM" | "HIGH";
@@ -55,9 +55,9 @@ function RiskBadge({ prediction }: { prediction: any }) {
         variant="outline"
         className={cn(
           "font-medium",
-          level === 'HIGH' && "bg-red-100 text-red-800 border-red-300",
-          level === 'MEDIUM' && "bg-orange-100 text-orange-800 border-orange-300",
-          level === 'LOW' && "bg-green-100 text-green-800 border-green-300"
+          level === 'HIGH' && "bg-risk-high-surface text-risk-high border-risk-high",
+          level === 'MEDIUM' && "bg-risk-medium-surface text-risk-medium border-risk-medium",
+          level === 'LOW' && "bg-risk-low-surface text-risk-low border-risk-low"
         )}
       >
         {level === 'HIGH' && <AlertTriangle className="h-3 w-3 mr-1" />}
@@ -180,7 +180,7 @@ export default function EquipmentList() {
       {/* Equipment Table */}
       <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
         <Table>
-          <TableHeader className="bg-slate-50">
+          <TableHeader className="bg-muted/50">
             <TableRow>
               <SortableTableHead sortKey="name" sort={sort} onSort={onSort}>Equipment</SortableTableHead>
               <SortableTableHead sortKey="category" sort={sort} onSort={onSort}>Category</SortableTableHead>
@@ -208,7 +208,7 @@ export default function EquipmentList() {
               pagedEquipment.map((equip) => (
                 <TableRow 
                   key={equip.id}
-                  className="cursor-pointer hover:bg-slate-50"
+                  className="cursor-pointer hover:bg-muted/50"
                   onClick={() => setViewingEquipment(equip)}
                 >
                   <TableCell>
@@ -222,9 +222,9 @@ export default function EquipmentList() {
                     <Badge
                       variant="outline"
                       className={cn(
-                        equip.status === 'AVAILABLE' && "bg-green-50 text-green-700 border-green-200",
-                        equip.status === 'RENTED' && "bg-blue-50 text-blue-700 border-blue-200",
-                        equip.status === 'MAINTENANCE' && "bg-orange-50 text-orange-700 border-orange-200"
+                        equip.status === 'AVAILABLE' && "bg-risk-low-surface text-risk-low border-risk-low",
+                        equip.status === 'RENTED' && "bg-primary/10 text-primary border-primary/30",
+                        equip.status === 'MAINTENANCE' && "bg-risk-medium-surface text-risk-medium border-risk-medium"
                       )}
                     >
                       {equip.status}
@@ -239,17 +239,17 @@ export default function EquipmentList() {
                       if (!due) return <span className="text-xs text-muted-foreground">—</span>;
                       const days = Number(due.daysUntilDue);
                       if (days < 0) return (
-                        <Badge variant="outline" className="bg-red-100 text-red-800 border-red-300 text-xs">
+                        <Badge variant="outline" className="bg-risk-high-surface text-risk-high border-risk-high text-xs">
                           Overdue {Math.abs(days)}d
                         </Badge>
                       );
                       if (days === 0) return (
-                        <Badge variant="outline" className="bg-red-100 text-red-800 border-red-300 text-xs">
+                        <Badge variant="outline" className="bg-risk-high-surface text-risk-high border-risk-high text-xs">
                           Due Today
                         </Badge>
                       );
                       return (
-                        <Badge variant="outline" className="bg-orange-100 text-orange-800 border-orange-300 text-xs">
+                        <Badge variant="outline" className="bg-risk-medium-surface text-risk-medium border-risk-medium text-xs">
                           Due in {days}d
                         </Badge>
                       );
@@ -262,7 +262,7 @@ export default function EquipmentList() {
                         <Button
                           size="sm"
                           variant="ghost"
-                          className="h-8 w-8 p-0 hover:bg-blue-50 hover:text-blue-700"
+                          className="h-8 w-8 p-0 hover:bg-primary/10 hover:text-primary"
                           title="Edit"
                           onClick={() => setEditingEquipment(equip)}
                         >
@@ -271,7 +271,7 @@ export default function EquipmentList() {
                         <Button
                           size="sm"
                           variant="ghost"
-                          className="h-8 w-8 p-0 hover:bg-red-50 hover:text-red-700"
+                          className="h-8 w-8 p-0 hover:bg-risk-high-surface hover:text-risk-high"
                           title="Delete"
                           onClick={() => setDeletingEquipment(equip)}
                         >

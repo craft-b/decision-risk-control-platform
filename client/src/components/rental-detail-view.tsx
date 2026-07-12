@@ -33,15 +33,15 @@ export function RentalDetailView({ rental }: RentalDetailViewProps) {
         <div className="flex items-center gap-3">
           <Badge variant="outline" className={cn(
             "text-base px-3 py-1",
-            rental.status === 'ACTIVE' ? "bg-orange-50 text-orange-700 border-orange-200" :
-            rental.status === 'COMPLETED' ? "bg-green-50 text-green-700 border-green-200" :
-            "bg-slate-100 text-slate-600"
+            rental.status === 'ACTIVE' ? "bg-risk-medium-surface text-risk-medium border-risk-medium" :
+            rental.status === 'COMPLETED' ? "bg-risk-low-surface text-risk-low border-risk-low" :
+            "bg-muted text-muted-foreground"
           )}>
             {rental.status}
           </Badge>
           <Badge variant="outline" className={cn(
             "text-base px-3 py-1",
-            rental.buyRent === 'BUY' ? "bg-blue-50 text-blue-700 border-blue-200" :
+            rental.buyRent === 'BUY' ? "bg-primary/10 text-primary border-primary/30" :
             "bg-purple-50 text-purple-700 border-purple-200"
           )}>
             {rental.buyRent}
@@ -76,7 +76,7 @@ export function RentalDetailView({ rental }: RentalDetailViewProps) {
             </div>
             <div>
               <div className="text-muted-foreground">Daily Rate</div>
-              <div className="font-semibold text-green-600">${rental.equipment?.dailyRate}/day</div>
+              <div className="font-semibold text-risk-low">${rental.equipment?.dailyRate}/day</div>
             </div>
           </div>
         </CardContent>
@@ -178,7 +178,7 @@ export function RentalDetailView({ rental }: RentalDetailViewProps) {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
               <div className="text-sm text-muted-foreground mb-1">Received</div>
-              <div className="text-lg font-semibold text-green-600">
+              <div className="text-lg font-semibold text-risk-low">
                 {rental.receiveDate ? format(new Date(rental.receiveDate), 'MMM d, yyyy') : 'N/A'}
               </div>
               {rental.receiveHours && (
@@ -211,7 +211,7 @@ export function RentalDetailView({ rental }: RentalDetailViewProps) {
                   )}
                 </>
               ) : (
-                <div className="text-lg font-semibold text-orange-600">Ongoing</div>
+                <div className="text-lg font-semibold text-risk-medium">Ongoing</div>
               )}
             </div>
           </div>
@@ -262,7 +262,7 @@ export function RentalDetailView({ rental }: RentalDetailViewProps) {
                       {format(new Date(invoice.periodFrom), 'MMM d')} - {format(new Date(invoice.periodTo), 'MMM d, yyyy')}
                     </div>
                   </div>
-                  <div className="text-lg font-semibold text-green-600">
+                  <div className="text-lg font-semibold text-risk-low">
                     ${Number(invoice.amount).toFixed(2)}
                   </div>
                 </div>
@@ -290,7 +290,7 @@ export function RentalDetailView({ rental }: RentalDetailViewProps) {
                 <div key={swap.id} className="p-3 border rounded-lg space-y-1">
                   <div className="flex items-center justify-between">
                     <div className="text-sm font-medium">
-                      <span className="text-slate-600">{swap.originalEquipment?.name ?? `#${swap.originalEquipmentId}`}</span>
+                      <span className="text-muted-foreground">{swap.originalEquipment?.name ?? `#${swap.originalEquipmentId}`}</span>
                       <span className="mx-2 text-muted-foreground">→</span>
                       <span className="text-purple-700">{swap.replacementEquipment?.name ?? `#${swap.replacementEquipmentId}`}</span>
                     </div>

@@ -129,7 +129,7 @@ function DriftMonitorCard() {
         )}
         {(error || (drift?.overall === "NO_DATA" && !isLoading)) && (
           <div className="space-y-2">
-            <Alert className="border-slate-200">
+            <Alert className="border-border">
               <AlertCircle className="h-4 w-4" />
               <AlertDescription className="text-sm">
                 No drift data yet. {isAdmin ? "Click \"Reset Baseline\" to compute a reference distribution from current training data." : "A baseline has not been computed yet."}
@@ -235,7 +235,7 @@ function PredictionDriftCard() {
           </div>
         )}
         {!isLoading && overall === "NO_DATA" && (
-          <Alert className="border-slate-200">
+          <Alert className="border-border">
             <AlertCircle className="h-4 w-4" />
             <AlertDescription className="text-sm">
               No prediction drift data yet — run a batch prediction to populate.
@@ -328,7 +328,7 @@ function BiasDriftCard() {
           </div>
         )}
         {!isLoading && overall === "NO_DATA" && (
-          <Alert className="border-slate-200">
+          <Alert className="border-border">
             <AlertCircle className="h-4 w-4" />
             <AlertDescription className="text-sm">
               No bias data yet — run a batch prediction to populate.
@@ -356,7 +356,7 @@ function BiasDriftCard() {
                   <div
                     key={c.category}
                     className={`flex items-center justify-between rounded-md px-3 py-2 text-sm ${
-                      isAlert ? "bg-red-50 border border-red-200" : "bg-slate-50"
+                      isAlert ? "bg-risk-high-surface border border-risk-high" : "bg-muted/50"
                     }`}
                   >
                     <div className="flex items-center gap-2">
@@ -394,7 +394,7 @@ function BiasDriftCard() {
 
 function dqStatusIcon(status: DQCheck["status"]) {
   if (status === "PASS") return <CheckCircle2 className="h-4 w-4 text-risk-low shrink-0 mt-0.5" />;
-  if (status === "WARN") return <AlertCircle  className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />;
+  if (status === "WARN") return <AlertCircle  className="h-4 w-4 text-risk-medium shrink-0 mt-0.5" />;
   return <XCircle className="h-4 w-4 text-risk-high shrink-0 mt-0.5" />;
 }
 
@@ -402,23 +402,23 @@ function DataQualityCard() {
   const { data: report, isLoading, error, refetch, isFetching } = useDataQualityReport();
 
   const overallColor =
-    !report            ? "border-slate-200" :
-    report.overall === "PASS" ? "border-green-200 bg-green-50/40" :
-    report.overall === "WARN" ? "border-amber-200 bg-amber-50/40" :
-                                "border-red-200 bg-red-50/40";
+    !report            ? "border-border" :
+    report.overall === "PASS" ? "border-risk-low bg-risk-low-surface/40" :
+    report.overall === "WARN" ? "border-risk-medium bg-risk-medium-surface/40" :
+                                "border-risk-high bg-risk-high-surface/40";
 
   const overallBadge =
     !report            ? null :
-    report.overall === "PASS" ? "bg-green-100 text-green-800 border-green-300" :
-    report.overall === "WARN" ? "bg-amber-100 text-amber-800 border-amber-300" :
-                                "bg-red-100 text-red-800 border-red-300";
+    report.overall === "PASS" ? "bg-risk-low-surface text-risk-low border-risk-low" :
+    report.overall === "WARN" ? "bg-risk-medium-surface text-risk-medium border-risk-medium" :
+                                "bg-risk-high-surface text-risk-high border-risk-high";
 
   return (
     <Card className={overallColor}>
       <CardHeader>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <ShieldCheck className="h-5 w-5 text-slate-600" />
+            <ShieldCheck className="h-5 w-5 text-muted-foreground" />
             <CardTitle>Training Data Quality</CardTitle>
             {report && (
               <Badge className={`text-xs border ${overallBadge}`}>{report.overall}</Badge>
@@ -464,7 +464,7 @@ function DataQualityCard() {
                   <span className="font-mono text-xs text-muted-foreground mr-2">{c.check}</span>
                   <span className={
                     c.status === "FAIL" ? "text-risk-high" :
-                    c.status === "WARN" ? "text-amber-700" : "text-slate-700"
+                    c.status === "WARN" ? "text-risk-medium" : "text-foreground"
                   }>{c.message}</span>
                 </div>
               </div>
@@ -559,7 +559,7 @@ function ChampionChallengerCard() {
             </CardTitle>
             <CardDescription className="mt-1">
               Challenger runs in{" "}
-              <span className="font-medium text-amber-600">shadow mode</span>{" "}
+              <span className="font-medium text-risk-medium">shadow mode</span>{" "}
               — scores every batch but predictions are not persisted until promoted.
             </CardDescription>
           </div>
@@ -586,7 +586,7 @@ function ChampionChallengerCard() {
           <div className="flex items-center gap-2 justify-center">
             <Trophy className="h-4 w-4 text-risk-medium" />
             <span className="font-semibold text-sm">{compare.champion.version ?? "—"}</span>
-            <Badge className="bg-yellow-100 text-yellow-800 border-yellow-300 text-xs">champion</Badge>
+            <Badge className="bg-risk-medium-surface text-risk-medium border-risk-medium text-xs">champion</Badge>
           </div>
           <div className="flex items-center gap-2 justify-center">
             <Swords className="h-4 w-4 text-muted-foreground" />
@@ -682,7 +682,7 @@ export default function MLPerformanceDashboard() {
       <div className="space-y-8 animate-in fade-in duration-500 max-w-2xl mx-auto py-16 px-4">
         <div className="text-center space-y-3">
           <div className="flex justify-center">
-            <div className="rounded-full bg-blue-100 p-4">
+            <div className="rounded-full bg-primary/10 p-4">
               <Brain className="h-10 w-10 text-primary" />
             </div>
           </div>
@@ -697,7 +697,7 @@ export default function MLPerformanceDashboard() {
             <div
               key={i}
               className={`flex items-start gap-4 rounded-lg border p-4 ${
-                step.done ? "bg-green-50 border-green-200" : "bg-card"
+                step.done ? "bg-risk-low-surface border-risk-low" : "bg-card"
               }`}
             >
               <div className="mt-0.5 shrink-0">
@@ -710,7 +710,7 @@ export default function MLPerformanceDashboard() {
                 )}
               </div>
               <div className="flex-1 min-w-0">
-                <p className={`font-medium ${step.done ? "text-green-800" : ""}`}>{step.label}</p>
+                <p className={`font-medium ${step.done ? "text-risk-low" : ""}`}>{step.label}</p>
                 <p className="text-sm text-muted-foreground mt-0.5">{step.detail}</p>
               </div>
               {!step.done && step.href && (
@@ -869,7 +869,7 @@ export default function MLPerformanceDashboard() {
         <CardContent>
           <div className="overflow-x-auto rounded-lg border">
             <table className="w-full text-sm">
-              <thead className="bg-slate-50 text-xs text-muted-foreground">
+              <thead className="bg-muted/50 text-xs text-muted-foreground">
                 <tr>
                   <th className="p-3 text-left font-medium">Horizon</th>
                   <th className="p-3 text-right font-medium">ROC-AUC</th>
@@ -926,7 +926,7 @@ export default function MLPerformanceDashboard() {
         <CardContent>
           <div className="overflow-x-auto rounded-lg border">
             <table className="w-full text-sm">
-              <thead className="bg-slate-50 text-xs text-muted-foreground">
+              <thead className="bg-muted/50 text-xs text-muted-foreground">
                 <tr>
                   <th className="p-3 text-left font-medium">Horizon</th>
                   <th className="p-3 text-left font-medium">Split</th>
@@ -1085,7 +1085,7 @@ export default function MLPerformanceDashboard() {
             <div className="space-y-4">
               {horizonRows.map((r) => (
                 <div key={r.key} className="rounded-lg border overflow-hidden">
-                  <div className="bg-slate-50 px-3 py-1.5 text-xs font-medium text-muted-foreground">
+                  <div className="bg-muted/50 px-3 py-1.5 text-xs font-medium text-muted-foreground">
                     {r.label} horizon · {r.samplesTest?.toLocaleString() ?? "?"} holdout samples
                   </div>
                   <table className="w-full">
@@ -1099,13 +1099,13 @@ export default function MLPerformanceDashboard() {
                     <tbody className="divide-y text-sm">
                       <tr>
                         <td className="p-2 font-medium text-risk-high">Failure</td>
-                        <td className="p-2 text-center font-bold bg-green-50">{r.confusion.tp.toLocaleString()}</td>
+                        <td className="p-2 text-center font-bold bg-risk-low-surface">{r.confusion.tp.toLocaleString()}</td>
                         <td className="p-2 text-center font-bold text-risk-high">{r.confusion.fn.toLocaleString()}</td>
                       </tr>
                       <tr>
                         <td className="p-2 font-medium text-risk-low">No failure</td>
                         <td className="p-2 text-center font-bold">{r.confusion.fp.toLocaleString()}</td>
-                        <td className="p-2 text-center font-bold bg-green-50">{r.confusion.tn.toLocaleString()}</td>
+                        <td className="p-2 text-center font-bold bg-risk-low-surface">{r.confusion.tn.toLocaleString()}</td>
                       </tr>
                     </tbody>
                   </table>
@@ -1173,7 +1173,7 @@ export default function MLPerformanceDashboard() {
             <div className="space-y-3">
               <div className="flex justify-between items-center pb-3 border-b">
                 <span className="text-sm text-muted-foreground">Model Version</span>
-                <Badge variant="outline" className="bg-blue-50 text-blue-700">
+                <Badge variant="outline" className="bg-primary/10 text-primary">
                   {modelMetrics.version}
                 </Badge>
               </div>
@@ -1195,7 +1195,7 @@ export default function MLPerformanceDashboard() {
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-sm text-muted-foreground">Data Source</span>
-                <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-800">
+                <Badge variant="outline" className="border-risk-medium bg-risk-medium-surface text-risk-medium">
                   {modelMetrics.dataSource === "simulated" ? "Simulated (fleet simulator)" : modelMetrics.dataSource}
                 </Badge>
               </div>
@@ -1235,7 +1235,7 @@ export default function MLPerformanceDashboard() {
                     <span className="text-sm font-mono font-medium">{hyperparameters.classWeight ?? "—"}</span>
                   </div>
                 </div>
-                <div className="mt-4 p-3 bg-slate-50 rounded-lg text-xs text-muted-foreground">
+                <div className="mt-4 p-3 bg-muted/50 rounded-lg text-xs text-muted-foreground">
                   <strong>Note:</strong> Class weights are balanced to handle imbalanced training data and
                   prevent bias toward majority classes.
                 </div>
@@ -1247,7 +1247,7 @@ export default function MLPerformanceDashboard() {
 
       {/* Drift Monitoring — three layers */}
       <div className="space-y-4">
-        <h2 className="text-lg font-semibold text-slate-800">Drift Monitoring</h2>
+        <h2 className="text-lg font-semibold text-foreground">Drift Monitoring</h2>
         <DriftMonitorCard />
         <PredictionDriftCard />
         <BiasDriftCard />
@@ -1255,17 +1255,17 @@ export default function MLPerformanceDashboard() {
 
       {/* Model Governance */}
       <div className="space-y-4">
-        <h2 className="text-lg font-semibold text-slate-800">Model Governance</h2>
+        <h2 className="text-lg font-semibold text-foreground">Model Governance</h2>
         <DataQualityCard />
         <ChampionChallengerCard />
       </div>
 
       {/* Key Insights — derived from real per-horizon holdout metrics only */}
-      <Card className="border-blue-200 bg-blue-50">
+      <Card className="border-primary/30 bg-primary/10">
         <CardHeader>
-          <CardTitle className="text-blue-900">Key Model Insights</CardTitle>
+          <CardTitle className="text-primary">Key Model Insights</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-3 text-sm text-blue-900">
+        <CardContent className="space-y-3 text-sm text-primary">
           {/* Failure recall per horizon */}
           {horizonRows.map((r) => {
             const recall = r.recallFailure;
@@ -1274,7 +1274,7 @@ export default function MLPerformanceDashboard() {
               <div key={r.key} className="flex items-start gap-2">
                 {ok
                   ? <CheckCircle2 className="h-5 w-5 text-primary mt-0.5 flex-shrink-0" />
-                  : <AlertCircle className="h-5 w-5 text-orange-600 mt-0.5 flex-shrink-0" />
+                  : <AlertCircle className="h-5 w-5 text-risk-medium mt-0.5 flex-shrink-0" />
                 }
                 <div>
                   <strong>{r.label} failure recall ({pct(recall, 0)}):</strong>{" "}
@@ -1312,7 +1312,7 @@ export default function MLPerformanceDashboard() {
           {/* Provenance */}
           {modelMetrics.dataSource === "simulated" && (
             <div className="flex items-start gap-2">
-              <AlertCircle className="h-5 w-5 text-amber-600 mt-0.5 flex-shrink-0" />
+              <AlertCircle className="h-5 w-5 text-risk-medium mt-0.5 flex-shrink-0" />
               <div>
                 <strong>Data provenance:</strong> all training labels come from the fleet simulator.
                 These metrics validate the pipeline end-to-end; they are not evidence of field

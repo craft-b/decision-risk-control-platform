@@ -35,7 +35,7 @@ const EVENT_SOURCE_OPTIONS = [
     value: "SCHEDULED_PM",
     label: "Scheduled PM",
     description: "Vendor interval or calendar-based service",
-    color: "text-blue-700 bg-blue-50 border-blue-200",
+    color: "text-primary bg-primary/10 border-primary/30",
   },
   {
     value: "PREDICTIVE_INTERVENTION",
@@ -47,13 +47,13 @@ const EVENT_SOURCE_OPTIONS = [
     value: "REACTIVE_REPAIR",
     label: "Reactive Repair",
     description: "Breakdown response — unit failed in field",
-    color: "text-red-700 bg-red-50 border-red-200",
+    color: "text-risk-high bg-risk-high-surface border-risk-high",
   },
   {
     value: "PRE_DISPATCH_INSPECTION",
     label: "Pre-Dispatch Inspection",
     description: "Triggered by rental dispatch risk guard",
-    color: "text-orange-700 bg-orange-50 border-orange-200",
+    color: "text-risk-medium bg-risk-medium-surface border-risk-medium",
   },
 ] as const;
 

@@ -182,8 +182,8 @@ export function EquipmentForm({ initialData, onSuccess }: EquipmentFormProps) {
         </div>
 
         {/* ── Asset Age & Hours (ML inputs) ── */}
-        <div className="border rounded-lg p-4 space-y-4 bg-slate-50">
-          <p className="text-sm font-medium text-slate-700">Asset History — used for ML risk scoring</p>
+        <div className="border rounded-lg p-4 space-y-4 bg-muted/50">
+          <p className="text-sm font-medium text-foreground">Asset History — used for ML risk scoring</p>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <FormField
@@ -337,7 +337,7 @@ export function EquipmentForm({ initialData, onSuccess }: EquipmentFormProps) {
               </FormControl>
               <FormDescription>
                 {isEditing && field.value === "RENTED" && (
-                  <span className="text-amber-600">⚠️ Changing status may affect active rentals</span>
+                  <span className="text-risk-medium">⚠️ Changing status may affect active rentals</span>
                 )}
               </FormDescription>
               <FormMessage />

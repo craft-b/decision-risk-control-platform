@@ -92,7 +92,7 @@ export default function VendorsList() {
 
       <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
         <Table>
-          <TableHeader className="bg-slate-50">
+          <TableHeader className="bg-muted/50">
             <TableRow>
               <SortableTableHead sortKey="vendorId" sort={sort} onSort={onSort}>Vendor ID</SortableTableHead>
               <SortableTableHead sortKey="name" sort={sort} onSort={onSort}>Company Name</SortableTableHead>
@@ -119,14 +119,14 @@ export default function VendorsList() {
               pagedVendors.map((vendor) => (
                 <TableRow key={vendor.id}>
                   <TableCell>
-                    <div className="font-mono text-sm font-medium text-slate-900">
+                    <div className="font-mono text-sm font-medium text-foreground">
                       {vendor.vendorId}
                     </div>
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-2">
                       <Building2 className="h-4 w-4 text-muted-foreground" />
-                      <div className="font-medium text-slate-900">{vendor.name}</div>
+                      <div className="font-medium text-foreground">{vendor.name}</div>
                     </div>
                   </TableCell>
                   <TableCell>
@@ -168,7 +168,7 @@ export default function VendorsList() {
                         <Button
                           size="sm"
                           variant="ghost"
-                          className="h-8 w-8 p-0 hover:bg-blue-50 hover:text-blue-700"
+                          className="h-8 w-8 p-0 hover:bg-primary/10 hover:text-primary"
                           title="Edit"
                           onClick={() => handleEdit(vendor)}
                         >
@@ -177,7 +177,7 @@ export default function VendorsList() {
                         <Button
                           size="sm"
                           variant="ghost"
-                          className="h-8 w-8 p-0 hover:bg-red-50 hover:text-red-700"
+                          className="h-8 w-8 p-0 hover:bg-risk-high-surface hover:text-risk-high"
                           title="Delete"
                           onClick={() => setDeleteId(vendor.id)}
                         >

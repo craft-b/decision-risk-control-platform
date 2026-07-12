@@ -171,9 +171,9 @@ function RiskCard({ equipmentId, prediction }: { equipmentId: number; prediction
                 <Badge
                   className={cn(
                     "text-base px-4 py-2",
-                    riskBand === 'HIGH' && "bg-red-100 text-red-800 border-red-300",
-                    riskBand === 'MEDIUM' && "bg-orange-100 text-orange-800 border-orange-300",
-                    riskBand === 'LOW' && "bg-green-100 text-green-800 border-green-300"
+                    riskBand === 'HIGH' && "bg-risk-high-surface text-risk-high border-risk-high",
+                    riskBand === 'MEDIUM' && "bg-risk-medium-surface text-risk-medium border-risk-medium",
+                    riskBand === 'LOW' && "bg-risk-low-surface text-risk-low border-risk-low"
                   )}
                 >
                   {riskBand} RISK
@@ -182,16 +182,16 @@ function RiskCard({ equipmentId, prediction }: { equipmentId: number; prediction
 
               {prediction.recommendation && (
                 <Alert className={cn(
-                  riskBand === 'HIGH' && "border-red-200 bg-red-50",
-                  riskBand === 'MEDIUM' && "border-orange-200 bg-orange-50",
-                  riskBand === 'LOW' && "border-green-200 bg-green-50",
+                  riskBand === 'HIGH' && "border-risk-high bg-risk-high-surface",
+                  riskBand === 'MEDIUM' && "border-risk-medium bg-risk-medium-surface",
+                  riskBand === 'LOW' && "border-risk-low bg-risk-low-surface",
                 )}>
                   {riskBand === 'HIGH' ? (
-                    <AlertTriangle className="h-4 w-4 text-red-600" />
+                    <AlertTriangle className="h-4 w-4 text-risk-high" />
                   ) : riskBand === 'MEDIUM' ? (
-                    <AlertTriangle className="h-4 w-4 text-orange-600" />
+                    <AlertTriangle className="h-4 w-4 text-risk-medium" />
                   ) : (
-                    <CheckCircle className="h-4 w-4 text-green-600" />
+                    <CheckCircle className="h-4 w-4 text-risk-low" />
                   )}
                   <AlertDescription className="text-sm">
                     {prediction.recommendation}
@@ -229,14 +229,14 @@ function RiskCard({ equipmentId, prediction }: { equipmentId: number; prediction
           <div className="space-y-4 py-2">
             {prediction && (
               <Alert className={cn(
-                riskBand === 'HIGH' && "border-red-200 bg-red-50",
-                riskBand === 'MEDIUM' && "border-orange-200 bg-orange-50",
-                riskBand === 'LOW' && "border-green-200 bg-green-50",
+                riskBand === 'HIGH' && "border-risk-high bg-risk-high-surface",
+                riskBand === 'MEDIUM' && "border-risk-medium bg-risk-medium-surface",
+                riskBand === 'LOW' && "border-risk-low bg-risk-low-surface",
               )}>
                 <AlertTriangle className={cn(
                   "h-4 w-4",
-                  riskBand === 'HIGH' ? "text-red-600" :
-                  riskBand === 'MEDIUM' ? "text-orange-600" : "text-green-600"
+                  riskBand === 'HIGH' ? "text-risk-high" :
+                  riskBand === 'MEDIUM' ? "text-risk-medium" : "text-risk-low"
                 )} />
                 <AlertDescription className="text-sm">
                   <strong>{riskBand} RISK</strong> — {((failureProbability ?? 0) * 100).toFixed(1)}% failure probability.
@@ -344,9 +344,9 @@ export function EquipmentDetailView({ equipment, prediction }: EquipmentDetailVi
           variant="outline"
           className={cn(
             "text-base px-3 py-1",
-            equipment.status === 'AVAILABLE' && "bg-green-50 text-green-700 border-green-200",
-            equipment.status === 'RENTED' && "bg-blue-50 text-blue-700 border-blue-200",
-            equipment.status === 'MAINTENANCE' && "bg-orange-50 text-orange-700 border-orange-200"
+            equipment.status === 'AVAILABLE' && "bg-risk-low-surface text-risk-low border-risk-low",
+            equipment.status === 'RENTED' && "bg-primary/10 text-primary border-primary/30",
+            equipment.status === 'MAINTENANCE' && "bg-risk-medium-surface text-risk-medium border-risk-medium"
           )}
         >
           {equipment.status}
@@ -393,18 +393,18 @@ export function EquipmentDetailView({ equipment, prediction }: EquipmentDetailVi
           <div className="grid grid-cols-3 gap-4">
             <div className="text-center p-4 border rounded-lg">
               <div className="text-sm text-muted-foreground mb-1">Daily</div>
-              <div className="text-2xl font-bold text-green-600">${equipment.dailyRate}</div>
+              <div className="text-2xl font-bold text-risk-low">${equipment.dailyRate}</div>
             </div>
             {equipment.weeklyRate && (
               <div className="text-center p-4 border rounded-lg">
                 <div className="text-sm text-muted-foreground mb-1">Weekly</div>
-                <div className="text-2xl font-bold text-green-600">${equipment.weeklyRate}</div>
+                <div className="text-2xl font-bold text-risk-low">${equipment.weeklyRate}</div>
               </div>
             )}
             {equipment.monthlyRate && (
               <div className="text-center p-4 border rounded-lg">
                 <div className="text-sm text-muted-foreground mb-1">Monthly</div>
-                <div className="text-2xl font-bold text-green-600">${equipment.monthlyRate}</div>
+                <div className="text-2xl font-bold text-risk-low">${equipment.monthlyRate}</div>
               </div>
             )}
           </div>

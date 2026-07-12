@@ -90,7 +90,7 @@ export default function JobSitesList() {
 
       <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
         <Table>
-          <TableHeader className="bg-slate-50">
+          <TableHeader className="bg-muted/50">
             <TableRow>
               <SortableTableHead sortKey="jobId" sort={sort} onSort={onSort}>Job ID</SortableTableHead>
               <SortableTableHead sortKey="name" sort={sort} onSort={onSort}>Site Name</SortableTableHead>
@@ -117,12 +117,12 @@ export default function JobSitesList() {
               pagedSites.map((site) => (
                 <TableRow key={site.id}>
                   <TableCell>
-                    <div className="font-mono text-sm font-medium text-slate-900">
+                    <div className="font-mono text-sm font-medium text-foreground">
                       {site.jobId}
                     </div>
                   </TableCell>
                   <TableCell>
-                    <div className="font-medium text-slate-900">{site.name}</div>
+                    <div className="font-medium text-foreground">{site.name}</div>
                   </TableCell>
                   <TableCell>
                     {site.address ? (
@@ -154,7 +154,7 @@ export default function JobSitesList() {
                     </div>
                   </TableCell>
                   <TableCell>
-                    <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
+                    <Badge variant="outline" className="bg-primary/10 text-primary border-primary/30">
                       {site._count?.rentals || 0} rentals
                     </Badge>
                   </TableCell>
@@ -164,7 +164,7 @@ export default function JobSitesList() {
                         <Button
                           size="sm"
                           variant="ghost"
-                          className="h-8 w-8 p-0 hover:bg-blue-50 hover:text-blue-700"
+                          className="h-8 w-8 p-0 hover:bg-primary/10 hover:text-primary"
                           title="Edit"
                           onClick={() => handleEdit(site)}
                         >
@@ -173,7 +173,7 @@ export default function JobSitesList() {
                         <Button
                           size="sm"
                           variant="ghost"
-                          className="h-8 w-8 p-0 hover:bg-red-50 hover:text-red-700"
+                          className="h-8 w-8 p-0 hover:bg-risk-high-surface hover:text-risk-high"
                           title="Delete"
                           onClick={() => setDeleteId(site.id)}
                         >

@@ -91,11 +91,11 @@ export default function SetupPage() {
 
   if (mode === "active") {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+      <div className="min-h-screen bg-muted/50 flex items-center justify-center p-6">
         <Card className="w-full max-w-md text-center">
           <CardHeader>
-            <div className="mx-auto mb-3 h-12 w-12 rounded-full bg-green-100 flex items-center justify-center">
-              <CheckCircle2 className="h-7 w-7 text-green-600" />
+            <div className="mx-auto mb-3 h-12 w-12 rounded-full bg-risk-low-surface flex items-center justify-center">
+              <CheckCircle2 className="h-7 w-7 text-risk-low" />
             </div>
             <CardTitle>System is Active</CardTitle>
             <CardDescription>
@@ -113,14 +113,14 @@ export default function SetupPage() {
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="text-slate-400 hover:text-red-600 w-full"
+                    className="text-muted-foreground/70 hover:text-risk-high w-full"
                     onClick={() => setConfirmReset(true)}
                   >
                     Reset system &amp; re-run setup
                   </Button>
                 ) : (
                   <div className="space-y-2">
-                    <p className="text-xs text-red-600 font-medium">
+                    <p className="text-xs text-risk-high font-medium">
                       This will wipe all equipment, sensors, maintenance history, and predictions. Are you sure?
                     </p>
                     <div className="flex gap-2">
@@ -154,10 +154,10 @@ export default function SetupPage() {
 
   if (mode === "seeding") {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+      <div className="min-h-screen bg-muted/50 flex items-center justify-center p-6">
         <Card className="w-full max-w-lg">
           <CardHeader className="text-center">
-            <div className="mx-auto mb-3 h-12 w-12 rounded-full bg-blue-100 flex items-center justify-center">
+            <div className="mx-auto mb-3 h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center">
               <Database className="h-6 w-6 text-primary animate-pulse" />
             </div>
             <CardTitle>Loading Demo Data</CardTitle>
@@ -168,7 +168,7 @@ export default function SetupPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
-              <div className="flex justify-between text-sm text-slate-600">
+              <div className="flex justify-between text-sm text-muted-foreground">
                 <span>{seedJob?.stepLabel ?? "Initializing…"}</span>
                 <span>
                   {seedJob?.currentStep ?? 0} / {seedJob?.totalSteps ?? 10}
@@ -178,9 +178,9 @@ export default function SetupPage() {
             </div>
 
             {seedJob && seedJob.log.length > 0 && (
-              <div className="rounded-md bg-slate-900 p-3 max-h-48 overflow-y-auto space-y-0.5">
+              <div className="rounded-md bg-zinc-950 p-3 max-h-48 overflow-y-auto space-y-0.5">
                 {seedJob.log.map((line, i) => (
-                  <p key={i} className="text-xs font-mono text-slate-300">
+                  <p key={i} className="text-xs font-mono text-zinc-300">
                     {line}
                   </p>
                 ))}
@@ -195,14 +195,14 @@ export default function SetupPage() {
   if (mode === "done") {
     const success = seedJob?.state === "completed";
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+      <div className="min-h-screen bg-muted/50 flex items-center justify-center p-6">
         <Card className="w-full max-w-md text-center">
           <CardHeader>
             <div className="mx-auto mb-3 h-12 w-12 rounded-full flex items-center justify-center">
               {success ? (
-                <CheckCircle2 className="h-12 w-12 text-green-500" />
+                <CheckCircle2 className="h-12 w-12 text-risk-low" />
               ) : (
-                <XCircle className="h-12 w-12 text-red-500" />
+                <XCircle className="h-12 w-12 text-risk-high" />
               )}
             </div>
             <CardTitle>{success ? "Demo Data Loaded" : "Seeding Failed"}</CardTitle>
@@ -230,15 +230,15 @@ export default function SetupPage() {
 
   // mode === "choose"
   return (
-    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+    <div className="min-h-screen bg-muted/50 flex items-center justify-center p-6">
       <div className="w-full max-w-2xl space-y-6">
         {/* Header */}
         <div className="text-center space-y-2">
           <div className="mx-auto mb-4 h-14 w-14 rounded-full bg-primary flex items-center justify-center shadow-lg">
             <Truck className="h-7 w-7 text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-slate-900">Welcome to Enterprise Asset Intelligence</h1>
-          <p className="text-slate-500 text-sm max-w-md mx-auto">
+          <h1 className="text-2xl font-bold text-foreground">Welcome to Enterprise Asset Intelligence</h1>
+          <p className="text-muted-foreground text-sm max-w-md mx-auto">
             Your system has no data yet. Choose how you'd like to get started.
           </p>
         </div>
@@ -246,9 +246,9 @@ export default function SetupPage() {
         {/* Cards */}
         <div className="grid gap-4 sm:grid-cols-2">
           {/* Load Demo Data */}
-          <Card className="border-2 hover:border-blue-400 transition-colors cursor-pointer group">
+          <Card className="border-2 hover:border-primary/30 transition-colors cursor-pointer group">
             <CardHeader className="pb-3">
-              <div className="h-10 w-10 rounded-lg bg-blue-100 flex items-center justify-center mb-2 group-hover:bg-blue-200 transition-colors">
+              <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center mb-2 group-hover:bg-primary transition-colors">
                 <Database className="h-5 w-5 text-primary" />
               </div>
               <CardTitle className="text-base">Load Demo Data</CardTitle>
@@ -258,7 +258,7 @@ export default function SetupPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
-              <ul className="text-xs text-slate-600 space-y-1">
+              <ul className="text-xs text-muted-foreground space-y-1">
                 {[
                   "10 heavy equipment units (crane, excavator, grader…)",
                   "90 days of sensor readings per asset",
@@ -267,7 +267,7 @@ export default function SetupPage() {
                   "SHAP feature attribution + MLflow tracking",
                 ].map((item) => (
                   <li key={item} className="flex items-start gap-1.5">
-                    <CheckCircle2 className="h-3.5 w-3.5 text-green-500 mt-0.5 shrink-0" />
+                    <CheckCircle2 className="h-3.5 w-3.5 text-risk-low mt-0.5 shrink-0" />
                     {item}
                   </li>
                 ))}
@@ -285,16 +285,16 @@ export default function SetupPage() {
                 Load Demo Data
               </Button>
               {!isAdmin && (
-                <p className="text-xs text-amber-600 text-center">Admin role required</p>
+                <p className="text-xs text-risk-medium text-center">Admin role required</p>
               )}
             </CardContent>
           </Card>
 
           {/* Start Fresh */}
-          <Card className="border-2 hover:border-slate-300 transition-colors group">
+          <Card className="border-2 hover:border-border transition-colors group">
             <CardHeader className="pb-3">
-              <div className="h-10 w-10 rounded-lg bg-slate-100 flex items-center justify-center mb-2 group-hover:bg-slate-200 transition-colors">
-                <Wrench className="h-5 w-5 text-slate-600" />
+              <div className="h-10 w-10 rounded-lg bg-muted flex items-center justify-center mb-2 group-hover:bg-muted transition-colors">
+                <Wrench className="h-5 w-5 text-muted-foreground" />
               </div>
               <CardTitle className="text-base">Start Fresh</CardTitle>
               <CardDescription className="text-xs">
@@ -303,7 +303,7 @@ export default function SetupPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
-              <ul className="text-xs text-slate-600 space-y-1">
+              <ul className="text-xs text-muted-foreground space-y-1">
                 {[
                   "Add your own equipment inventory",
                   "Log actual maintenance events",
@@ -332,10 +332,10 @@ export default function SetupPage() {
         {/* Reset (admin only, shown if already visited) */}
         {isAdmin && (
           <div className="text-center">
-            <p className="text-xs text-slate-400">
+            <p className="text-xs text-muted-foreground/70">
               Already have data?{" "}
               <button
-                className="underline text-slate-500 hover:text-slate-700"
+                className="underline text-muted-foreground hover:text-foreground"
                 onClick={() => setLocation("/")}
               >
                 Go to Dashboard

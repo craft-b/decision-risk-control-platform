@@ -143,7 +143,7 @@ function RiskBadge({ level }: { level: RiskLevel }) {
 
 function HorizonSelector({ selected, onChange }: { selected: Horizon; onChange: (h: Horizon) => void }) {
   return (
-    <div className="flex gap-1 p-1 bg-slate-100 rounded-lg">
+    <div className="flex gap-1 p-1 bg-muted rounded-lg">
       {(["10d", "30d", "60d"] as Horizon[]).map((h) => (
         <button
           key={h}
@@ -151,8 +151,8 @@ function HorizonSelector({ selected, onChange }: { selected: Horizon; onChange: 
           className={cn(
             "px-4 py-1.5 rounded-md text-sm font-medium transition-all",
             selected === h
-              ? "bg-white shadow-sm text-slate-900"
-              : "text-slate-600 hover:text-slate-900"
+              ? "bg-background shadow-sm text-foreground"
+              : "text-muted-foreground hover:text-foreground"
           )}
         >
           {h}
@@ -169,7 +169,7 @@ function PipelineStatusCard() {
   if (!status) return null;
 
   return (
-    <Card className="border-blue-200">
+    <Card className="border-primary/30">
       <CardHeader>
         <CardTitle>Pipeline Status</CardTitle>
         <CardDescription>ML pipeline data readiness</CardDescription>
@@ -193,9 +193,9 @@ function PipelineStatusCard() {
         </div>
 
         {status.readyForTraining ? (
-          <Alert className="border-green-200 bg-green-50">
-            <CheckCircle className="h-4 w-4 text-green-600" />
-            <AlertDescription className="text-green-800">
+          <Alert className="border-risk-low bg-risk-low-surface">
+            <CheckCircle className="h-4 w-4 text-risk-low" />
+            <AlertDescription className="text-risk-low">
               <strong>Ready for ML training!</strong> {status.snapshots.labeled} labeled samples across all horizons.
             </AlertDescription>
           </Alert>
@@ -237,7 +237,7 @@ function CostCallout({
 
   if (result.optimalDay === null && !result.alreadyHighRisk) {
     return (
-      <div className="flex items-center gap-2 text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+      <div className="flex items-center gap-2 text-sm text-risk-low bg-risk-low-surface border border-risk-low rounded-lg px-3 py-2">
         <CheckCircle className="h-4 w-4 flex-shrink-0" />
         <span>
           Expected failure cost stays below PM cost for 60 days.{" "}
@@ -249,7 +249,7 @@ function CostCallout({
 
   if (result.alreadyHighRisk && result.optimalDay === 0) {
     return (
-      <div className="flex items-center gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+      <div className="flex items-center gap-2 text-sm text-risk-high bg-risk-high-surface border border-risk-high rounded-lg px-3 py-2">
         <AlertTriangle className="h-4 w-4 flex-shrink-0" />
         <span>
           Expected failure cost{" "}
@@ -264,7 +264,7 @@ function CostCallout({
   }
 
   return (
-    <div className="flex items-center gap-2 text-sm text-orange-700 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2">
+    <div className="flex items-center gap-2 text-sm text-risk-medium bg-risk-medium-surface border border-risk-medium rounded-lg px-3 py-2">
       <AlertTriangle className="h-4 w-4 flex-shrink-0" />
       <span>
         Schedule PM by{" "}
@@ -306,16 +306,16 @@ function FleetCostSummaryCard({
 
   if (actionable.length === 0) {
     return (
-      <Card className="border-green-200">
+      <Card className="border-risk-low">
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-base">
-            <DollarSign className="h-4 w-4 text-green-600" />
+            <DollarSign className="h-4 w-4 text-risk-low" />
             Cost Model — Intervention Analysis
           </CardTitle>
           <CardDescription>Expected failure cost vs. scheduled PM cost (60d horizon)</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="flex items-center gap-2 text-sm text-green-700">
+          <div className="flex items-center gap-2 text-sm text-risk-low">
             <CheckCircle className="h-4 w-4" />
             No fleet interventions are economically justified at current risk levels.
           </div>
@@ -325,10 +325,10 @@ function FleetCostSummaryCard({
   }
 
   return (
-    <Card className="border-orange-200">
+    <Card className="border-risk-medium">
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-base">
-          <DollarSign className="h-4 w-4 text-orange-600" />
+          <DollarSign className="h-4 w-4 text-risk-medium" />
           Cost Model — Intervention Analysis
         </CardTitle>
         <CardDescription>
@@ -342,11 +342,11 @@ function FleetCostSummaryCard({
             <div className="text-xs text-muted-foreground">assets with positive expected savings</div>
           </div>
           <div>
-            <div className="text-2xl font-bold text-red-600">{highCount}</div>
+            <div className="text-2xl font-bold text-risk-high">{highCount}</div>
             <div className="text-xs text-muted-foreground">HIGH risk — intervene immediately</div>
           </div>
           <div>
-            <div className="text-2xl font-bold text-green-700">${totalSavings.toLocaleString()}</div>
+            <div className="text-2xl font-bold text-risk-low">${totalSavings.toLocaleString()}</div>
             <div className="text-xs text-muted-foreground">total estimated savings</div>
           </div>
         </div>
@@ -356,7 +356,7 @@ function FleetCostSummaryCard({
               <span className="truncate mr-2">{a.name}</span>
               <span className={cn(
                 "text-xs font-medium px-2 py-0.5 rounded-full shrink-0",
-                a.risk === "HIGH"   ? "bg-red-100 text-red-700"    : "bg-orange-100 text-orange-700"
+                a.risk === "HIGH"   ? "bg-risk-high-surface text-risk-high"    : "bg-risk-medium-surface text-risk-medium"
               )}>
                 save ${a.savings.toLocaleString()}
               </span>
@@ -398,10 +398,10 @@ function FeedbackLoopCard() {
   });
 
   return (
-    <Card className="border-blue-200">
+    <Card className="border-primary/30">
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-base">
-          <Target className="h-4 w-4 text-blue-600" />
+          <Target className="h-4 w-4 text-primary" />
           Prediction Feedback Loop
         </CardTitle>
         <CardDescription>
@@ -426,13 +426,13 @@ function FeedbackLoopCard() {
                 <div className="text-xs text-muted-foreground">assets flagged HIGH</div>
               </div>
               <div>
-                <div className="text-2xl font-bold text-blue-700">{data.actedOn}</div>
+                <div className="text-2xl font-bold text-primary">{data.actedOn}</div>
                 <div className="text-xs text-muted-foreground">interventions within {data.windowDays}d</div>
               </div>
               <div>
                 <div className={cn(
                   "text-2xl font-bold",
-                  data.rate >= 60 ? "text-green-600" : data.rate >= 30 ? "text-orange-600" : "text-slate-500"
+                  data.rate >= 60 ? "text-risk-low" : data.rate >= 30 ? "text-risk-medium" : "text-muted-foreground"
                 )}>
                   {data.rate}%
                 </div>
@@ -442,11 +442,11 @@ function FeedbackLoopCard() {
 
             {/* Progress bar */}
             <div className="space-y-1">
-              <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+              <div className="h-2 bg-muted rounded-full overflow-hidden">
                 <div
                   className={cn(
                     "h-full rounded-full transition-all",
-                    data.rate >= 60 ? "bg-green-500" : data.rate >= 30 ? "bg-orange-400" : "bg-slate-400"
+                    data.rate >= 60 ? "bg-risk-low-surface0" : data.rate >= 30 ? "bg-risk-medium" : "bg-muted-foreground/40"
                   )}
                   style={{ width: `${data.rate}%` }}
                 />
@@ -573,24 +573,24 @@ export default function PredictiveMaintenanceDashboard() {
       </div>
 
       {highRiskCount > 0 && (
-        <Alert className="border-red-200 bg-red-50">
-          <AlertTriangle className="h-4 w-4 text-red-600" />
-          <AlertDescription className="text-red-800">
+        <Alert className="border-risk-high bg-risk-high-surface">
+          <AlertTriangle className="h-4 w-4 text-risk-high" />
+          <AlertDescription className="text-risk-high">
             <strong>{highRiskCount} equipment item{highRiskCount !== 1 ? "s" : ""}</strong> predicted HIGH RISK within{" "}
             {HORIZON_LABELS[selectedHorizon].toLowerCase()} — immediate maintenance recommended
           </AlertDescription>
         </Alert>
       )}
 
-      <Alert className="border-blue-100 bg-blue-50">
-        <Info className="h-4 w-4 text-blue-600" />
-        <AlertDescription className="text-blue-800 text-sm">
+      <Alert className="border-primary/30 bg-primary/10">
+        <Info className="h-4 w-4 text-primary" />
+        <AlertDescription className="text-primary text-sm">
           Predictions use three separate Random Forest models trained on{" "}
           {pipelineStatus?.snapshots?.labeled?.toLocaleString() ?? "22,025"} labeled snapshots.
           <span className="ml-1 font-medium">
             10d: high confidence · 30d: high · 60d: high
             {pipelineStatus?.modelStatus && (
-              <span className="ml-1 text-blue-600">· {pipelineStatus.modelStatus}</span>
+              <span className="ml-1 text-primary">· {pipelineStatus.modelStatus}</span>
             )}
           </span>
         </AlertDescription>
@@ -759,13 +759,13 @@ export default function PredictiveMaintenanceDashboard() {
             <CardTitle>ML Pipeline Controls</CardTitle>
             <CardDescription>
               Administrative controls for the predictive maintenance pipeline.{" "}
-              <span className="font-medium text-amber-600">Simulation controls are demo/dev tools</span>{" "}
+              <span className="font-medium text-risk-medium">Simulation controls are demo/dev tools</span>{" "}
               — in production, sensor data accumulates from live equipment telemetry.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex items-start gap-4 p-4 border rounded-lg">
-              <Database className="h-5 w-5 text-blue-600 mt-0.5" />
+              <Database className="h-5 w-5 text-primary mt-0.5" />
               <div className="flex-1">
                 <div className="font-medium">Generate Feature Snapshots</div>
                 <div className="text-sm text-muted-foreground">
@@ -812,8 +812,8 @@ export default function PredictiveMaintenanceDashboard() {
                   <div className={cn(
                     "mb-2 flex items-center gap-2 text-xs px-2 py-1 rounded border",
                     trainStatus.last_result.success
-                      ? "bg-green-50 border-green-200 text-green-700"
-                      : "bg-red-50 border-red-200 text-red-700"
+                      ? "bg-risk-low-surface border-risk-low text-risk-low"
+                      : "bg-risk-high-surface border-risk-high text-risk-high"
                   )}>
                     {trainStatus.last_result.success ? (
                       <><CheckCircle className="h-3 w-3" /> Training complete — {trainStatus.last_result.version} active</>
@@ -835,12 +835,12 @@ export default function PredictiveMaintenanceDashboard() {
                 )}
 
                 {showTrainLog && trainStatus?.log && (
-                  <div className="mb-2 p-2 bg-slate-50 border rounded text-xs font-mono max-h-48 overflow-y-auto space-y-0.5">
+                  <div className="mb-2 p-2 bg-muted/50 border rounded text-xs font-mono max-h-48 overflow-y-auto space-y-0.5">
                     {trainStatus.log.map((line, i) => (
                       <div key={i} className={cn(
-                        line.includes("SUCCESS") && "text-green-700 font-semibold",
-                        (line.includes("FATAL") || line.includes("FAILED")) && "text-red-700 font-semibold",
-                        line.includes("[CV]") && "text-blue-700",
+                        line.includes("SUCCESS") && "text-risk-low font-semibold",
+                        (line.includes("FATAL") || line.includes("FAILED")) && "text-risk-high font-semibold",
+                        line.includes("[CV]") && "text-primary",
                         line.includes("[HOLDOUT]") && "text-purple-700",
                       )}>{line}</div>
                     ))}
@@ -860,8 +860,8 @@ export default function PredictiveMaintenanceDashboard() {
               </Button>
             </div>
 
-            <div className="flex items-start gap-4 p-4 border rounded-lg bg-slate-50">
-              <Activity className="h-5 w-5 text-green-600 mt-0.5" />
+            <div className="flex items-start gap-4 p-4 border rounded-lg bg-muted/50">
+              <Activity className="h-5 w-5 text-risk-low mt-0.5" />
               <div className="flex-1">
                 <div className="font-medium">Simulate Operations</div>
                 <div className="text-sm text-muted-foreground mb-3">
@@ -890,7 +890,7 @@ export default function PredictiveMaintenanceDashboard() {
                     variant="outline" size="sm"
                     onClick={() => simulateDay.mutate(simDays)}
                     disabled={simulateDay.isPending}
-                    className="border-green-300 text-green-700 hover:bg-green-50"
+                    className="border-risk-low text-risk-low hover:bg-risk-low-surface"
                   >
                     {simulateDay.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
                     Simulate {simDays} Day{simDays > 1 ? "s" : ""}
@@ -940,9 +940,9 @@ export default function PredictiveMaintenanceDashboard() {
                       key={h}
                       className={cn(
                         "p-4 rounded-lg border-2 text-center",
-                        pred.risk_level === "HIGH"   && "border-red-300 bg-red-50",
-                        pred.risk_level === "MEDIUM" && "border-orange-300 bg-orange-50",
-                        pred.risk_level === "LOW"    && "border-green-300 bg-green-50",
+                        pred.risk_level === "HIGH"   && "border-risk-high bg-risk-high-surface",
+                        pred.risk_level === "MEDIUM" && "border-risk-medium bg-risk-medium-surface",
+                        pred.risk_level === "LOW"    && "border-risk-low bg-risk-low-surface",
                       )}
                     >
                       <div className="text-xs text-muted-foreground mb-1">{HORIZON_LABELS[h]}</div>
@@ -1036,8 +1036,8 @@ export default function PredictiveMaintenanceDashboard() {
                       onClick={() => setShowSchedulePM(true)}
                       className={cn(
                         "w-full gap-2",
-                        selectedRiskLevel === "HIGH" && "bg-red-600 hover:bg-red-700 text-white",
-                        selectedRiskLevel === "MEDIUM" && "bg-orange-500 hover:bg-orange-600 text-white",
+                        selectedRiskLevel === "HIGH" && "bg-destructive hover:bg-destructive/90 text-destructive-foreground",
+                        selectedRiskLevel === "MEDIUM" && "bg-risk-medium hover:bg-risk-medium/90 text-white",
                         selectedRiskLevel === "LOW" && "variant-outline",
                       )}
                       variant={selectedRiskLevel === "LOW" ? "outline" : "default"}

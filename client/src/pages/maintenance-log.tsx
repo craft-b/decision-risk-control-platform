@@ -165,11 +165,11 @@ export default function MaintenanceLog() {
   const getMaintenanceTypeColor = (type: string) => {
     switch (type) {
       case 'MAJOR_SERVICE':
-        return 'bg-green-50 text-green-700 border-green-200';
+        return 'bg-risk-low-surface text-risk-low border-risk-low';
       case 'MINOR_SERVICE':
-        return 'bg-blue-50 text-blue-700 border-blue-200';
+        return 'bg-primary/10 text-primary border-primary/30';
       case 'INSPECTION':
-        return 'bg-yellow-50 text-yellow-700 border-yellow-200';
+        return 'bg-risk-medium-surface text-risk-medium border-risk-medium';
       default:
         return 'bg-gray-50 text-gray-700 border-gray-200';
     }

@@ -147,7 +147,7 @@ export default function RentalsList() {
 
       <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
         <Table>
-          <TableHeader className="bg-slate-50">
+          <TableHeader className="bg-muted/50">
             <TableRow>
               <SortableTableHead sortKey="jobSite" sort={sort} onSort={onSort}>Job Site / Vendor</SortableTableHead>
               <SortableTableHead sortKey="equipment" sort={sort} onSort={onSort}>Equipment</SortableTableHead>
@@ -175,11 +175,11 @@ export default function RentalsList() {
               pagedRentals.map((rental) => (
                 <TableRow 
                   key={rental.id}
-                  className="cursor-pointer hover:bg-slate-50 transition-colors"
+                  className="cursor-pointer hover:bg-muted/50 transition-colors"
                   onClick={() => handleRowClick(rental.id)}
                 >
                   <TableCell>
-                    <div className="font-medium text-slate-900">
+                    <div className="font-medium text-foreground">
                       {rental.jobSite?.name || rental.jobSite?.jobId || 'Unknown Job Site'}
                     </div>
                     <div className="text-xs text-muted-foreground">
@@ -194,13 +194,13 @@ export default function RentalsList() {
                   </TableCell>
                   <TableCell>
                     <div className="flex flex-col text-sm">
-                      <span className="text-green-600 font-medium">
+                      <span className="text-risk-low font-medium">
                         {rental.receiveDate ? format(new Date(rental.receiveDate), 'MMM d, yyyy') : 'N/A'}
                       </span>
                       {rental.returnDate && (
                         <>
-                          <span className="text-slate-400 text-xs">to</span>
-                          <span className="text-slate-600 font-medium">
+                          <span className="text-muted-foreground/70 text-xs">to</span>
+                          <span className="text-muted-foreground font-medium">
                             {format(new Date(rental.returnDate), 'MMM d, yyyy')}
                           </span>
                         </>
@@ -212,12 +212,12 @@ export default function RentalsList() {
                   </TableCell>
                   <TableCell>
                     <span className="text-xs font-mono text-muted-foreground">
-                      {rental.poNumber || <span className="text-slate-400">—</span>}
+                      {rental.poNumber || <span className="text-muted-foreground/70">—</span>}
                     </span>
                   </TableCell>
                   <TableCell>
                     <Badge variant="outline" className={cn(
-                      rental.buyRent === 'BUY' ? "bg-blue-50 text-blue-700 border-blue-200" :
+                      rental.buyRent === 'BUY' ? "bg-primary/10 text-primary border-primary/30" :
                       "bg-purple-50 text-purple-700 border-purple-200"
                     )}>
                       {rental.buyRent}
@@ -225,9 +225,9 @@ export default function RentalsList() {
                   </TableCell>
                   <TableCell>
                     <Badge variant="outline" className={cn(
-                      rental.status === 'ACTIVE' ? "bg-orange-50 text-orange-700 border-orange-200" :
-                      rental.status === 'COMPLETED' ? "bg-green-50 text-green-700 border-green-200" :
-                      "bg-slate-100 text-slate-600"
+                      rental.status === 'ACTIVE' ? "bg-risk-medium-surface text-risk-medium border-risk-medium" :
+                      rental.status === 'COMPLETED' ? "bg-risk-low-surface text-risk-low border-risk-low" :
+                      "bg-muted text-muted-foreground"
                     )}>
                       {rental.status}
                     </Badge>
@@ -247,7 +247,7 @@ export default function RentalsList() {
                           <Button
                             size="sm"
                             variant="ghost"
-                            className="h-8 w-8 p-0 hover:bg-blue-50 hover:text-blue-700"
+                            className="h-8 w-8 p-0 hover:bg-primary/10 hover:text-primary"
                             title="Edit"
                             onClick={(e) => handleEdit(rental, e)}
                           >
@@ -258,7 +258,7 @@ export default function RentalsList() {
                               <Button
                                 size="sm"
                                 variant="outline"
-                                className="h-8 gap-2 hover:bg-green-50 hover:text-green-700 hover:border-green-200"
+                                className="h-8 gap-2 hover:bg-risk-low-surface hover:text-risk-low hover:border-risk-low"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   setCompleteId(rental.id);
@@ -283,7 +283,7 @@ export default function RentalsList() {
                             // so this is always undefined at runtime — pre-existing gap, not
                             // part of the ML portfolio pass. Cast avoids a hard type error.
                             (rental as any).invoices?.length > 0 ? (
-                              <Badge className="h-8 px-2 bg-green-50 text-green-700 border border-green-200 font-normal">
+                              <Badge className="h-8 px-2 bg-risk-low-surface text-risk-low border border-risk-low font-normal">
                                 <FileText className="h-3 w-3 mr-1" />
                                 Invoiced
                               </Badge>
@@ -291,7 +291,7 @@ export default function RentalsList() {
                               <Button
                                 size="sm"
                                 variant="outline"
-                                className="h-8 gap-1 hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-200"
+                                className="h-8 gap-1 hover:bg-risk-low-surface hover:text-risk-low hover:border-risk-low"
                                 disabled={invoiceMutation.isPending}
                                 onClick={(e) => handleGenerateInvoice(rental, e)}
                               >
@@ -304,7 +304,7 @@ export default function RentalsList() {
                             <Button
                               size="sm"
                               variant="ghost"
-                              className="h-8 w-8 p-0 hover:bg-red-50 hover:text-red-700"
+                              className="h-8 w-8 p-0 hover:bg-risk-high-surface hover:text-risk-high"
                               title="Delete"
                               onClick={(e) => { e.stopPropagation(); setDeletingRental(rental); }}
                             >

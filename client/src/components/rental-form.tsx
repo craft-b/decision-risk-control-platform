@@ -281,9 +281,9 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
 
             {/* HIGH risk — blocking warning */}
             {riskLevel30d === "HIGH" && (
-              <Alert className="border-red-300 bg-red-50">
-                <AlertTriangle className="h-4 w-4 text-red-600 mt-0.5 flex-shrink-0" />
-                <AlertDescription className="text-red-800">
+              <Alert className="border-risk-high bg-risk-high-surface">
+                <AlertTriangle className="h-4 w-4 text-risk-high mt-0.5 flex-shrink-0" />
+                <AlertDescription className="text-risk-high">
                   <div className="font-semibold mb-1">
                     ⚠ High Failure Risk — {Math.round(failureProb30d * 100)}% probability within 30 days
                   </div>
@@ -304,12 +304,12 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
                     <button
                       type="button"
                       onClick={() => setDispatchConfirmed(true)}
-                      className="mt-2 text-xs underline text-red-700 hover:text-red-900 transition-colors"
+                      className="mt-2 text-xs underline text-risk-high hover:text-risk-high transition-colors"
                     >
                       I understand the risk — proceed anyway
                     </button>
                   ) : (
-                    <div className="mt-2 text-xs font-medium text-red-700 flex items-center gap-1">
+                    <div className="mt-2 text-xs font-medium text-risk-high flex items-center gap-1">
                       <AlertCircle className="h-3 w-3" />
                       Risk acknowledged — dispatch confirmed
                     </div>
@@ -320,9 +320,9 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
 
             {/* MEDIUM risk — advisory only, no block */}
             {riskLevel30d === "MEDIUM" && (
-              <Alert className="border-orange-200 bg-orange-50">
-                <AlertTriangle className="h-4 w-4 text-orange-500 flex-shrink-0" />
-                <AlertDescription className="text-orange-800 text-sm">
+              <Alert className="border-risk-medium bg-risk-medium-surface">
+                <AlertTriangle className="h-4 w-4 text-risk-medium flex-shrink-0" />
+                <AlertDescription className="text-risk-medium text-sm">
                   <span className="font-medium">Medium failure risk</span> —{" "}
                   {Math.round(failureProb30d * 100)}% probability within 30 days.{" "}
                   {rentalDays && rentalDays > 20
@@ -610,7 +610,7 @@ export function RentalForm({ onSuccess, initialData }: RentalFormProps) {
             className={cn(
               "w-full",
               isBlockedByRisk && "opacity-50 cursor-not-allowed",
-              riskLevel30d === "HIGH" && dispatchConfirmed && "bg-red-600 hover:bg-red-700"
+              riskLevel30d === "HIGH" && dispatchConfirmed && "bg-risk-high hover:bg-risk-high"
             )}
           >
             {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}

@@ -1,10 +1,23 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
-    <title>Enterprise Asset Intelligence</title>
+    <title>Asset Intelligence — Craft &amp; Smash</title>
+    <meta name="description" content="Calibrated multi-horizon failure prediction and maintenance economics for heavy-equipment fleets." />
+    <meta name="theme-color" content="#0a0a0b" />
     <link rel="icon" type="image/png" href="/favicon.png" />
+    <!-- Theme bootstrap — runs before first paint so there is no flash.
+         Dark is the product default (DESIGN_SPEC §5); light is an opt-in. -->
+    <script>
+      (function () {
+        try {
+          if (localStorage.getItem("theme") === "light") {
+            document.documentElement.classList.remove("dark");
+          }
+        } catch (e) {}
+      })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <!-- Design system loads exactly two families: Inter (UI) + JetBrains Mono (numerals/IDs) -->
