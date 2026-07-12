@@ -22,8 +22,10 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 import { useState } from "react";
+import { Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { BrandLockup, BrandMark, ThemeToggle } from "@/components/brand";
+import { CommandPalette } from "@/components/command-palette";
 
 type NavItem = { name: string; href: string; icon: React.ComponentType<{ className?: string }> };
 type NavSection = { label: string; items: NavItem[] };
@@ -67,6 +69,24 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
         <Link href="/" onClick={() => setOpen(false)}>
           <BrandLockup />
         </Link>
+      </div>
+
+      {/* Palette launcher — the fast path; ⌘K works everywhere */}
+      <div className="px-3 pt-3">
+        <button
+          type="button"
+          onClick={() => {
+            setOpen(false);
+            window.dispatchEvent(new Event("open-command-palette"));
+          }}
+          className="flex w-full items-center gap-2 rounded-md border border-border bg-background/60 px-3 py-1.5 text-[13px] text-muted-foreground transition-colors hover:border-input hover:text-foreground"
+        >
+          <Search className="h-3.5 w-3.5" />
+          <span>Search…</span>
+          <kbd className="ml-auto rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+            ⌘K
+          </kbd>
+        </button>
       </div>
 
       <nav className="flex-1 space-y-6 overflow-y-auto px-3 py-5">
@@ -172,6 +192,8 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
           {children}
         </div>
       </main>
+
+      <CommandPalette />
     </div>
   );
 }
