@@ -90,7 +90,7 @@ export default function VendorsList() {
         )}
       </div>
 
-      <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
+      <div className="bg-card rounded-xl shadow-sm border border-card-border overflow-hidden">
         <Table>
           <TableHeader className="bg-muted/50">
             <TableRow>

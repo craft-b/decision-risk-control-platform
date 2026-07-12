@@ -178,14 +178,14 @@ function PipelineStatusCard() {
         <div className="grid grid-cols-2 gap-4">
           <div>
             <div className="text-sm text-muted-foreground">Feature Snapshots</div>
-            <div className="text-2xl font-bold">{status.snapshots.total}</div>
+            <div className="font-mono text-2xl font-bold tabular-nums">{status.snapshots.total}</div>
             <div className="text-xs text-muted-foreground">
               {status.snapshots.labeled} labeled, {status.snapshots.unlabeled} unlabeled
             </div>
           </div>
           <div>
             <div className="text-sm text-muted-foreground">Models Active</div>
-            <div className="text-2xl font-bold">3</div>
+            <div className="font-mono text-2xl font-bold tabular-nums">3</div>
             <div className="text-xs text-muted-foreground">
               10d · 30d · 60d horizons ({status.modelStatus ?? 'ml'})
             </div>
@@ -338,15 +338,15 @@ function FleetCostSummaryCard({
       <CardContent className="space-y-4">
         <div className="grid grid-cols-3 gap-4">
           <div>
-            <div className="text-2xl font-bold">{actionable.length}</div>
+            <div className="font-mono text-2xl font-bold tabular-nums">{actionable.length}</div>
             <div className="text-xs text-muted-foreground">assets with positive expected savings</div>
           </div>
           <div>
-            <div className="text-2xl font-bold text-risk-high">{highCount}</div>
+            <div className="font-mono text-2xl font-bold tabular-nums text-risk-high">{highCount}</div>
             <div className="text-xs text-muted-foreground">HIGH risk — intervene immediately</div>
           </div>
           <div>
-            <div className="text-2xl font-bold text-risk-low">${totalSavings.toLocaleString()}</div>
+            <div className="font-mono text-2xl font-bold tabular-nums text-risk-low">${totalSavings.toLocaleString()}</div>
             <div className="text-xs text-muted-foreground">total estimated savings</div>
           </div>
         </div>
@@ -422,16 +422,16 @@ function FeedbackLoopCard() {
           <div className="space-y-4">
             <div className="grid grid-cols-3 gap-4">
               <div>
-                <div className="text-2xl font-bold">{data.totalFlagged}</div>
+                <div className="font-mono text-2xl font-bold tabular-nums">{data.totalFlagged}</div>
                 <div className="text-xs text-muted-foreground">assets flagged HIGH</div>
               </div>
               <div>
-                <div className="text-2xl font-bold text-primary">{data.actedOn}</div>
+                <div className="font-mono text-2xl font-bold tabular-nums text-primary">{data.actedOn}</div>
                 <div className="text-xs text-muted-foreground">interventions within {data.windowDays}d</div>
               </div>
               <div>
                 <div className={cn(
-                  "text-2xl font-bold",
+                  "font-mono text-2xl font-bold tabular-nums",
                   data.rate >= 60 ? "text-risk-low" : data.rate >= 30 ? "text-risk-medium" : "text-muted-foreground"
                 )}>
                   {data.rate}%
@@ -946,7 +946,7 @@ export default function PredictiveMaintenanceDashboard() {
                       )}
                     >
                       <div className="text-xs text-muted-foreground mb-1">{HORIZON_LABELS[h]}</div>
-                      <div className="text-3xl font-bold mb-1">
+                      <div className="font-mono text-3xl font-bold tabular-nums mb-1">
                         {Math.round(pred.failure_probability * 100)}%
                       </div>
                       <RiskBadge level={pred.risk_level} />

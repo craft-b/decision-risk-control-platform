@@ -147,6 +147,7 @@ export default function AssetDetail() {
   const isAdmin = user?.role === "ADMINISTRATOR";
   const queryClient = useQueryClient();
   const [showSchedule, setShowSchedule] = useState(false);
+  const [showFullHistory, setShowFullHistory] = useState(false);
 
   const { data: equip, isLoading: equipLoading } = useEquipmentItem(id);
   const { data: predictions } = useLatestMultiHorizonPredictions();
@@ -304,7 +305,7 @@ export default function AssetDetail() {
                   return (
                     <div key={h} className={cn("p-4 rounded-lg border-2 text-center", RISK_COLORS[hp.level])}>
                       <div className="text-xs opacity-80 mb-1">{HORIZON_LABELS[h]}</div>
-                      <div className="text-3xl font-semibold tabular-nums mb-1">
+                      <div className="font-mono text-3xl font-semibold tabular-nums mb-1">
                         {Math.round(hp.prob * 100)}%
                       </div>
                       <RiskBadge level={hp.level} score={Math.round(hp.prob * 100)} size="sm" showIcon={false} />
@@ -371,24 +372,40 @@ export default function AssetDetail() {
           {timeline.length === 0 ? (
             <div className="py-8 text-center text-muted-foreground">No recorded history for this unit.</div>
           ) : (
-            <div className="space-y-0.5">
-              {timeline.map((t) => (
-                <div key={t.key} className="flex items-center gap-4 px-3 py-2 rounded-md border border-transparent hover:bg-muted/50 transition-colors">
-                  <div className="w-[104px] shrink-0 text-xs font-mono tabular-nums text-muted-foreground">
-                    {fmtDate(t.date)}
+            <>
+              {/* Progressive disclosure — a working unit accrues years of events;
+                  show the recent slice, expand on demand. */}
+              <div className="space-y-0.5">
+                {(showFullHistory ? timeline : timeline.slice(0, 20)).map((t) => (
+                  <div key={t.key} className="flex items-center gap-4 px-3 py-2 rounded-md border border-transparent hover:bg-muted/50 transition-colors">
+                    <div className="w-[104px] shrink-0 text-xs font-mono tabular-nums text-muted-foreground">
+                      {fmtDate(t.date)}
+                    </div>
+                    <Badge variant="outline" className={cn("w-[110px] shrink-0 justify-center text-[11px]", t.badge.className)}>
+                      {t.badge.label}
+                    </Badge>
+                    <div className="min-w-0 flex-1">
+                      <span className="text-sm font-medium text-foreground">{t.title}</span>
+                      {t.detail && (
+                        <span className="ml-2 text-xs text-muted-foreground truncate">{t.detail}</span>
+                      )}
+                    </div>
                   </div>
-                  <Badge variant="outline" className={cn("w-[110px] shrink-0 justify-center text-[11px]", t.badge.className)}>
-                    {t.badge.label}
-                  </Badge>
-                  <div className="min-w-0 flex-1">
-                    <span className="text-sm font-medium text-foreground">{t.title}</span>
-                    {t.detail && (
-                      <span className="ml-2 text-xs text-muted-foreground truncate">{t.detail}</span>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+              {timeline.length > 20 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="mt-2 w-full text-xs text-muted-foreground hover:text-foreground"
+                  onClick={() => setShowFullHistory(!showFullHistory)}
+                >
+                  {showFullHistory
+                    ? "Show recent only"
+                    : `Show all ${timeline.length.toLocaleString()} events`}
+                </Button>
+              )}
+            </>
           )}
         </CardContent>
       </Card>

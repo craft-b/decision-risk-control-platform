@@ -113,7 +113,7 @@ function KpiCard({
   accent?: string;
 }) {
   return (
-    <Card>
+    <Card className="card-sheen">
       <CardContent className="p-5">
         <div className="flex items-start justify-between">
           <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -121,7 +121,7 @@ function KpiCard({
           </p>
           <Icon className={cn("h-4 w-4", accent ?? "text-muted-foreground/60")} />
         </div>
-        <p className="mt-2 text-3xl font-semibold tracking-tight tabular-nums text-foreground">
+        <p className="mt-2 font-mono text-3xl font-semibold tracking-tight tabular-nums text-foreground">
           {value}
         </p>
         {sub && <div className="mt-1.5 text-xs text-muted-foreground">{sub}</div>}
