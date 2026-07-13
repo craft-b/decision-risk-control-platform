@@ -68,6 +68,7 @@ interface FleetRow {
   modelVersion: string;
   trend: "INCREASING" | "DECREASING" | "STABLE";
   driver: string | null;
+  driverFull: string | null;
   probs: Record<Horizon, number>;
   levels: Record<Horizon, RiskLevel>;
 }
@@ -171,9 +172,13 @@ export default function CommandCenter() {
       dailyRate: Number(equip?.dailyRate ?? 0),
       modelVersion: p.model_version ?? p.modelVersion ?? "",
       trend: (p.risk_trend ?? p.riskTrend ?? "STABLE") as FleetRow["trend"],
-      driver: (() => {
+      ...(() => {
         const d = safeDrivers(p.top_drivers_30d);
-        return d.length ? humanizeDriver(d[0]) : null;
+        if (!d.length) return { driver: null, driverFull: null };
+        const full = humanizeDriver(d[0]);
+        // Queue rows carry the scent; the parenthetical detail lives on hover
+        // and on the asset page.
+        return { driver: full.replace(/\s*\(.*\)\s*$/, ""), driverFull: full };
       })(),
       probs: {
         "10d": Number(p.prob_10d ?? 0),
@@ -386,11 +391,11 @@ export default function CommandCenter() {
             <div>
               {/* Column header */}
               <div className="hidden md:flex items-center gap-4 px-3 pb-2 mb-1 border-b border-border text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                <div className="w-[220px] shrink-0">Asset</div>
+                <div className="w-[200px] shrink-0">Asset</div>
                 <div className="flex-1 min-w-0 hidden lg:block">Primary risk driver</div>
-                <div className="w-[210px] shrink-0 text-center">Failure probability · 10 / 30 / 60d</div>
-                <div className="w-[64px] shrink-0 text-center">High by</div>
-                <div className="w-[118px] shrink-0 text-right">Status</div>
+                <div className="w-[186px] shrink-0 text-center">Failure probability · 10 / 30 / 60d</div>
+                <div className="w-[56px] shrink-0 text-center">High by</div>
+                <div className="w-[104px] shrink-0 text-right">Status</div>
                 {isAdmin && <div className="w-9 shrink-0" />}
               </div>
 
@@ -409,7 +414,7 @@ export default function CommandCenter() {
                       )}
                     >
                       {/* Asset */}
-                      <div className="w-[220px] shrink-0 min-w-0">
+                      <div className="w-[200px] shrink-0 min-w-0">
                         <p className="text-sm font-medium truncate text-foreground">
                           {r.name}
                           {ruleScored && (
@@ -435,21 +440,21 @@ export default function CommandCenter() {
                         )}
                       </div>
 
-                      {/* Primary driver */}
+                      {/* Primary driver — full phrase on hover when truncated */}
                       <div className="hidden lg:flex flex-1 min-w-0 items-center gap-2">
                         <span className={cn("h-1.5 w-1.5 rounded-full shrink-0", RISK_FILL[r.levels["30d"]])} />
-                        <span className="truncate text-sm text-muted-foreground">
+                        <span className="truncate text-sm text-muted-foreground" title={r.driverFull ?? undefined}>
                           {r.driver ?? <span className="italic opacity-70">No dominant driver</span>}
                         </span>
                       </div>
 
                       {/* Tri-horizon bars */}
-                      <div className="hidden md:flex items-center gap-3 shrink-0 w-[210px] justify-center">
+                      <div className="hidden md:flex items-center gap-3 shrink-0 w-[186px] justify-center">
                         {(["10d", "30d", "60d"] as Horizon[]).map((h) => (
                           <TooltipProvider key={h}>
                             <Tooltip>
                               <TooltipTrigger asChild>
-                                <div className="flex flex-col items-center gap-1 w-14">
+                                <div className="flex flex-col items-center gap-1 w-12">
                                   {density === "comfortable" && (
                                     <div className="text-[10px] font-medium text-muted-foreground">{h}</div>
                                   )}
@@ -475,7 +480,7 @@ export default function CommandCenter() {
                       </div>
 
                       {/* Lead-time estimate: earliest horizon at HIGH */}
-                      <div className="hidden md:block w-[64px] shrink-0 text-center">
+                      <div className="hidden md:block w-[56px] shrink-0 text-center">
                         {win ? (
                           <span className="font-mono text-xs font-semibold tabular-nums text-risk-high">
                             ≤ {win}
@@ -486,7 +491,7 @@ export default function CommandCenter() {
                       </div>
 
                       {/* Status */}
-                      <div className="flex items-center justify-end gap-2 shrink-0 w-[118px]">
+                      <div className="flex items-center justify-end gap-2 shrink-0 w-[104px]">
                         <TrendIcon trend={r.trend} />
                         <RiskBadge
                           level={r.levels["30d"]}

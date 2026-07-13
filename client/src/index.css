@@ -110,8 +110,10 @@
   --risk-low-surface: 160 45% 9%;
   --risk-low-border: 160 40% 19%;
 
+  /* Categorical trio validated (dataviz six-checks) against #111113:
+     lightness band, chroma floor, CVD ΔE 41 (deutan), contrast ≥ 3:1 */
   --chart-1: 217 91% 65%;
-  --chart-2: 172 66% 45%;
+  --chart-2: 172 66% 40%;
   --chart-3: 291 70% 62%;
   --chart-grid: 240 5% 32%;
   --chart-axis: 240 5% 62%;
