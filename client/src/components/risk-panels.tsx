@@ -57,12 +57,22 @@ export interface FeatureBaselineData {
 // not probabilities, so bars show each feature's SHARE of total |attribution|.
 // With `baseline`, each bar expands to the unit's raw feature value vs. the
 // fleet average (latest persisted snapshots).
+//
+// On the bundled simulator these attributions recover the generator rather than
+// discover anything: failures are drawn from a function of asset age, lifetime
+// hours and maintenance recency, and the model receives all three. Age and wear
+// ranking highly is arithmetic. `simulated` renders that caveat inline so a
+// reader does not mistake verification for insight — the machinery itself is
+// real and would be informative on field data.
 export function ShapDriverBars({
   attribution,
   baseline,
+  simulated = false,
 }: {
   attribution: Record<string, number>;
   baseline?: FeatureBaselineData;
+  /** Renders the synthetic-data caveat. See the note above this component. */
+  simulated?: boolean;
 }) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const entries = Object.entries(attribution)
@@ -73,6 +83,12 @@ export function ShapDriverBars({
   const maxAbs = Math.abs(entries[0][1]);
   return (
     <div className="space-y-1.5">
+      {simulated && (
+        <p className="text-[11px] leading-snug text-muted-foreground pb-1">
+          Simulated data: these drivers recover the simulator's own hazard
+          (age, hours, maintenance recency) rather than reveal anything new.
+        </p>
+      )}
       {entries.map(([feat, val]) => {
         const share = Math.round((Math.abs(val) / totalAbs) * 100);
         const width = Math.max(4, Math.round((Math.abs(val) / maxAbs) * 100));
