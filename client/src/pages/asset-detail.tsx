@@ -340,7 +340,7 @@ export default function AssetDetail() {
                 <div key={h}>
                   <div className="text-sm font-medium text-muted-foreground mb-2">{HORIZON_LABELS[h]}</div>
                   {hasShap ? (
-                    <ShapDriverBars attribution={hp.shap} baseline={baseline} />
+                    <ShapDriverBars attribution={hp.shap} baseline={baseline} simulated />
                   ) : (
                     <div className="space-y-1">
                       {hp.drivers.slice(0, 3).map((d, i) => (
