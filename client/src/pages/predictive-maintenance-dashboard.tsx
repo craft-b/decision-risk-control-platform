@@ -989,7 +989,7 @@ export default function PredictiveMaintenanceDashboard() {
                         {HORIZON_LABELS[h]}
                       </div>
                       {hasShap ? (
-                        <ShapDriverBars attribution={shap} />
+                        <ShapDriverBars attribution={shap} simulated />
                       ) : (
                         <div className="space-y-1">
                           {/* Honest fallback: no per-prediction attribution stored

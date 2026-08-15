@@ -976,6 +976,16 @@ export default function MLPerformanceDashboard() {
             <CardDescription>
               Which features drive failure predictions (higher = more influential)
             </CardDescription>
+            {modelMetrics.dataSource === "simulated" && (
+              <p className="text-xs text-muted-foreground mt-2 leading-relaxed">
+                On simulated data these recover the generator rather than discover
+                anything. The simulator draws failures from a function of asset age,
+                lifetime hours and maintenance recency, and the model is given all
+                three — so age and wear ranking highly is arithmetic, not a finding.
+                The attribution machinery is real and would be informative on field
+                data.
+              </p>
+            )}
           </CardHeader>
           <CardContent>
             {featureImportance.length === 0 ? (
